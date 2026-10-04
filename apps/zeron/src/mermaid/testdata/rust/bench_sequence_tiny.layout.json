@@ -1,0 +1,67 @@
+{
+  "kind": "Sequence",
+  "direction": "LeftRight",
+  "width": 350.0,
+  "height": 198.0,
+  "nodes": [
+    {
+      "id": "Alice",
+      "shape": "ActorBox",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "Alice"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Bob",
+      "shape": "ActorBox",
+      "x": 200.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 29.2,
+      "label_height": 24.0,
+      "label_lines": [
+        "Bob"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "Alice",
+      "to": "Bob",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          75.0,
+          111.0
+        ],
+        [
+          275.0,
+          111.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        94.2
+      ],
+      "label_width": 17.92,
+      "label_height": 24.0,
+      "label_lines": [
+        "Hi"
+      ]
+    }
+  ],
+  "subgraphs": []
+}

@@ -51,6 +51,8 @@ pub const Frosted = struct {
     radius: f32,
     blur: f32,
     enabled: bool,
+    /// [liquid-glass] Use native glass (theme `isLiquid`).
+    liquid: bool = false,
     child: AnyElement,
 
     pub fn intoAnyElement(self: Frosted) AnyElement {
@@ -67,6 +69,8 @@ pub const Frosted = struct {
 
     pub fn paint(self: *Frosted, _: ?zpui.GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
         if (!self.enabled) return self.child.paint(window, cx);
+        // [liquid-glass] Native glass instead of the in-scene blur (frost fallback).
+        if (self.liquid and zpui.liquid_glass.paintGlass(window, cx, "composer-glass", bounds, .{ .shape = .{ .rounded = self.radius } }, self.child)) return;
         const layer = window.pushLayer(bounds);
         defer window.popLayer(layer);
         window.paintBackdropBlur(bounds, zpui.Corners(f32).all(self.radius), self.blur);
@@ -76,7 +80,7 @@ pub const Frosted = struct {
 
 /// Backdrop-blur `child` when the theme is frosted (`frost::frosted`).
 pub fn frosted(theme: *const Theme, radius: f32, blur: f32, child: anytype) Frosted {
-    return .{ .radius = radius, .blur = blur, .enabled = theme.isFrost(), .child = zpui.intoAnyElement(child) };
+    return .{ .radius = radius, .blur = blur, .enabled = theme.isFrost(), .liquid = theme.isLiquid(), .child = zpui.intoAnyElement(child) };
 }
 
 // ---------------------------------------------------------------------------
@@ -124,14 +128,14 @@ pub fn harnessName(h: HarnessId) []const u8 {
 /// Floating-surface fill (`popover::surface_bg`).
 pub fn surfaceBg(theme: *const Theme) Hsla {
     if (theme.isFrost()) {
-        return if (theme.appearance.isDark()) theme.composerSidebarTint() else theme.glassOverlay();
+        return theme.onGlass(if (theme.appearance.isDark()) theme.composerSidebarTint() else theme.glassOverlay()); // [liquid-glass] onGlass
     }
     return theme.inputGlassBg();
 }
 
 /// `popover_card`: hairline border, radius 12, 4px inset, 13px text.
 pub fn card(theme: *const Theme) zpui.Div {
-    var d = div().border1().borderColor(theme.border).rounded(px(card_radius))
+    var d = div().border1().borderColor(theme.onGlassBorder(theme.border)).rounded(px(card_radius))
         .bg(surfaceBg(theme)).p(px(card_inset)).gap(px(menu_gap)).overflowHidden()
         .textSize(rems(13)).textColor(theme.text);
     if (!theme.isFrost()) d = d.shadowLg();

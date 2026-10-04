@@ -8,6 +8,7 @@ const model = @import("zeron_model");
 const zt = @import("zeron_theme");
 const ui = @import("../components/root.zig");
 const shell_mod = @import("shell.zig");
+const wiring = @import("wiring.zig"); // [wiring] org gate create / pick
 
 const Shell = shell_mod.Shell;
 const Window = zpui.Window;
@@ -97,16 +98,20 @@ pub fn orgGate(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div
         .child(div().mt(px(6)).mb(px(24)).textSize(ui.rems(13)).lineHeight(px(19)).textColor(theme.text_muted).child(blurb))
         .child(div().flex().flexRow().gap(px(8))
             .child(div().flex1().minW0().h(px(36)).flex().itemsCenter().px(px(12)).rounded(px(8))
-                .border1().borderColor(theme.border).bg(theme.bg).textSize(ui.rems(13)).textColor(theme.text_muted.opacity(0.6))
-                .child("Workspace name"))
+                .border1().borderColor(theme.border).bg(theme.bg).textSize(ui.rems(13)).textColor(theme.text)
+                .child(wiring.orgInput(shell, cx)))
             .child(div().id("create-org").h(px(36)).px(px(16)).flex().itemsCenter().rounded(px(6)).bg(theme.text)
                 .textSize(ui.rems(14)).fontWeight(500).textColor(theme.on_solid).cursorPointer().hover(sb.opacity(0.9))
-                .child("Create")));
+                .opacity(if (shell.wiring.org_submitting) 0.5 else 1)
+                .onClick(cx.listener(wiring.onCreateOrgClick))
+                .child(if (shell.wiring.org_submitting) "Creating…" else "Create")));
+    if (shell.wiring.org_error) |e| card = card.child(div().mt(px(8)).textSize(ui.rems(12)).textColor(theme.danger).child(e));
     if (auth.orgs.len > 0) {
         var rows = div().flex().flexCol().gap(px(4));
         for (auth.orgs, 0..) |o, i| {
             rows = rows.child(div().id(.{ "org-row", i }).px(px(12)).py(px(8)).rounded(px(8)).border1().borderColor(theme.border)
                 .bg(theme.bg).textSize(ui.rems(13)).textColor(theme.text).cursorPointer().hover(sb.bg(theme.wash(0.11)))
+                .onClick(cx.listenerWith(i, wiring.onPickOrg))
                 .child(o.name));
         }
         card = card.child(div().mt(px(24)).flex().flexCol()

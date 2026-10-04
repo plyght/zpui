@@ -205,3 +205,26 @@ Implemented in `src/window/` (see [elements.md](elements.md)); the core pieces i
 
 Not yet: window-scoped `observe_in` / `subscribe_in` / `spawn_in` variants (use the entity
 forms and look the window up with `app.windowById`).
+
+## App lifecycle and menus (`src/app/lifecycle.zig`)
+
+`App.init` registers the platform's `PlatformCallbacks` and re-exposes them as listeners:
+`onQuit` (runs once, as the run loop exits), `onShouldQuit` (veto: `requestQuit()` — menu
+Quit, ⌘Q, macOS Dock/logout termination — asks every listener; `quit()` is never vetoed),
+`onReopen` (Dock click with no visible window), `onOpenUrls` (URL schemes; URLs arriving
+before the first listener are queued — `zpui.lifecycle.openUrls` feeds argv the same way),
+`onSystemWake`, `onKeyboardLayoutChange`, `onNotificationActivated(tag)`. Windows add
+`onShouldClose` (veto the frame's close button) and `observeBounds` (moved / resized), and
+report `displayId()`; `WindowOptions.display_id` opens on a given display (`Display.uuid`,
+`.primary` identify displays across launches).
+
+`app.setMenus(&.{ zpui.Menu{ .name = "Edit", .items = &.{ .action("Undo", Undo{}), .separator,
+.osAction("Copy", Copy{}, .copy) } } })` installs the menu bar (macOS): items dispatch their
+action to the active window's focus path (else to global `onAction` listeners), validate with
+the same availability rule (`app.isActionAvailable`), and show key equivalents rendered from
+the keymap at call time (call again after re-binding). Also: `hide` / `hideOtherApps` /
+`unhideOtherApps`, `activate`, `postNotification`, `playSound`, `displays`, `activeWindow`,
+`dispatchAction`. The TestPlatform records menus / notifications / sounds and simulates the
+OS side (`simulateReopen`, `simulateOpenUrls`, `simulateTerminate`, `simulateMenuAction`,
+`simulateNotificationClick`, `TestWindow.simulateCloseButton` / `simulateMove` /
+`simulateActive`).

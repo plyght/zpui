@@ -651,12 +651,28 @@ pub const EngineState = struct {
         target: EntityId,
         deliver: ?*const fn (*App, EntityId, CallResult) void,
     ) !void {
-        const c = self.conn orelse return error.NotConnected;
+        const c = self.conn orelse {
+            if (test_sink) |sink| {
+                // Headless UI tests: record the call instead of failing.
+                var aw: std.Io.Writer.Allocating = .init(self.gpa);
+                defer aw.deinit();
+                var s: json.Stringify = .{ .writer = &aw.writer, .options = .{ .emit_null_optional_fields = false } };
+                if (@TypeOf(params) == void) aw.writer.writeAll("{}") catch return error.OutOfMemory else s.write(params) catch return error.OutOfMemory;
+                sink(method, aw.written());
+                return;
+            }
+            return error.NotConnected;
+        };
         const call = try c.client().start(method, params);
         errdefer call.deinit();
         try self.pending.append(self.gpa, .{ .call = call, .target = target, .deliver = deliver, .label = method.name() });
     }
 };
+
+/// Test-only: with no connection, unary calls (`request` / `send`) are
+/// handed here as `(method, params JSON)` instead of failing with
+/// `error.NotConnected` (no result is ever delivered). Null in the app.
+pub var test_sink: ?*const fn (method: Method, params_json: []const u8) void = null;
 
 /// Main-thread pump for the EngineState entity `id` (see module docs).
 fn pumpTarget(app: *App, id: EntityId) void {

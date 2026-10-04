@@ -16,6 +16,7 @@ const scene_mod = @import("../../scene.zig");
 const atlas_mod = @import("../../atlas.zig");
 const event_loop = @import("event_loop.zig");
 const keyboard = @import("keyboard.zig");
+const x11_uri = @import("x11.zig");
 const common = @import("window_common.zig");
 const util = @import("util.zig");
 const Presenter = @import("presenter.zig").Presenter;
@@ -52,6 +53,35 @@ const Offer = struct {
     offer: *c.struct_wl_data_offer,
     mime: ?[*:0]const u8 = null,
     mime_rank: usize = text_mimes.len,
+    /// Offers `text/uri-list` (file drops / file-manager copies).
+    uri_list: bool = false,
+    /// Best image type offered (`platform.ClipboardImageFormat.preference` order).
+    image: ?platform.ClipboardImageFormat = null,
+    image_rank: usize = platform.ClipboardImageFormat.preference.len,
+};
+
+const image_mimes = blk: {
+    var out: [platform.ClipboardImageFormat.preference.len][*:0]const u8 = undefined;
+    for (platform.ClipboardImageFormat.preference, 0..) |f, i| out[i] = switch (f) {
+        .png => "image/png",
+        .jpeg => "image/jpeg",
+        .gif => "image/gif",
+        .webp => "image/webp",
+        .bmp => "image/bmp",
+        .tiff => "image/tiff",
+        .svg => "image/svg+xml",
+    };
+    break :blk out;
+};
+
+/// The drag-and-drop offer over one of our surfaces.
+const DndState = struct {
+    offer: ?Offer = null,
+    window: ?*Window = null,
+    serial: u32 = 0,
+    position: platform.Point = .zero,
+    paths: std.ArrayList([]u8) = .empty,
+    entered: bool = false,
 };
 
 pub const Client = struct {
@@ -123,6 +153,7 @@ pub const Client = struct {
     pending_offers: std.ArrayList(Offer) = .empty,
     data_source: ?*c.struct_wl_data_source = null,
     clipboard_text: ?[]u8 = null,
+    dnd: DndState = .{},
 
     pub fn create(gpa: Allocator, plat: *LinuxPlatform) !*Client {
         const display = c.wl_display_connect(null) orelse return error.WaylandConnectFailed;
@@ -155,6 +186,7 @@ pub const Client = struct {
         if (self.read_prepared) c.wl_display_cancel_read(self.display);
         if (self.repeat_timer) |t| self.plat.loop.cancelTimer(t);
         if (self.selection) |o| c.wl_data_offer_destroy(o.offer);
+        self.resetDnd();
         for (self.pending_offers.items) |o| c.wl_data_offer_destroy(o.offer);
         self.pending_offers.deinit(self.gpa);
         if (self.data_source) |s| c.wl_data_source_destroy(s);
@@ -775,6 +807,11 @@ pub const Client = struct {
                 o.mime = tm;
                 o.mime_rank = rank;
             };
+            if (std.mem.eql(u8, m, "text/uri-list")) o.uri_list = true;
+            for (image_mimes, 0..) |im, rank| if (rank < o.image_rank and std.mem.eql(u8, m, std.mem.span(im))) {
+                o.image = platform.ClipboardImageFormat.preference[rank];
+                o.image_rank = rank;
+            };
         };
     }
 
@@ -791,14 +828,88 @@ pub const Client = struct {
         self.selection = self.takeOffer(offer);
     }
 
-    // Drag and drop is not wired up yet; reject offers so sources do not hang.
-    fn onDndEnter(data: ?*anyopaque, _: ?*c.struct_wl_data_device, _: u32, _: ?*c.struct_wl_surface, _: c.wl_fixed_t, _: c.wl_fixed_t, offer: ?*c.struct_wl_data_offer) callconv(.c) void {
+    // Drag and drop of files (`text/uri-list`) from other apps (gpui_linux wayland
+    // `data_device` handling): the paths are read on enter, then motion / drop /
+    // leave map to `FileDropEvent`s.
+    fn onDndEnter(data: ?*anyopaque, _: ?*c.struct_wl_data_device, serial: u32, surface: ?*c.struct_wl_surface, x: c.wl_fixed_t, y: c.wl_fixed_t, offer: ?*c.struct_wl_data_offer) callconv(.c) void {
         const self: *Client = @ptrCast(@alignCast(data.?));
-        if (self.takeOffer(offer)) |o| c.wl_data_offer_destroy(o.offer);
+        self.resetDnd();
+        const o = self.takeOffer(offer) orelse return;
+        const w = self.windowForSurface(surface) orelse {
+            c.wl_data_offer_destroy(o.offer);
+            return;
+        };
+        self.dnd = .{ .offer = o, .window = w, .serial = serial, .position = .{ .x = fixedToF32(x), .y = fixedToF32(y) } };
+        if (!o.uri_list) {
+            c.wl_data_offer_accept(o.offer, serial, null);
+            return;
+        }
+        c.wl_data_offer_accept(o.offer, serial, "text/uri-list");
+        if (c.wl_data_offer_get_version(o.offer) >= 3) c.wl_data_offer_set_actions(o.offer, c.WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY, c.WL_DATA_DEVICE_MANAGER_DND_ACTION_COPY);
+        const bytes = self.receiveOffer(o.offer, "text/uri-list") orelse return;
+        defer self.gpa.free(bytes);
+        x11_uri.parseUriList(self.gpa, bytes, &self.dnd.paths);
+        if (self.dnd.paths.items.len == 0) return;
+        self.dnd.entered = true;
+        const view: []const []const u8 = @ptrCast(self.dnd.paths.items);
+        w.common.handleInput(.{ .file_drop = .{ .entered = .{ .position = self.dnd.position, .paths = view } } });
     }
-    fn onDndLeave(_: ?*anyopaque, _: ?*c.struct_wl_data_device) callconv(.c) void {}
-    fn onDndMotion(_: ?*anyopaque, _: ?*c.struct_wl_data_device, _: u32, _: c.wl_fixed_t, _: c.wl_fixed_t) callconv(.c) void {}
-    fn onDndDrop(_: ?*anyopaque, _: ?*c.struct_wl_data_device) callconv(.c) void {}
+    fn onDndLeave(data: ?*anyopaque, _: ?*c.struct_wl_data_device) callconv(.c) void {
+        const self: *Client = @ptrCast(@alignCast(data.?));
+        if (self.dnd.entered) if (self.dnd.window) |w| w.common.handleInput(.{ .file_drop = .exited });
+        self.resetDnd();
+    }
+    fn onDndMotion(data: ?*anyopaque, _: ?*c.struct_wl_data_device, _: u32, x: c.wl_fixed_t, y: c.wl_fixed_t) callconv(.c) void {
+        const self: *Client = @ptrCast(@alignCast(data.?));
+        self.dnd.position = .{ .x = fixedToF32(x), .y = fixedToF32(y) };
+        if (!self.dnd.entered) return;
+        const w = self.dnd.window orelse return;
+        w.common.handleInput(.{ .file_drop = .{ .pending = .{ .position = self.dnd.position } } });
+    }
+    fn onDndDrop(data: ?*anyopaque, _: ?*c.struct_wl_data_device) callconv(.c) void {
+        const self: *Client = @ptrCast(@alignCast(data.?));
+        if (self.dnd.entered) if (self.dnd.window) |w| {
+            w.common.handleInput(.{ .file_drop = .{ .submit = .{ .position = self.dnd.position } } });
+            w.common.handleInput(.{ .file_drop = .exited });
+        };
+        if (self.dnd.offer) |o| if (self.dnd.entered and c.wl_data_offer_get_version(o.offer) >= 3) c.wl_data_offer_finish(o.offer);
+        self.resetDnd();
+    }
+
+    fn resetDnd(self: *Client) void {
+        if (self.dnd.offer) |o| c.wl_data_offer_destroy(o.offer);
+        for (self.dnd.paths.items) |p| self.gpa.free(p);
+        self.dnd.paths.deinit(self.gpa);
+        self.dnd = .{};
+    }
+
+    /// Reads one mime type of an offer (blocking, with the clipboard timeout).
+    fn receiveOffer(self: *Client, offer: *c.struct_wl_data_offer, mime: [*:0]const u8) ?[]u8 {
+        var fds: [2]linux.fd_t = undefined;
+        if (linux.errno(linux.pipe2(&fds, .{ .CLOEXEC = true })) != .SUCCESS) return null;
+        c.wl_data_offer_receive(offer, mime, fds[1]);
+        _ = linux.close(fds[1]);
+        _ = c.wl_display_flush(self.display);
+        return util.readFdWithTimeout(self.gpa, fds[0], util.read_timeout_ms) catch null;
+    }
+
+    pub fn readClipboardImage(self: *Client, gpa: Allocator) ?platform.ClipboardImage {
+        // Our own selection only ever carries text.
+        if (self.data_source != null) return null;
+        const sel = self.selection orelse return null;
+        const format = sel.image orelse return null;
+        var fds: [2]linux.fd_t = undefined;
+        if (linux.errno(linux.pipe2(&fds, .{ .CLOEXEC = true })) != .SUCCESS) return null;
+        c.wl_data_offer_receive(sel.offer, image_mimes[sel.image_rank], fds[1]);
+        _ = linux.close(fds[1]);
+        _ = c.wl_display_flush(self.display);
+        const bytes = util.readFdWithTimeout(gpa, fds[0], util.read_timeout_ms) catch return null;
+        if (bytes.len == 0) {
+            gpa.free(bytes);
+            return null;
+        }
+        return .{ .format = format, .bytes = bytes };
+    }
 
     const data_source_listener: c.struct_wl_data_source_listener = .{
         .target = onSourceTarget,
@@ -873,6 +984,7 @@ pub const Client = struct {
             self.keyboard_focus = null;
             self.stopRepeat();
         }
+        if (self.dnd.window == w) self.resetDnd();
     }
 };
 

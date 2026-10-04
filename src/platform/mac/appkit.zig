@@ -153,6 +153,10 @@ pub extern "c" const NSPasteboardTypeString: id;
 /// Deprecated alias of the legacy file-list pasteboard type; still what drag
 /// sources put on the pasteboard for Finder file drags (zui uses it too).
 pub extern "c" const NSFilenamesPboardType: id;
+/// `orderFrontStandardAboutPanelWithOptions:` keys (AppKit, macOS 10.13+).
+pub extern "c" const NSAboutPanelOptionApplicationName: id;
+pub extern "c" const NSAboutPanelOptionApplicationVersion: id;
+pub extern "c" const NSAboutPanelOptionVersion: id;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -210,6 +214,35 @@ pub fn displayIdForScreen(screen: ?id) ?u32 {
     const desc = s.msg(?id, "deviceDescription", .{}) orelse return null;
     const num = desc.msg(?id, "objectForKey:", .{objc.nsString("NSScreenNumber")}) orelse return null;
     return @truncate(num.msg(NSUInteger, "unsignedIntegerValue", .{}));
+}
+
+/// The NSScreen whose display id is `display_id`, if connected.
+pub fn screenForDisplayId(display_id: u32) ?id {
+    const screens = class("NSScreen").msg(id, "screens", .{});
+    var i: NSUInteger = 0;
+    while (i < arrayCount(screens)) : (i += 1) {
+        const screen = arrayAt(screens, i);
+        if (displayIdForScreen(screen) == display_id) return screen;
+    }
+    return null;
+}
+
+/// `CGDisplayCreateUUIDFromDisplayID` (ColorSync, re-exported through
+/// ApplicationServices) looked up at runtime so no extra framework is linked; raw bytes.
+pub fn displayUuid(display_id: u32) ?[16]u8 {
+    const Fn = *const fn (u32) callconv(.c) ?*anyopaque;
+    const CFUUIDBytes = extern struct { bytes: [16]u8 };
+    const BytesFn = *const fn (?*anyopaque) callconv(.c) CFUUIDBytes;
+    const S = struct {
+        extern "c" fn dlsym(handle: ?*anyopaque, symbol: [*:0]const u8) ?*anyopaque;
+        extern "c" fn CFRelease(cf: *anyopaque) void;
+    };
+    const rtld_default: ?*anyopaque = @ptrFromInt(@as(usize, @bitCast(@as(isize, -2))));
+    const create: Fn = @ptrCast(@alignCast(S.dlsym(rtld_default, "CGDisplayCreateUUIDFromDisplayID") orelse return null));
+    const get_bytes: BytesFn = @ptrCast(@alignCast(S.dlsym(rtld_default, "CFUUIDGetUUIDBytes") orelse return null));
+    const uuid = create(display_id) orelse return null;
+    defer S.CFRelease(uuid);
+    return get_bytes(uuid).bytes;
 }
 
 pub const OperatingSystemVersion = extern struct { major: NSInteger, minor: NSInteger, patch: NSInteger };

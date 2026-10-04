@@ -1,0 +1,138 @@
+{
+  "kind": "Flowchart",
+  "direction": "TopDown",
+  "width": 180.338,
+  "height": 280.98,
+  "nodes": [
+    {
+      "id": "A",
+      "shape": "Rectangle",
+      "x": 43.94698,
+      "y": 8.0,
+      "width": 83.04,
+      "height": 41.0,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "Inicio"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "B",
+      "shape": "Diamond",
+      "x": 42.127895,
+      "y": 81.826004,
+      "width": 86.336006,
+      "height": 86.336006,
+      "label_width": 54.88,
+      "label_height": 21.0,
+      "label_lines": [
+        "¿Listo?"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "C",
+      "shape": "Rectangle",
+      "x": 8.0,
+      "y": 200.988,
+      "width": 59.52,
+      "height": 41.0,
+      "label_width": 23.52,
+      "label_height": 21.0,
+      "label_lines": [
+        "Fin"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "D",
+      "shape": "Diamond",
+      "x": 100.346,
+      "y": 200.988,
+      "width": 63.992,
+      "height": 63.992,
+      "label_width": 31.36,
+      "label_height": 21.0,
+      "label_lines": [
+        "Otra"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          85.406296,
+          49.0
+        ],
+        [
+          85.406296,
+          81.908615
+        ]
+      ]
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          80.030014,
+          162.89613
+        ],
+        [
+          80.030014,
+          174.38524
+        ],
+        [
+          63.85893,
+          189.4989
+        ],
+        [
+          63.85893,
+          200.988
+        ]
+      ]
+    },
+    {
+      "from": "B",
+      "to": "D",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          109.901665,
+          143.55624
+        ],
+        [
+          109.901665,
+          155.04535
+        ],
+        [
+          132.34201,
+          189.4989
+        ],
+        [
+          132.34201,
+          200.988
+        ]
+      ]
+    }
+  ],
+  "subgraphs": []
+}

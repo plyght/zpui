@@ -10,8 +10,8 @@
 //!   - History: `history.HistoryPane`; a row click opens the commit as its
 //!     own `ChangesPane.initCommit` tab,
 //!   - Terminal: an embedded `TerminalDock` (no dock chrome),
-//!   - Browser: the empty "Preview your work" page (no embedded web view
-//!     in this port yet),
+//!   - Browser: `browser.BrowserPane` (WKWebView on macOS, the WebKitGTK
+//!     helper on Linux; "Preview your work" / dev-server previews when empty),
 //!   - File: a `ui/editor` `FileEditor` tab (`openFile`: the explorer, a
 //!     Changes file header, transcript links).
 //!
@@ -34,6 +34,8 @@ const terminal_dock = @import("terminal_dock.zig");
 const files = @import("../files/root.zig");
 const editor = @import("../editor/root.zig");
 const md = @import("zeron_ui_markdown");
+const browser = @import("../browser/root.zig");
+const surfaces = @import("surfaces.zig"); // [wiring] subagent + side-chat tabs
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -57,9 +59,13 @@ pub const Surface = union(enum) {
     changes: Entity(changes.ChangesPane),
     history: Entity(history.HistoryPane),
     terminal: Entity(terminal_dock.TerminalDock),
-    browser,
+    browser: Entity(browser.BrowserPane),
     /// Editor tab for a workspace-relative path.
     file: Entity(editor.FileEditor),
+    /// [wiring] A spawn chip's subagent transcript.
+    subagent: Entity(surfaces.SubagentSurface),
+    /// [wiring] A side chat (fork / agent-spawned child) with a reply field.
+    side_chat: Entity(surfaces.SideChatSurface),
 };
 
 pub const Tab = struct {
@@ -73,8 +79,10 @@ pub const Tab = struct {
             .changes => |e| e.release(app),
             .history => |e| e.release(app),
             .terminal => |e| e.release(app),
-            .browser => {},
+            .browser => |e| e.release(app),
             .file => |e| e.release(app),
+            .subagent => |e| e.release(app),
+            .side_chat => |e| e.release(app),
         }
     }
 };
@@ -93,8 +101,13 @@ pub const ChatTabs = struct {
     files: ?Entity(files.WorkspaceFiles) = null,
     explorer: ?Entity(files.FilesPanel) = null,
     explorer_sub: ?zpui.Subscription = null,
+    /// [wiring] Explorer events beyond OpenFile (Add to chat, footer rows).
+    explorer_subs: zpui.Subscriptions = .{},
+    /// [wiring] Fingerprint of the rows last handed to the explorer footer.
+    sections_key: u64 = 0,
 
     fn deinit(self: *ChatTabs, gpa: std.mem.Allocator, app: *App) void {
+        self.explorer_subs.deinit(gpa);
         for (self.tabs.items) |*t| t.deinit(gpa, app);
         self.tabs.deinit(gpa);
         self.visits.deinit(gpa);
@@ -199,6 +212,10 @@ fn buildGhost(drag: *const TabDrag, _: zpui.Point(f32), _: *Window, app: *App) E
 pub const SurfacesEmptied = struct {};
 /// The `+` menu's Files row: the shell docks the explorer.
 pub const OpenExplorer = struct {};
+/// [wiring] The explorer's "Add to chat": the shell inserts a reference into the composer.
+pub const AddToChat = struct { path: []const u8, is_directory: bool };
+/// [wiring] A side-chat action failed: the shell shows it in the composer.
+pub const SideChatError = struct { message: []const u8 };
 
 pub const RightPane = struct {
     gpa: std.mem.Allocator,
@@ -211,8 +228,10 @@ pub const RightPane = struct {
     strip_scroll: zpui.ScrollHandle,
     /// A fresh chat's open flag (fixtures can open every chat's pane).
     default_open: bool = false,
+    /// The window hosting the pane (browser new-tab requests).
+    window_id: ?zpui.WindowId = null,
 
-    pub const Events = .{ SurfacesEmptied, OpenExplorer };
+    pub const Events = .{ SurfacesEmptied, OpenExplorer, AddToChat, SideChatError };
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, default_open: bool, cx: *Context(RightPane)) RightPane {
         return .{
@@ -276,7 +295,7 @@ pub const RightPane = struct {
         if (t.open == open) return;
         t.open = open;
         if (!open) self.plus_open = false;
-        if (open) self.ensureActiveContent(cx);
+        self.ensureActiveContent(cx);
         cx.notify();
     }
 
@@ -294,13 +313,14 @@ pub const RightPane = struct {
 
     // ---- adding / closing -------------------------------------------------------------
 
-    fn push(self: *RightPane, surface: Surface, cx: *Context(RightPane)) ?*Tab {
+    pub fn push(self: *RightPane, surface: Surface, cx: *Context(RightPane)) ?*Tab {
         const t = self.current(cx) orelse return null;
         self.seq += 1;
         t.tabs.append(self.gpa, .{ .id = self.seq, .surface = surface }) catch return null;
         t.visit(self.gpa, self.seq);
         t.open = true;
         self.plus_open = false;
+        self.syncBrowsers(t, cx);
         cx.notify();
         return &t.tabs.items[t.tabs.items.len - 1];
     }
@@ -332,10 +352,53 @@ pub const RightPane = struct {
                 }
                 _ = self.push(.{ .terminal = e }, cx) orelse e.release(cx);
             },
-            .browser => _ = self.push(.browser, cx),
+            .browser => _ = self.addBrowser(null, window, cx),
             // The Files explorer is its own column (Rust `add_files_surface`).
             .files => cx.emit(OpenExplorer{}),
         }
+    }
+
+    /// A new Browser tab (optionally loading `url`, e.g. a page's target=_blank link).
+    pub fn addBrowser(self: *RightPane, url: ?[]const u8, window: *Window, cx: *Context(RightPane)) ?Entity(browser.BrowserPane) {
+        self.window_id = window.id;
+        // Fixture mode has no engine: previews come from `previews.json` when present.
+        const chat = if (self.fixtures == null) self.key(cx) else null;
+        const pane = cx.newWith(browser.BrowserPane, browser.BrowserPane.init, .{ self.state, chat, window }) catch return null;
+        if (self.fixtureBytes("previews.json", cx)) |bytes| pane.update(cx, browser.BrowserPane.applyPreviewFixture, .{bytes});
+        const tab = self.push(.{ .browser = pane }, cx) orelse {
+            pane.release(cx);
+            return null;
+        };
+        tab.sub = cx.subscribe(pane, onBrowserNewTab) catch null;
+        if (cx.subscribe(pane, onBrowserClose)) |sub| {
+            var s2 = sub;
+            s2.detach();
+        } else |_| {}
+        {
+            // A chat on another device: localhost there is not localhost here.
+            const ws = self.state.read(cx).workspace.read(cx);
+            const remote = if (ws.selectedChatRow()) |c| (if (ws.local_device_id) |l| !std.mem.eql(u8, l, c.deviceId) else false) else false;
+            var l = pane.lease(cx);
+            defer l.end();
+            l.value.remote = remote;
+        }
+        if (url) |u| pane.update(cx, browser.BrowserPane.navigate, .{u}) else pane.update(cx, browser.BrowserPane.focusAddress, .{window});
+        return pane;
+    }
+
+    fn onBrowserNewTab(self: *RightPane, pane: Entity(browser.BrowserPane), ev: *const browser.NewTab, cx: *Context(RightPane)) void {
+        // A background page cannot open a tab in the wrong session.
+        const t = self.peek(cx) orelse return;
+        const active = t.resolvedActive() orelse return;
+        const tab = t.tabs.items[t.indexOf(active).?];
+        if (tab.surface != .browser or tab.surface.browser.id != pane.id) return;
+        const w = cx.app.windowById(self.window_id orelse return) orelse return;
+        _ = self.addBrowser(ev.url, w, cx);
+    }
+
+    fn onBrowserClose(self: *RightPane, pane: Entity(browser.BrowserPane), _: *const browser.CloseRequested, cx: *Context(RightPane)) void {
+        const t = self.current(cx) orelse return;
+        for (t.tabs.items) |tab| if (tab.surface == .browser and tab.surface.browser.id == pane.id) return self.close(tab.id, cx);
     }
 
     /// The chat's workspace files service: engine-backed (the chat's checkout,
@@ -364,6 +427,7 @@ pub const RightPane = struct {
         const e = cx.newWith(files.FilesPanel, files.FilesPanel.init, .{ f, files.panel.Options{} }) catch return null;
         t.explorer = e;
         t.explorer_sub = cx.subscribe(e, onExplorerOpenFile) catch null;
+        surfaces_glue.subscribeExplorer(self, t, e, cx);
         return e;
     }
 
@@ -461,9 +525,17 @@ pub const RightPane = struct {
         cx.notify();
     }
 
+    /// Only the visible browser tab keeps rendering (Rust `set_presentation`).
+    fn syncBrowsers(_: *RightPane, t: *ChatTabs, cx: *Context(RightPane)) void {
+        const shown = if (t.open) t.resolvedActive() else null;
+        for (t.tabs.items) |bt| if (bt.surface == .browser)
+            bt.surface.browser.update(cx, browser.BrowserPane.setPresentation, .{if (shown == bt.id) browser.model.Presentation.live else .hidden});
+    }
+
     /// Reopening onto a diff tab revalidates its watch.
     fn ensureActiveContent(self: *RightPane, cx: *Context(RightPane)) void {
         const t = self.current(cx) orelse return;
+        self.syncBrowsers(t, cx);
         const id = t.resolvedActive() orelse return;
         const tab = t.tabs.items[t.indexOf(id).?];
         if (tab.surface == .changes) tab.surface.changes.update(cx, changes.ChangesPane.ensureContent, .{});
@@ -590,8 +662,10 @@ pub const RightPane = struct {
             .changes => |e| e.read(cx).tabTitle(),
             .history => |e| e.read(cx).tabTitle(),
             .terminal => |e| terminal_dock.surfaceTitle(e.read(cx)),
-            .browser => "Browser",
+            .browser => |e| e.read(cx).tabTitle(),
             .file => |e| e.read(cx).tabTitle(),
+            .subagent => |e| e.read(cx).tabTitle(),
+            .side_chat => |e| e.read(cx).tabTitle(cx),
         };
     }
 
@@ -600,8 +674,10 @@ pub const RightPane = struct {
             .changes => |e| e.read(cx).tabIcon(),
             .history => |e| e.read(cx).tabIcon(),
             .terminal => .terminal,
-            .browser => .globe,
+            .browser => |e| e.read(cx).tabIcon(),
             .file => .document,
+            .subagent => .bot,
+            .side_chat => .chat_round_line,
         };
     }
 
@@ -739,8 +815,10 @@ pub const RightPane = struct {
             .changes => |e| zpui.intoAnyElement(div().sizeFull().child(e)),
             .history => |e| zpui.intoAnyElement(div().sizeFull().child(e)),
             .terminal => |e| zpui.intoAnyElement(div().sizeFull().borderT1().borderColor(theme.border).child(e)),
-            .browser => browserPage(theme),
+            .browser => |e| zpui.intoAnyElement(div().sizeFull().child(e)),
             .file => |e| zpui.intoAnyElement(div().sizeFull().child(e)),
+            .subagent => |e| zpui.intoAnyElement(div().sizeFull().child(e)),
+            .side_chat => |e| zpui.intoAnyElement(div().sizeFull().child(e)),
         };
     }
 
@@ -765,50 +843,6 @@ fn surfaceCard(theme: *const Theme, id: []const u8, i: Icon, title: []const u8) 
         .child(div().textSize(ui.rems(13)).fontWeight(500).textColor(theme.text).child(title));
 }
 
-/// `surface_chrome::toolbar`: 38px, 8px inset, hairlines above and below.
-fn surfaceToolbar(theme: *const Theme) zpui.Div {
-    return div().h(px(layout.titlebar_height)).wFull().flexNone().px(px(8)).flex().itemsCenter().gap(px(4))
-        .borderT1().borderB1().borderColor(theme.border)
-        .bg(if (theme.isGlass()) theme.surface.opacity(0.26) else theme.surface);
-}
-
-fn toolbarButton(id: []const u8, i: Icon, enabled: bool, theme: *const Theme) zpui.StatefulDiv {
-    var b = div().id(id).size(px(24)).flexNone().flex().itemsCenter().justifyCenter().rounded(px(6))
-        .child(ui.icon.of(i, 14, theme.text_muted));
-    b = if (enabled) b.cursorPointer().hover(sb.bg(theme.wash(0.10))) else b.opacity(0.35);
-    return b;
-}
-
-/// The Browser surface's empty page (BrowserSurface `empty_body`): the
-/// embedded web view is not ported, so the page stays on its intro.
-fn browserPage(theme: *const Theme) zpui.AnyElement {
-    const address = div().h(px(24)).minW0().flex1().px(px(8)).rounded(px(6)).bg(theme.ink(0.035))
-        .flex().itemsCenter().gap(px(6)).textSize(px(11.5))
-        .child(ui.icon.of(.globe, 12, theme.text_faint))
-        .child(div().flex1().minW0().truncate().whitespaceNowrap().textColor(theme.text_faint).child("Search or enter address"));
-    const toolbar = surfaceToolbar(theme)
-        .child(toolbarButton("browser-back", .arrow_left, false, theme))
-        .child(toolbarButton("browser-forward", .arrow_right, false, theme))
-        .child(toolbarButton("browser-reload", .refresh, false, theme))
-        .child(address)
-        .child(toolbarButton("browser-external", .arrow_up_right, false, theme));
-    const body = div().flex1().minH0().flex().itemsCenter().justifyCenter().p(px(24))
-        .child(div().wFull().maxW(px(300)).flex().flexCol().itemsCenter().gap(px(12))
-            .child(div().size(px(44)).rounded(px(12)).border1().borderColor(theme.border)
-                .bg(theme.surface_raised.opacity(0.5)).flex().itemsCenter().justifyCenter()
-                .child(ui.icon.of(.globe, 22, theme.text_muted)))
-            .child(div().mt(px(4)).textSize(ui.rems(14)).fontWeight(500).textColor(theme.text).child("Preview your work"))
-            .child(div().textCenter().textSize(ui.rems(12)).lineHeight(px(19)).textColor(theme.text_muted)
-                .child("Preview your local app or keep a website beside your conversation."))
-            .child(div().mt(px(6)).id("browser-empty-action").h(px(28)).px(px(10)).rounded(px(6))
-                .border1().borderColor(theme.border).bg(theme.surface_raised).cursorPointer()
-                .hover(sb.bg(theme.wash(0.10))).flex().itemsCenter().gap(px(8))
-                .textSize(ui.rems(12)).textColor(theme.text)
-                .child("Enter an address")
-                .child(div().textSize(ui.rems(10)).textColor(theme.text_faint).child(if (@import("builtin").os.tag == .macos) "\u{2318}L" else "Ctrl L"))));
-    return zpui.intoAnyElement(div().sizeFull().flex().flexCol().child(toolbar).child(body));
-}
-
 test "drop index and slide offsets" {
     try std.testing.expectEqual(@as(usize, 0), dropIndex(-5, chip_slot, 3));
     try std.testing.expectEqual(@as(usize, 1), dropIndex(chip_slot + 1, chip_slot, 3));
@@ -829,9 +863,9 @@ test "chat tabs resolve, reorder and fall back after close" {
         t.visits.deinit(gpa);
     }
     try std.testing.expectEqual(@as(?u64, null), t.resolvedActive());
-    try t.tabs.append(gpa, .{ .id = 1, .surface = .browser });
-    try t.tabs.append(gpa, .{ .id = 2, .surface = .browser });
-    try t.tabs.append(gpa, .{ .id = 3, .surface = .browser });
+    try t.tabs.append(gpa, .{ .id = 1, .surface = .{ .browser = undefined } });
+    try t.tabs.append(gpa, .{ .id = 2, .surface = .{ .browser = undefined } });
+    try t.tabs.append(gpa, .{ .id = 3, .surface = .{ .browser = undefined } });
     t.visit(gpa, 1);
     t.visit(gpa, 3);
     t.visit(gpa, 2);
@@ -844,3 +878,6 @@ test "chat tabs resolve, reorder and fall back after close" {
     try std.testing.expectEqual(@as(u64, 3), t.tabs.items[0].id);
     try std.testing.expect(!t.reorder(0, 0));
 }
+
+// [wiring] Subagent / side-chat tabs, explorer footer rows, Add to chat.
+pub const surfaces_glue = @import("right_pane_chats.zig");

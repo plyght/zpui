@@ -60,5 +60,10 @@ if command -v codesign >/dev/null; then
   fi
 fi
 if command -v lipo >/dev/null; then lipo -info "$app/Contents/MacOS/zeron"; fi
+# Self-update payload (apps/zeron/src/lifecycle/update.zig, same name as the Rust
+# release's): zeron-<ver>-macos-<arm64|x86_64>-app.tar.gz with Zeron.app at its root.
+tarch=$arch; [[ $arch == aarch64 ]] && tarch=arm64
+tar -czf "$prefix/zeron-$version-macos-$tarch-app.tar.gz" -C "$prefix" Zeron.app
+echo "zeron-app-bundle: $prefix/zeron-$version-macos-$tarch-app.tar.gz"
 echo "zeron-app-bundle: $app (version $version)"
 find "$app" -type f | sed "s|^$prefix/||" | sort

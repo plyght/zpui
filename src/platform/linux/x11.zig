@@ -24,6 +24,7 @@ const scene_mod = @import("../../scene.zig");
 const atlas_mod = @import("../../atlas.zig");
 const event_loop = @import("event_loop.zig");
 const keyboard = @import("keyboard.zig");
+const file_dialog = @import("file_dialog.zig");
 const common = @import("window_common.zig");
 const util = @import("util.zig");
 const Presenter = @import("presenter.zig").Presenter;
@@ -78,6 +79,13 @@ const atom_names = [_][:0]const u8{
     "CLIPBOARD",                    "TARGETS",                      "TEXT",
     "_ZPUI_SELECTION",              "INCR",                         "text/plain;charset=utf-8",
     "_GTK_FRAME_EXTENTS",
+    // XDND (file drops) and clipboard image targets.
+    "XdndAware",                    "XdndEnter",                    "XdndPosition",
+    "XdndStatus",                   "XdndLeave",                    "XdndDrop",
+    "XdndFinished",                 "XdndSelection",                "XdndActionCopy",
+    "XdndTypeList",                 "text/uri-list",                "_ZPUI_XDND",
+    "image/png",                    "image/jpeg",                   "image/bmp",
+    "image/tiff",                   "image/gif",                    "image/webp",
 };
 
 const Atoms = struct {
@@ -106,6 +114,24 @@ const Atoms = struct {
     INCR: u32 = 0,
     TEXT_PLAIN_UTF8: u32 = 0,
     _GTK_FRAME_EXTENTS: u32 = 0,
+    XdndAware: u32 = 0,
+    XdndEnter: u32 = 0,
+    XdndPosition: u32 = 0,
+    XdndStatus: u32 = 0,
+    XdndLeave: u32 = 0,
+    XdndDrop: u32 = 0,
+    XdndFinished: u32 = 0,
+    XdndSelection: u32 = 0,
+    XdndActionCopy: u32 = 0,
+    XdndTypeList: u32 = 0,
+    TEXT_URI_LIST: u32 = 0,
+    _ZPUI_XDND: u32 = 0,
+    IMAGE_PNG: u32 = 0,
+    IMAGE_JPEG: u32 = 0,
+    IMAGE_BMP: u32 = 0,
+    IMAGE_TIFF: u32 = 0,
+    IMAGE_GIF: u32 = 0,
+    IMAGE_WEBP: u32 = 0,
 
     fn intern(conn: *c.xcb_connection_t) Atoms {
         var cookies: [atom_names.len]c.xcb_intern_atom_cookie_t = undefined;
@@ -413,6 +439,8 @@ pub const Client = struct {
 
     clipboard: ?Clipboard = null,
     mapping_watcher: ?*MappingWatcher = null,
+    /// The XDND drag currently over one of our windows.
+    dnd: Dnd = .{},
 
     pub fn create(gpa: Allocator, plat: *LinuxPlatform) !*Client {
         const dpy = c.XOpenDisplay(null) orelse return error.X11ConnectFailed;
@@ -607,6 +635,131 @@ pub const Client = struct {
         }
     }
 
+    // -- XDND (drag and drop of files from other apps) ---------------------------------
+
+    /// Handles Xdnd* client messages; false for anything else.
+    fn handleXdnd(self: *Client, e: *const c.xcb_client_message_event_t) bool {
+        const a = &self.atoms;
+        const d = e.data.data32;
+        if (e.type == a.XdndEnter) {
+            const w = self.windowFor(e.window) orelse return true;
+            self.dnd.reset(self.gpa);
+            self.dnd.source = d[0];
+            self.dnd.target = w;
+            self.dnd.version = d[1] >> 24;
+            if (d[1] & 1 != 0) {
+                self.dnd.accept = self.sourceOffersUriList(d[0]);
+            } else {
+                self.dnd.accept = d[2] == a.TEXT_URI_LIST or d[3] == a.TEXT_URI_LIST or d[4] == a.TEXT_URI_LIST;
+            }
+            return true;
+        }
+        if (e.type == a.XdndPosition) {
+            const w = self.dnd.target orelse return true;
+            if (d[0] != self.dnd.source) return true;
+            const root_x: i16 = @bitCast(@as(u16, @truncate(d[2] >> 16)));
+            const root_y: i16 = @bitCast(@as(u16, @truncate(d[2])));
+            self.dnd.position = self.rootToWindow(w, root_x, root_y);
+            if (self.dnd.accept and !self.dnd.requested) {
+                self.dnd.requested = true;
+                _ = c.xcb_convert_selection(self.conn, w.xid, a.XdndSelection, a.TEXT_URI_LIST, a._ZPUI_XDND, d[3]);
+            } else if (self.dnd.entered) {
+                w.common.handleInput(.{ .file_drop = .{ .pending = .{ .position = self.dnd.position } } });
+            }
+            self.sendXdnd(d[0], a.XdndStatus, .{ w.xid, if (self.dnd.accept) 1 else 0, 0, 0, if (self.dnd.accept) a.XdndActionCopy else 0 });
+            return true;
+        }
+        if (e.type == a.XdndLeave) {
+            if (self.dnd.target) |w| if (self.dnd.entered) w.common.handleInput(.{ .file_drop = .exited });
+            self.dnd.reset(self.gpa);
+            return true;
+        }
+        if (e.type == a.XdndDrop) {
+            const w = self.dnd.target orelse return true;
+            if (!self.dnd.accept) {
+                self.sendXdnd(d[0], a.XdndFinished, .{ w.xid, 0, 0, 0, 0 });
+                self.dnd.reset(self.gpa);
+                return true;
+            }
+            if (!self.dnd.entered) {
+                // The data is still on its way: finish once it lands.
+                self.dnd.drop_pending = true;
+                if (!self.dnd.requested) {
+                    self.dnd.requested = true;
+                    _ = c.xcb_convert_selection(self.conn, w.xid, a.XdndSelection, a.TEXT_URI_LIST, a._ZPUI_XDND, d[2]);
+                }
+                return true;
+            }
+            self.finishXdndDrop(w);
+            return true;
+        }
+        return false;
+    }
+
+    fn finishXdndDrop(self: *Client, w: *Window) void {
+        const a = &self.atoms;
+        w.common.handleInput(.{ .file_drop = .{ .submit = .{ .position = self.dnd.position } } });
+        w.common.handleInput(.{ .file_drop = .exited });
+        self.sendXdnd(self.dnd.source, a.XdndFinished, .{ w.xid, 1, a.XdndActionCopy, 0, 0 });
+        self.dnd.reset(self.gpa);
+    }
+
+    fn xdndDataArrived(self: *Client, e: *const c.xcb_selection_notify_event_t) void {
+        const w = self.dnd.target orelse return;
+        if (e.requestor != w.xid) return;
+        var paths: std.ArrayList([]u8) = .empty;
+        if (e.property != 0) {
+            const reply = c.xcb_get_property_reply(self.conn, c.xcb_get_property(self.conn, 1, w.xid, self.atoms._ZPUI_XDND, 0, 0, std.math.maxInt(u32) / 4), null);
+            if (reply != null) {
+                defer std.c.free(reply);
+                const len: usize = @intCast(c.xcb_get_property_value_length(reply));
+                if (c.xcb_get_property_value(reply)) |ptr| {
+                    const bytes: [*]const u8 = @ptrCast(ptr);
+                    parseUriList(self.gpa, bytes[0..len], &paths);
+                }
+            }
+        }
+        if (paths.items.len == 0) {
+            paths.deinit(self.gpa);
+            self.dnd.accept = false;
+            if (self.dnd.drop_pending) {
+                self.sendXdnd(self.dnd.source, self.atoms.XdndFinished, .{ w.xid, 0, 0, 0, 0 });
+                self.dnd.reset(self.gpa);
+            }
+            return;
+        }
+        self.dnd.paths = paths;
+        self.dnd.entered = true;
+        const view: []const []const u8 = @ptrCast(self.dnd.paths.items);
+        w.common.handleInput(.{ .file_drop = .{ .entered = .{ .position = self.dnd.position, .paths = view } } });
+        if (self.dnd.drop_pending) self.finishXdndDrop(w);
+    }
+
+    fn sourceOffersUriList(self: *Client, source: u32) bool {
+        const reply = c.xcb_get_property_reply(self.conn, c.xcb_get_property(self.conn, 0, source, self.atoms.XdndTypeList, ATOM_ATOM, 0, 64), null);
+        if (reply == null) return false;
+        defer std.c.free(reply);
+        const n: usize = @intCast(c.xcb_get_property_value_length(reply));
+        const ptr = c.xcb_get_property_value(reply) orelse return false;
+        const atoms: [*]const u32 = @ptrCast(@alignCast(ptr));
+        for (atoms[0 .. n / 4]) |t| if (t == self.atoms.TEXT_URI_LIST) return true;
+        return false;
+    }
+
+    fn rootToWindow(self: *Client, w: *Window, x: i16, y: i16) platform.Point {
+        const reply = c.xcb_translate_coordinates_reply(self.conn, c.xcb_translate_coordinates(self.conn, self.screen.root, w.xid, x, y), null);
+        if (reply == null) return w.common.mouse_position;
+        defer std.c.free(reply);
+        return .{ .x = self.logical(@floatFromInt(reply.*.dst_x)), .y = self.logical(@floatFromInt(reply.*.dst_y)) };
+    }
+
+    fn sendXdnd(self: *Client, target: u32, msg_type: u32, data: [5]u32) void {
+        var ev: c.xcb_client_message_event_t = .{ .response_type = CLIENT_MESSAGE, .format = 32, .window = target, .type = msg_type };
+        ev.data.data32 = data;
+        _ = c.xcb_send_event(self.conn, 0, target, 0, @ptrCast(&ev));
+        _ = c.xcb_flush(self.conn);
+    }
+
     fn windowFor(self: *Client, xid: u32) ?*Window {
         for (self.windows.items) |w| if (w.xid == xid) return w;
         return null;
@@ -693,6 +846,7 @@ pub const Client = struct {
             },
             CLIENT_MESSAGE => {
                 const e: *const c.xcb_client_message_event_t = @ptrCast(@alignCast(ev));
+                if (self.handleXdnd(e)) return;
                 if (e.type != self.atoms.WM_PROTOCOLS) return;
                 const proto = e.data.data32[0];
                 if (proto == self.atoms.WM_DELETE_WINDOW) {
@@ -703,6 +857,10 @@ pub const Client = struct {
                     reply.window = self.screen.root;
                     _ = c.xcb_send_event(self.conn, 0, self.screen.root, c.XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY | c.XCB_EVENT_MASK_SUBSTRUCTURE_REDIRECT, @ptrCast(&reply));
                 }
+            },
+            SELECTION_NOTIFY => {
+                const e: *const c.xcb_selection_notify_event_t = @ptrCast(@alignCast(ev));
+                if (e.selection == self.atoms.XdndSelection) self.xdndDataArrived(e);
             },
             MAPPING_NOTIFY => {},
             GENERIC_EVENT => if (self.xi_opcode) |op| if (ev[1] == op) self.handleXiEvent(ev),
@@ -887,6 +1045,10 @@ pub const Client = struct {
         if (self.clipboard) |*cb| cb.write(text);
     }
 
+    pub fn readClipboardImage(self: *Client, gpa: Allocator) ?platform.ClipboardImage {
+        return if (self.clipboard) |*cb| cb.readImage(gpa) else null;
+    }
+
     pub fn readClipboard(self: *Client, gpa: Allocator) ?[]u8 {
         return if (self.clipboard) |*cb| cb.read(gpa) else null;
     }
@@ -913,6 +1075,7 @@ pub const Client = struct {
         };
         if (self.mouse_focus == w) self.mouse_focus = null;
         if (self.keyboard_focus == w) self.keyboard_focus = null;
+        if (self.dnd.target == w) self.dnd.reset(self.gpa);
     }
 
     fn findArgbVisual(self: *Client) ?u32 {
@@ -993,6 +1156,8 @@ pub const Window = struct {
         client.setProperty32(xid, a.WM_PROTOCOLS, ATOM_ATOM, &.{ a.WM_DELETE_WINDOW, a._NET_WM_PING });
         client.setProperty32(xid, a._NET_WM_PID, ATOM_CARDINAL, &.{@intCast(linux.getpid())});
         client.setProperty32(xid, a._NET_WM_WINDOW_TYPE, ATOM_ATOM, &.{a._NET_WM_WINDOW_TYPE_NORMAL});
+        // XDND protocol version 5: file drops arrive as XdndEnter/Position/Drop.
+        client.setProperty32(xid, a.XdndAware, ATOM_ATOM, &.{5});
         if (params.titlebar) |tb| self.setTitleImpl(tb.title);
         const app_id = params.app_id orelse "zpui";
         var class_buf: [256]u8 = undefined;
@@ -1356,6 +1521,92 @@ const Clipboard = struct {
         _ = c.xcb_flush(self.conn);
     }
 
+    /// The clipboard's image, preferring lossless types (gpui reads `image/*` targets).
+    fn readImage(self: *Clipboard, gpa: Allocator) ?platform.ClipboardImage {
+        // We only ever own text.
+        if (self.text != null) return null;
+        const a = &self.atoms;
+        const targets = self.convert(gpa, a.TARGETS) orelse return null;
+        defer gpa.free(targets);
+        var offered_buf: [256]u32 = undefined;
+        const n_offered = @min(targets.len / 4, offered_buf.len);
+        for (0..n_offered) |i| offered_buf[i] = std.mem.readInt(u32, targets[i * 4 ..][0..4], .little);
+        const offered = offered_buf[0..n_offered];
+        const table = [_]struct { platform.ClipboardImageFormat, u32 }{
+            .{ .png, a.IMAGE_PNG },   .{ .tiff, a.IMAGE_TIFF }, .{ .bmp, a.IMAGE_BMP },
+            .{ .webp, a.IMAGE_WEBP }, .{ .jpeg, a.IMAGE_JPEG }, .{ .gif, a.IMAGE_GIF },
+        };
+        for (table) |entry| {
+            if (entry[1] == 0 or std.mem.indexOfScalar(u32, offered, entry[1]) == null) continue;
+            const bytes = self.convert(gpa, entry[1]) orelse continue;
+            if (bytes.len == 0) {
+                gpa.free(bytes);
+                continue;
+            }
+            return .{ .format = entry[0], .bytes = bytes };
+        }
+        return null;
+    }
+
+    /// Blocking ConvertSelection of CLIPBOARD to `target` (INCR transfers included).
+    fn convert(self: *Clipboard, gpa: Allocator, target: u32) ?[]u8 {
+        const a = &self.atoms;
+        _ = c.xcb_convert_selection(self.conn, self.window, a.CLIPBOARD, target, a._ZPUI_SELECTION, 0);
+        _ = c.xcb_flush(self.conn);
+        const fd = c.xcb_get_file_descriptor(self.conn);
+        var deadline = event_loop.monotonicNow() + @as(u64, @intCast(util.read_timeout_ms)) * std.time.ns_per_ms;
+        var incr: ?std.ArrayList(u8) = null;
+        errdefer if (incr) |*l| l.deinit(gpa);
+        while (event_loop.monotonicNow() < deadline) {
+            while (true) {
+                const ev = c.xcb_poll_for_event(self.conn);
+                if (ev == null) break;
+                defer std.c.free(ev);
+                const bytes: [*]const u8 = @ptrCast(ev);
+                const kind = bytes[0] & 0x7f;
+                if (kind == SELECTION_NOTIFY and incr == null) {
+                    const n: *const c.xcb_selection_notify_event_t = @ptrCast(@alignCast(bytes));
+                    if (n.property == 0) return null;
+                    const prop = self.getProperty(gpa) orelse return null;
+                    if (prop.type == a.INCR) {
+                        gpa.free(prop.bytes);
+                        incr = .empty;
+                        // Deleting the property (done by getProperty) starts the transfer.
+                        continue;
+                    }
+                    return prop.bytes;
+                }
+                if (kind == PROPERTY_NOTIFY and incr != null) {
+                    const pn: *const c.xcb_property_notify_event_t = @ptrCast(@alignCast(bytes));
+                    if (pn.atom != a._ZPUI_SELECTION or pn.state != c.XCB_PROPERTY_NEW_VALUE) continue;
+                    const prop = self.getProperty(gpa) orelse return null;
+                    defer gpa.free(prop.bytes);
+                    if (prop.bytes.len == 0) return incr.?.toOwnedSlice(gpa) catch null;
+                    incr.?.appendSlice(gpa, prop.bytes) catch return null;
+                    if (incr.?.items.len > 64 << 20) return null;
+                    deadline = event_loop.monotonicNow() + @as(u64, @intCast(util.read_timeout_ms)) * std.time.ns_per_ms;
+                    continue;
+                }
+                self.handleEvent(bytes);
+            }
+            if (c.xcb_connection_has_error(self.conn) != 0) return null;
+            var pfd = [_]linux.pollfd{.{ .fd = fd, .events = linux.POLL.IN, .revents = 0 }};
+            _ = linux.poll(&pfd, 1, 50);
+        }
+        return null;
+    }
+
+    /// Reads and deletes `_ZPUI_SELECTION` on our window.
+    fn getProperty(self: *Clipboard, gpa: Allocator) ?struct { type: u32, bytes: []u8 } {
+        const reply = c.xcb_get_property_reply(self.conn, c.xcb_get_property(self.conn, 1, self.window, self.atoms._ZPUI_SELECTION, 0, 0, std.math.maxInt(u32) / 4), null);
+        if (reply == null) return null;
+        defer std.c.free(reply);
+        const len: usize = @intCast(c.xcb_get_property_value_length(reply));
+        const ptr: [*]const u8 = if (c.xcb_get_property_value(reply)) |p| @ptrCast(p) else return .{ .type = reply.*.type, .bytes = gpa.alloc(u8, 0) catch return null };
+        _ = c.xcb_flush(self.conn);
+        return .{ .type = reply.*.type, .bytes = gpa.dupe(u8, ptr[0..len]) catch return null };
+    }
+
     fn read(self: *Clipboard, gpa: Allocator) ?[]u8 {
         if (self.text) |t| return gpa.dupe(u8, t) catch null;
         const a = &self.atoms;
@@ -1394,9 +1645,53 @@ const Clipboard = struct {
     }
 };
 
+/// One XDND drag over a window of ours.
+const Dnd = struct {
+    source: u32 = 0,
+    target: ?*Window = null,
+    version: u32 = 0,
+    /// The source offers `text/uri-list`.
+    accept: bool = false,
+    /// The uri-list was requested with `ConvertSelection`.
+    requested: bool = false,
+    /// `FileDropEvent.entered` was delivered (paths known).
+    entered: bool = false,
+    drop_pending: bool = false,
+    position: platform.Point = .zero,
+    paths: std.ArrayList([]u8) = .empty,
+
+    fn reset(d: *Dnd, gpa: Allocator) void {
+        for (d.paths.items) |p| gpa.free(p);
+        d.paths.deinit(gpa);
+        d.* = .{};
+    }
+};
+
+/// `text/uri-list` → local paths (comments and non-`file:` URIs skipped).
+pub fn parseUriList(gpa: Allocator, bytes: []const u8, out: *std.ArrayList([]u8)) void {
+    var it = std.mem.tokenizeAny(u8, bytes, "\r\n\x00");
+    while (it.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        const p = file_dialog.pathFromUri(gpa, std.mem.trim(u8, line, " ")) catch continue;
+        if (p) |path| out.append(gpa, path) catch gpa.free(path);
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "uri lists become paths" {
+    var out: std.ArrayList([]u8) = .empty;
+    defer {
+        for (out.items) |p| testing.allocator.free(p);
+        out.deinit(testing.allocator);
+    }
+    parseUriList(testing.allocator, "# comment\r\nfile:///tmp/a%20b.png\r\nhttp://x/y\r\nfile://host/c.jpg\r\n", &out);
+    try testing.expectEqual(@as(usize, 2), out.items.len);
+    try testing.expectEqualStrings("/tmp/a b.png", out.items[0]);
+    try testing.expectEqualStrings("/c.jpg", out.items[1]);
+}
 
 test "parseXiDeviceEvent decodes the xcb GenericEvent layout" {
     // XI_Motion with 1 button-mask word and 1 valuator-mask word, valuators 0, 1 and 3 set.

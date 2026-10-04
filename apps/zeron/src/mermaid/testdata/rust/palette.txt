@@ -1,0 +1,2 @@
+light font=Geist canvas=#f6f6f6 node=#ffffff group=#efefef text=#222222 label=#525252 line=#6d6d6d border=#cccccc accent_line=#9285f6 accent_wash=#eae7fe
+dark font=Geist canvas=#0f0f0f node=#1d1d1d group=#161616 text=#e5e5e5 label=#a1a1a1 line=#737373 border=#303030 accent_line=#51569f accent_wash=#292a38

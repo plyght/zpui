@@ -12,6 +12,15 @@ pub const uniform_list_mod = @import("uniform_list.zig");
 pub const animation = @import("animation.zig");
 pub const scrollbar_mod = @import("scrollbar.zig");
 pub const effects = @import("effects.zig");
+pub const native_view_mod = @import("native_view.zig");
+pub const nativeView = native_view_mod.nativeView;
+pub const nativeViewWith = native_view_mod.nativeViewWith;
+// [liquid-glass] native Liquid Glass (liquid_glass.zig)
+pub const liquid_glass = @import("liquid_glass.zig");
+pub const liquidGlass = liquid_glass.liquidGlass;
+pub const liquidGlassGroup = liquid_glass.liquidGlassGroup;
+pub const overlayPlane = liquid_glass.overlayPlane;
+pub const platformSupportsLiquidGlass = liquid_glass.platformSupportsLiquidGlass;
 
 pub const div = div_mod.div;
 pub const Div = div_mod.Div;
@@ -87,5 +96,7 @@ test {
     _ = animation;
     _ = scrollbar_mod;
     _ = effects;
+    _ = liquid_glass;
+    _ = @import("liquid_glass_tests.zig"); // [liquid-glass]
     _ = @import("list_tests.zig");
 }

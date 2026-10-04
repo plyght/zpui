@@ -1,0 +1,261 @@
+//! [liquid-glass] Native Liquid Glass elements (macOS 26+ `NSGlassEffectView` /
+//! `NSGlassEffectContainerView`; docs/elements.md §5c, docs/LIQUID_GLASS.md).
+//!
+//! ```zig
+//! zpui.liquidGlass("sidebar-glass", .{ .shape = .{ .rounded = 16 } }, sidebar_content)
+//! zpui.liquidGlass("send", .{ .shape = .capsule, .style = .clear, .interactive = true }, button)
+//! zpui.liquidGlassGroup("tools", .{ .spacing = 12 }, div().flex().gap(px(8)).child(a).child(b))
+//! zpui.overlayPlane(titlebar_buttons)   // plain content that must stay above base glass
+//! if (zpui.platformSupportsLiquidGlass(cx)) ... else ... // offer the option at all?
+//! ```
+//!
+//! `liquidGlass` places a native glass view at the child's bounds (an
+//! `.above_content` native child, mouse pass-through): the glass samples and refracts
+//! everything zpui painted on the main surface below it. The child — the glass's
+//! foreground: text, icons, hover washes — is painted on the overlay plane above the
+//! glass. Glass painted by the window's floating pass (deferred menus / popovers,
+//! tooltips, drag previews) or inside a floating glass's foreground is floating: it
+//! sits above the overlay plane and its foreground goes to the top plane, so a menu's
+//! glass covers the sidebar's text. Elements with the same id under the same parent
+//! are told apart by paint order. Without native glass (Linux, Windows, macOS < 26, a window without native
+//! views) the element just paints the child: callers style the fallback (e.g.
+//! frost) themselves.
+//!
+//! Shapes: `.rounded` (uniform radius; NSGlassEffectView draws continuous corners)
+//! and `.capsule` (radius = half the short side, recomputed each frame). Concave or
+//! per-corner shapes are not available natively; merge simple shapes with a group.
+
+const std = @import("std");
+const geometry = @import("../geometry.zig");
+const color = @import("../color.zig");
+const platform = @import("../platform/platform.zig");
+const App = @import("../app/app.zig").App;
+const window_mod = @import("../window/window.zig");
+const Window = window_mod.Window;
+const element = @import("../window/element.zig");
+const AnyElement = element.AnyElement;
+const ElementId = element.ElementId;
+const GlobalElementId = element.GlobalElementId;
+const LayoutId = element.LayoutId;
+const arena_mod = @import("../window/arena.zig");
+
+const Pixels = geometry.Pixels;
+const Bounds = geometry.Bounds(Pixels);
+
+pub const Style = platform.LiquidGlassStyle;
+pub const Tier = window_mod.liquid_glass_mod.Tier;
+
+pub const Shape = union(enum) {
+    /// Uniform corner radius (0 = square).
+    rounded: Pixels,
+    /// Fully rounded ends: radius = min(width, height) / 2.
+    capsule,
+
+    pub fn radius(self: Shape, bounds: Bounds) Pixels {
+        return switch (self) {
+            .rounded => |r| @max(r, 0),
+            .capsule => @max(@min(bounds.size.width, bounds.size.height) / 2, 0),
+        };
+    }
+};
+
+pub const Options = struct {
+    style: Style = .regular,
+    shape: Shape = .{ .rounded = 0 },
+    /// Tint the glass toward this color (`NSGlassEffectView.tintColor`).
+    tint: ?color.Hsla = null,
+    /// Interactive highlight on press (`effectIsInteractive`, macOS 27+ AppKit; a no-op
+    /// where the selector is missing).
+    interactive: bool = false,
+    /// false: paint the child as if glass were unavailable (pass-through).
+    enabled: bool = true,
+};
+
+pub fn config(opts: Options, bounds: Bounds) platform.LiquidGlassConfig {
+    return .{
+        .style = opts.style,
+        .tint = if (opts.tint) |t| blk: {
+            const c = t.toRgba();
+            break :blk .{ c.r, c.g, c.b, c.a };
+        } else null,
+        .interactive = opts.interactive,
+        .corner_radius = opts.shape.radius(bounds),
+    };
+}
+
+/// Whether native Liquid Glass can be shown on this machine (macOS 26+ with
+/// NSGlassEffectView; the headless test platform pretends yes). `cx`: `*App` or a
+/// `*Context(T)`.
+pub fn platformSupportsLiquidGlass(cx: anytype) bool {
+    const app: *App = if (@TypeOf(cx) == *App) cx else cx.app;
+    return app.platform.supportsLiquidGlass();
+}
+
+// ---------------------------------------------------------------------------------------
+// liquidGlass
+// ---------------------------------------------------------------------------------------
+
+pub const LiquidGlassData = struct {
+    id: ElementId,
+    opts: Options,
+    child: AnyElement,
+};
+
+/// Native glass behind `child` (at `child`'s bounds); `child` paints on top of it.
+pub fn liquidGlass(id: anytype, opts: Options, child: anytype) LiquidGlass {
+    return .{ .d = arena_mod.current().create(LiquidGlassData, .{
+        .id = ElementId.from(id),
+        .opts = opts,
+        .child = element.intoAnyElement(child),
+    }) };
+}
+
+pub const LiquidGlass = struct {
+    d: *LiquidGlassData,
+
+    pub fn intoAnyElement(self: LiquidGlass) AnyElement {
+        return AnyElement.new(LiquidGlassElement{ .d = self.d });
+    }
+};
+
+const LiquidGlassElement = struct {
+    d: *LiquidGlassData,
+
+    pub fn elementId(self: *LiquidGlassElement) ?ElementId {
+        return self.d.id;
+    }
+    pub fn requestLayout(self: *LiquidGlassElement, _: ?GlobalElementId, _: *void, window: *Window, cx: *App) LayoutId {
+        return self.d.child.requestLayout(window, cx);
+    }
+    pub fn prepaint(self: *LiquidGlassElement, _: ?GlobalElementId, _: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        self.d.child.prepaint(window, cx);
+    }
+    pub fn paint(self: *LiquidGlassElement, gid: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        const d = self.d;
+        const tier = if (d.opts.enabled and gid != null)
+            window.paintLiquidGlass(gid.?, .glass, bounds, config(d.opts, bounds))
+        else
+            null;
+        paintForeground(tier, d.child, window, cx);
+    }
+};
+
+/// For custom wrapper elements (e.g. an app's frost wrapper switching to glass):
+/// place glass `name` (scoped under the current element id, so it adds no id level
+/// for `child`) at `bounds` and paint `child` as its foreground. Returns false and
+/// paints nothing when native glass is unavailable — paint the fallback then.
+pub fn paintGlass(window: *Window, cx: *App, name: []const u8, bounds: Bounds, opts: Options, child: AnyElement) bool {
+    const gid = window.pushElementId(ElementId.from(name));
+    window.popElementId();
+    const tier = window.paintLiquidGlass(gid, .glass, bounds, config(opts, bounds)) orelse return false;
+    paintForeground(tier, child, window, cx);
+    return true;
+}
+
+/// Paint `child` on the plane above glass of `tier` (or in place for null).
+pub fn paintForeground(tier: ?Tier, child: AnyElement, window: *Window, cx: *App) void {
+    switch (tier orelse return child.paint(window, cx)) {
+        .base => {
+            window.pushOverlayPlane();
+            defer window.popOverlayPlane();
+            child.paint(window, cx);
+        },
+        .floating => {
+            window.pushTopPlane();
+            defer window.popTopPlane();
+            child.paint(window, cx);
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// liquidGlassGroup
+// ---------------------------------------------------------------------------------------
+
+pub const GroupOptions = struct {
+    /// Distance at which member shapes start to merge (`spacing`).
+    spacing: Pixels = 0,
+    enabled: bool = true,
+};
+
+pub const LiquidGlassGroupData = struct {
+    id: ElementId,
+    opts: GroupOptions,
+    child: AnyElement,
+};
+
+/// `NSGlassEffectContainerView` at `child`'s bounds: `liquidGlass` elements painted
+/// inside become members (descendants of the container) and merge / morph when closer
+/// than `spacing`. The container draws nothing itself.
+pub fn liquidGlassGroup(id: anytype, opts: GroupOptions, child: anytype) LiquidGlassGroup {
+    return .{ .d = arena_mod.current().create(LiquidGlassGroupData, .{
+        .id = ElementId.from(id),
+        .opts = opts,
+        .child = element.intoAnyElement(child),
+    }) };
+}
+
+pub const LiquidGlassGroup = struct {
+    d: *LiquidGlassGroupData,
+
+    pub fn intoAnyElement(self: LiquidGlassGroup) AnyElement {
+        return AnyElement.new(LiquidGlassGroupElement{ .d = self.d });
+    }
+};
+
+const LiquidGlassGroupElement = struct {
+    d: *LiquidGlassGroupData,
+
+    pub fn elementId(self: *LiquidGlassGroupElement) ?ElementId {
+        return self.d.id;
+    }
+    pub fn requestLayout(self: *LiquidGlassGroupElement, _: ?GlobalElementId, _: *void, window: *Window, cx: *App) LayoutId {
+        return self.d.child.requestLayout(window, cx);
+    }
+    pub fn prepaint(self: *LiquidGlassGroupElement, _: ?GlobalElementId, _: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        self.d.child.prepaint(window, cx);
+    }
+    pub fn paint(self: *LiquidGlassGroupElement, gid: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        const d = self.d;
+        const lg = window_mod.liquid_glass_mod;
+        if (!d.opts.enabled or gid == null) return d.child.paint(window, cx);
+        if (window.paintLiquidGlass(gid.?, .container, bounds, .{ .spacing = d.opts.spacing }) == null)
+            return d.child.paint(window, cx);
+        const pool = &window.liquid_glass;
+        // The key actually used (re-derived when the id repeats under one parent).
+        const key = pool.frame_keys.items[pool.frame_keys.items.len - 1];
+        const view = pool.entries.items[pool.find(key).?].view;
+        lg.pushGroup(window, view);
+        defer lg.popGroup(window);
+        d.child.paint(window, cx);
+    }
+};
+
+// ---------------------------------------------------------------------------------------
+// overlayPlane
+// ---------------------------------------------------------------------------------------
+
+/// Paint `child` on the overlay plane (above base-tier glass and other native
+/// children) — for plain content that overlaps glass without being its foreground,
+/// e.g. titlebar buttons over a glass sidebar. A pass-through when `on` is false.
+pub fn overlayPlane(on: bool, child: anytype) OverlayPlane {
+    return .{ .on = on, .child = element.intoAnyElement(child) };
+}
+
+pub const OverlayPlane = struct {
+    on: bool,
+    child: AnyElement,
+
+    pub fn requestLayout(self: *OverlayPlane, _: ?GlobalElementId, _: *void, window: *Window, cx: *App) LayoutId {
+        return self.child.requestLayout(window, cx);
+    }
+    pub fn prepaint(self: *OverlayPlane, _: ?GlobalElementId, _: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        self.child.prepaint(window, cx);
+    }
+    pub fn paint(self: *OverlayPlane, _: ?GlobalElementId, _: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        if (!self.on) return self.child.paint(window, cx);
+        window.pushOverlayPlane();
+        defer window.popOverlayPlane();
+        self.child.paint(window, cx);
+    }
+};

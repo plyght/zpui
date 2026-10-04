@@ -23,6 +23,7 @@ const Keystroke = keymap_mod.Keystroke;
 const AnyAction = @import("../app/action.zig").AnyAction;
 const type_id = @import("../app/type_id.zig");
 const window_mod = @import("window.zig");
+const external_paths = @import("external_paths.zig");
 const Window = window_mod.Window;
 const WindowId = window_mod.WindowId;
 
@@ -86,10 +87,11 @@ pub fn dispatchEvent(w: *Window, event: input.PlatformInput) platform.DispatchEv
             dispatchMouseEvent(w, .scroll_wheel, &e);
         },
         .file_drop => |fd| switch (fd) {
-            // External drags become internal drags of `ExternalPaths` (TODO: payload); for
-            // now they move the mouse so hover/drag-over styles track the pointer.
+            // External drags become internal drags of `ExternalPaths` (gpui
+            // `Window::dispatch_event`): drop targets use `onDrop(ExternalPaths, ..)`.
             .entered => |e| {
                 w.mouse_position = e.position;
+                external_paths.beginExternalDrag(app, e.paths, e.position);
                 const mm: input.MouseMoveEvent = .{ .position = e.position, .pressed_button = .left };
                 dispatchMouseEvent(w, .mouse_move, &mm);
             },
@@ -103,7 +105,10 @@ pub fn dispatchEvent(w: *Window, event: input.PlatformInput) platform.DispatchEv
                 const mu: input.MouseUpEvent = .{ .button = .left, .position = e.position };
                 dispatchMouseEvent(w, .mouse_up, &mu);
             },
-            .exited => app.cancelDrag(),
+            .exited => {
+                app.cancelDrag();
+                w.refresh();
+            },
         },
         .key_down => |e| {
             const ke: KeyEvent = .{ .kind = .key_down, .event = &e };
@@ -423,6 +428,13 @@ pub fn dispatchAnyAction(w: *Window, action: *const AnyAction) void {
 /// Whether some listener on the focus path (or a global one) handles action type `A`.
 pub fn isActionAvailable(w: *Window, comptime A: type) bool {
     const tid = type_id.typeId(A);
+    if (w.app.global_action_listeners.contains(type_id.key(tid))) return true;
+    const node_id = focusNodeId(w) orelse return false;
+    return w.rendered_frame.dispatch_tree.isActionAvailable(tid, node_id);
+}
+
+/// Runtime-typed `isActionAvailable` (menu validation, `App.isActionAvailable`).
+pub fn isActionTypeAvailable(w: *Window, tid: type_id.TypeId) bool {
     if (w.app.global_action_listeners.contains(type_id.key(tid))) return true;
     const node_id = focusNodeId(w) orelse return false;
     return w.rendered_frame.dispatch_tree.isActionAvailable(tid, node_id);

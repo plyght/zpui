@@ -8,8 +8,10 @@
 //! precedence, so order matters). Customizable shortcuts come from
 //! `KeymapConfig` (stored platform-neutral, "mod" → cmd/ctrl); an
 //! unparseable combo falls back to that shortcut's default, a cleared jump
-//! slot binds nothing. Not ported: gpui-base's file-editor keymap that Rust
-//! reinstalls after clearing (no editor component here yet).
+//! slot binds nothing. gpui-base's file-editor keymap, which Rust reinstalls
+//! right after clearing (`gpui_base::init`), comes from `component_bindings`
+//! (the app installs `ui/editor/actions.zig` `bindDefaults` there: this
+//! module cannot import the UI).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -292,6 +294,11 @@ pub fn defaultBindings(arena: Allocator, mac: bool, keymap: *const KeymapConfig,
     return b.list.items;
 }
 
+/// Component-layer bindings reinstalled first after every clear (Rust
+/// `gpui_base::init(cx)` in `apply_keymap`): the file editor's keymap. Set
+/// once by the app (`ui/shell/wiring.zig`); null installs nothing.
+pub var component_bindings: ?*const fn (*zpui.App) anyerror!void = null;
+
 /// `shell::apply_keymap`: clear every binding and install the defaults for
 /// this platform from `keymap`.
 pub fn applyKeymap(app: *zpui.App, keymap: *const KeymapConfig, send_behavior: ComposerSendBehavior) !void {
@@ -299,6 +306,9 @@ pub fn applyKeymap(app: *zpui.App, keymap: *const KeymapConfig, send_behavior: C
     defer arena_state.deinit();
     const bindings = try defaultBindings(arena_state.allocator(), settings.is_mac, keymap, send_behavior);
     app.keymap.clear();
+    // `clear_key_bindings` also removes the component layer's contextual
+    // editing bindings: reinstall them before Zeron's own.
+    if (component_bindings) |install| try install(app);
     for (bindings) |b| {
         const any = try b.action.build(app.gpa);
         try app.keymap.add(try zpui.KeyBinding.init(app.gpa, b.keystrokes, any, b.context));

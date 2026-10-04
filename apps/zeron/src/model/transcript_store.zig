@@ -345,6 +345,15 @@ pub const TranscriptStore = struct {
         cx.notify();
     }
 
+    /// `retry_pending_send`: the user asked for another delivery attempt —
+    /// restart the grace window so the trailer reads as Sending again.
+    pub fn retryPendingSend(self: *TranscriptStore, cx: *Context(TranscriptStore)) void {
+        if (self.pending_send) |*p| p.started = self.now();
+        self.revision +%= 1;
+        cx.emit(Changed{});
+        cx.notify();
+    }
+
     pub fn endPendingSend(self: *TranscriptStore, message_id: []const u8, cx: *Context(TranscriptStore)) void {
         const p = self.pending_send orelse return;
         if (!std.mem.eql(u8, p.message_id, message_id)) return;
@@ -390,6 +399,16 @@ pub const TranscriptStore = struct {
         try EngineState.request(self.engine, cx, TranscriptStore, cx.entityId(), .QueueCommand, protocol.params.QueueCommand{
             .chatId = self.chat_id,
             .command = command,
+        }, onQueueCommandReply);
+    }
+
+    /// `QueueCommand` escorted by queued-attachment transfers (the uploads the
+    /// local engine delivers to the host before the command runs).
+    pub fn queueCommandWithTransfers(self: *TranscriptStore, command: protocol.SessionCommandPayload, transfers: []const protocol.AttachmentTransfer, cx: *Context(TranscriptStore)) !void {
+        try EngineState.request(self.engine, cx, TranscriptStore, cx.entityId(), .QueueCommand, protocol.params.QueueCommand{
+            .chatId = self.chat_id,
+            .command = command,
+            .transfers = transfers,
         }, onQueueCommandReply);
     }
 

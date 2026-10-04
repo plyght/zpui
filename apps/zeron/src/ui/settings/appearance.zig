@@ -107,6 +107,7 @@ fn surfaceHelper(s: zt.SurfacePreference, resolved: zt.SurfaceTreatment) []const
         .theme_default => if (resolved == .frosted) "Theme default: frosted" else "Theme default: opaque",
         .frosted => "Translucent surfaces",
         .opaque_ => "Solid surfaces",
+        .liquid => "Native macOS Liquid Glass", // [liquid-glass]
     };
 }
 
@@ -169,7 +170,7 @@ pub fn render(v: *SettingsView, t: *const Theme, window: *zpui.Window, cx: *Cont
     const background_meta = if (s.newThreadComposerBackground) |b| b.name else "No image selected";
     const material = w.sectionCard(t).mt0()
         .child(w.cardRow(t, true)
-        .child(w.textBlock(t, "Glass", &.{.{ .text = surfaceHelper(ts.surface, t.surface_treatment) }}))
+        .child(w.textBlock(t, "Glass", &.{.{ .text = if (ts.surface == .liquid and !store.liquidSupported(cx)) "Liquid Glass needs macOS 26; showing frosted" else surfaceHelper(ts.surface, t.surface_treatment) }}))
         .child(select.render(v, .surface, t, cx)))
         .child(w.cardRow(t, false)
         .child(w.textBlock(t, "New thread background", &.{.{ .text = background_meta }}))

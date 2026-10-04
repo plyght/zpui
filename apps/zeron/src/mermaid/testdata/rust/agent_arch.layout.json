@@ -1,0 +1,282 @@
+{
+  "kind": "Flowchart",
+  "direction": "LeftRight",
+  "width": 899.1279,
+  "height": 227.1,
+  "nodes": [
+    {
+      "id": "Doc",
+      "shape": "Cylinder",
+      "x": 720.88794,
+      "y": 125.5,
+      "width": 117.216,
+      "height": 45.100002,
+      "label_width": 70.56,
+      "label_height": 21.0,
+      "label_lines": [
+        "Doc store"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Harness",
+      "shape": "Rectangle",
+      "x": 720.88794,
+      "y": 48.499996,
+      "width": 122.240005,
+      "height": 41.0,
+      "label_width": 86.240005,
+      "label_height": 21.0,
+      "label_lines": [
+        "Harness CLI"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "RPC",
+      "shape": "Rectangle",
+      "x": 198.4,
+      "y": 88.44774,
+      "width": 142.148,
+      "height": 41.0,
+      "label_width": 106.147995,
+      "label_height": 21.0,
+      "label_lines": [
+        "WebSocket RPC"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Runner",
+      "shape": "Rectangle",
+      "x": 496.54797,
+      "y": 88.250885,
+      "width": 130.08,
+      "height": 41.0,
+      "label_width": 94.08,
+      "label_height": 21.0,
+      "label_lines": [
+        "Agent runner"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "UI",
+      "shape": "Rectangle",
+      "x": 44.0,
+      "y": 88.61757,
+      "width": 114.4,
+      "height": 41.0,
+      "label_width": 78.4,
+      "label_height": 21.0,
+      "label_lines": [
+        "Desktop UI"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "UI",
+      "to": "RPC",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          158.4,
+          109.11757
+        ],
+        [
+          171.0,
+          109.11757
+        ],
+        [
+          185.79999,
+          112.61616
+        ],
+        [
+          198.4,
+          112.61616
+        ]
+      ]
+    },
+    {
+      "from": "RPC",
+      "to": "Doc",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          340.54797,
+          128.44774
+        ],
+        [
+          468.468,
+          128.44774
+        ],
+        [
+          468.468,
+          148.05
+        ],
+        [
+          720.88794,
+          148.05
+        ]
+      ]
+    },
+    {
+      "from": "RPC",
+      "to": "Runner",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          340.54797,
+          103.98457
+        ],
+        [
+          353.14798,
+          103.98457
+        ],
+        [
+          483.94797,
+          108.80012
+        ],
+        [
+          496.54797,
+          108.80012
+        ]
+      ]
+    },
+    {
+      "from": "Runner",
+      "to": "Harness",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          626.628,
+          89.250885
+        ],
+        [
+          639.22797,
+          89.250885
+        ],
+        [
+          708.28796,
+          80.02247
+        ],
+        [
+          720.88794,
+          80.02247
+        ]
+      ]
+    },
+    {
+      "from": "Harness",
+      "to": "Runner",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          782.00793,
+          48.499992
+        ],
+        [
+          782.00793,
+          35.899994
+        ],
+        [
+          625.6279,
+          35.899994
+        ],
+        [
+          625.6279,
+          88.250885
+        ]
+      ],
+      "label_anchor": [
+        750.73193,
+        19.699993
+      ],
+      "label_width": 53.760002,
+      "label_height": 24.0,
+      "label_lines": [
+        "events"
+      ]
+    },
+    {
+      "from": "Runner",
+      "to": "Doc",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          626.628,
+          120.43588
+        ],
+        [
+          639.22797,
+          120.43588
+        ],
+        [
+          708.28796,
+          132.05
+        ],
+        [
+          720.88794,
+          132.05
+        ]
+      ],
+      "label_anchor": [
+        703.0662,
+        109.01441
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "journal"
+      ]
+    }
+  ],
+  "subgraphs": [
+    {
+      "index": 0,
+      "id": "Engine",
+      "label": "Engine",
+      "nodes": [
+        "Doc",
+        "Runner",
+        "Harness"
+      ],
+      "x": 456.54797,
+      "y": 8.0,
+      "width": 426.57996,
+      "height": 203.1
+    },
+    {
+      "index": 1,
+      "id": "Client",
+      "label": "Client",
+      "nodes": [
+        "UI",
+        "RPC"
+      ],
+      "x": 8.0,
+      "y": 47.94774,
+      "width": 368.54797,
+      "height": 108.66983
+    }
+  ]
+}

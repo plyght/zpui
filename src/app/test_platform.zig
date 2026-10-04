@@ -209,6 +209,18 @@ pub const TestPlatform = struct {
     windows: std.ArrayList(*TestWindow) = .empty,
     /// Reported by `prefersReducedMotion`.
     reduced_motion: bool = false,
+    /// [liquid-glass] Reported by `supportsLiquidGlass` (headless tests pretend macOS 26).
+    liquid_glass_supported: bool = true,
+    // -- lifecycle recording (setMenus / appCommand / postNotification / playSound) ------
+    menus: []const pf.Menu = &.{},
+    menu_sets: usize = 0,
+    app_commands: std.ArrayList(pf.AppCommand) = .empty,
+    about_shown: usize = 0,
+    /// Titles of posted notifications (owned) and their tags (owned, "" = none).
+    notifications: std.ArrayList([2][]u8) = .empty,
+    sounds_played: usize = 0,
+    /// Reported by `displays` (default: one 1920×1080 primary display).
+    display_list: ?[]const pf.Display = null,
 
     pub fn create(gpa: Allocator) Allocator.Error!*TestPlatform {
         const self = try gpa.create(TestPlatform);
@@ -217,6 +229,12 @@ pub const TestPlatform = struct {
     }
 
     pub fn destroy(self: *TestPlatform) void {
+        self.app_commands.deinit(self.gpa);
+        for (self.notifications.items) |n| {
+            self.gpa.free(n[0]);
+            self.gpa.free(n[1]);
+        }
+        self.notifications.deinit(self.gpa);
         while (self.windows.pop()) |w| w.free();
         self.windows.deinit(self.gpa);
         self.fake_text.deinit();
@@ -235,6 +253,45 @@ pub const TestPlatform = struct {
 
     pub fn runUntilParked(self: *TestPlatform) void {
         self.test_dispatcher.runUntilParked();
+    }
+
+    // -- simulated OS lifecycle events (through the registered PlatformCallbacks) -------
+    pub fn simulateReopen(self: *TestPlatform) void {
+        if (self.callbacks.reopen) |f| f(self.callbacks.ctx);
+    }
+    pub fn simulateOpenUrls(self: *TestPlatform, urls: []const []const u8) void {
+        if (self.callbacks.open_urls) |f| f(self.callbacks.ctx, urls);
+    }
+    /// An OS termination request (Dock Quit, logout); returns whether it was allowed.
+    pub fn simulateTerminate(self: *TestPlatform) bool {
+        const f = self.callbacks.should_quit orelse return true;
+        return f(self.callbacks.ctx);
+    }
+    pub fn simulateMenuAction(self: *TestPlatform, tag: usize) void {
+        if (self.callbacks.menu_action) |f| f(self.callbacks.ctx, tag);
+    }
+    pub fn simulateValidateMenu(self: *TestPlatform, tag: usize) bool {
+        const f = self.callbacks.validate_menu orelse return true;
+        return f(self.callbacks.ctx, tag);
+    }
+    pub fn simulateNotificationClick(self: *TestPlatform, tag: []const u8) void {
+        if (self.callbacks.notification_activated) |f| f(self.callbacks.ctx, tag);
+    }
+    /// The tag of the first menu action item named `name` (depth-first), if any.
+    pub fn menuTag(self: *const TestPlatform, name: []const u8) ?usize {
+        return findTag(self.menus, name);
+    }
+    fn findTag(menus: []const pf.Menu, name: []const u8) ?usize {
+        for (menus) |m| if (findItemTag(m.items, name)) |t| return t;
+        return null;
+    }
+    fn findItemTag(items: []const pf.MenuItem, name: []const u8) ?usize {
+        for (items) |it| switch (it) {
+            .action => |a| if (std.mem.eql(u8, a.name, name)) return a.tag,
+            .submenu => |sm| if (findItemTag(sm.items, name)) |t| return t,
+            else => {},
+        };
+        return null;
     }
 
     pub fn advanceClock(self: *TestPlatform, delta_ns: u64) void {
@@ -262,7 +319,46 @@ pub const TestPlatform = struct {
         .revealPath = vRevealPath,
         .prefersReducedMotion = vPrefersReducedMotion,
         .deinit = vDeinit,
+        .setMenus = vSetMenus,
+        .appCommand = vAppCommand,
+        .showAboutPanel = vShowAbout,
+        .postNotification = vPostNotification,
+        .playSound = vPlaySound,
+        .supportsLiquidGlass = vSupportsLiquidGlass,
     };
+
+    fn vSupportsLiquidGlass(ptr: *anyopaque) bool {
+        return cast(ptr).liquid_glass_supported;
+    }
+
+    fn vSetMenus(ptr: *anyopaque, menus: []const pf.Menu) void {
+        const self = cast(ptr);
+        // The App keeps the translated menus alive until the next `setMenus`.
+        self.menus = menus;
+        self.menu_sets += 1;
+    }
+    fn vAppCommand(ptr: *anyopaque, command: pf.AppCommand) void {
+        const self = cast(ptr);
+        self.app_commands.append(self.gpa, command) catch {};
+    }
+    fn vShowAbout(ptr: *anyopaque, _: pf.AboutPanelOptions) void {
+        cast(ptr).about_shown += 1;
+    }
+    fn vPostNotification(ptr: *anyopaque, n: pf.Notification) void {
+        const self = cast(ptr);
+        const title = self.gpa.dupe(u8, n.title) catch return;
+        const tag = self.gpa.dupe(u8, n.tag orelse "") catch {
+            self.gpa.free(title);
+            return;
+        };
+        self.notifications.append(self.gpa, .{ title, tag }) catch {
+            self.gpa.free(title);
+            self.gpa.free(tag);
+        };
+    }
+    fn vPlaySound(ptr: *anyopaque, _: []const u8) void {
+        cast(ptr).sounds_played += 1;
+    }
 
     fn vDispatcher(ptr: *anyopaque) pf.Dispatcher {
         return cast(ptr).test_dispatcher.dispatcher();
@@ -279,7 +375,11 @@ pub const TestPlatform = struct {
         self.test_dispatcher.runUntilParked();
     }
     fn vQuit(ptr: *anyopaque) void {
-        cast(ptr).quit_requested = true;
+        const self = cast(ptr);
+        if (self.quit_requested) return;
+        self.quit_requested = true;
+        // A real backend leaves its run loop and reports `quit`; tests never run one.
+        if (self.callbacks.quit) |f| f(self.callbacks.ctx);
     }
     fn vActivate(_: *anyopaque, _: bool) void {}
     fn vOpenWindow(ptr: *anyopaque, params: pf.WindowParams) anyerror!pf.Window {
@@ -289,10 +389,15 @@ pub const TestPlatform = struct {
         try self.windows.append(self.gpa, w);
         return w.window();
     }
-    fn vDisplays(_: *anyopaque, out: []pf.Display) usize {
+    fn vDisplays(ptr: *anyopaque, out: []pf.Display) usize {
         if (out.len == 0) return 0;
+        if (cast(ptr).display_list) |list| {
+            const n = @min(list.len, out.len);
+            @memcpy(out[0..n], list[0..n]);
+            return n;
+        }
         const b: pf.Bounds = .{ .origin = .zero, .size = .{ .width = 1920, .height = 1080 } };
-        out[0] = .{ .id = 1, .bounds = b, .visible_bounds = b, .scale_factor = 1 };
+        out[0] = .{ .id = 1, .bounds = b, .visible_bounds = b, .scale_factor = 1, .primary = true };
         return 1;
     }
     fn vWindowAppearance(_: *anyopaque) pf.WindowAppearance {
@@ -347,6 +452,18 @@ pub const TestWindow = struct {
     last_scene: ?*const scene_mod.Scene = null,
     closed: bool = false,
     title_buf: [128]u8 = undefined,
+    /// Native child views (`attachNativeView`): attached flag + last placement per id.
+    native_attached: [32]bool = @splat(false),
+    native_placement: [32]?pf.NativeViewPlacement = @splat(null),
+    native_count: u32 = 0,
+    /// [liquid-glass] Per native id: glass attach options (null = a plain native view)
+    /// and the last `configureLiquidGlass` config.
+    glass_attach: [32]?pf.LiquidGlassAttach = @splat(null),
+    glass_config: [32]?pf.LiquidGlassConfig = @splat(null),
+    /// Overlay ranges / capture flag of the last `drawLayered`.
+    last_overlay: [8]pf.OverlayRange = undefined,
+    last_overlay_len: usize = 0,
+    last_capture_input: bool = false,
 
     pub fn window(self: *TestWindow) pf.Window {
         return .{ .ptr = self, .vtable = &vtable };
@@ -421,6 +538,26 @@ pub const TestWindow = struct {
         vClose(self);
     }
 
+    /// Simulate the close button: ask `should_close`, close when allowed. Returns whether
+    /// the window closed.
+    pub fn simulateCloseButton(self: *TestWindow) bool {
+        if (self.callbacks.should_close) |f| if (!f(self.callbacks.ctx)) return false;
+        vClose(self);
+        return true;
+    }
+
+    /// Simulate the OS moving the window (fires the `moved` callback).
+    pub fn simulateMove(self: *TestWindow, origin: pf.Point) void {
+        self.bounds.origin = origin;
+        if (self.callbacks.moved) |f| f(self.callbacks.ctx);
+    }
+
+    /// Simulate key-window changes (`active_status_change`).
+    pub fn simulateActive(self: *TestWindow, active: bool) void {
+        self.active = active;
+        if (self.callbacks.active_status_change) |f| f(self.callbacks.ctx, active);
+    }
+
     const vtable: pf.Window.VTable = .{
         .setCallbacks = vSetCallbacks,
         .bounds = vBounds,
@@ -449,7 +586,66 @@ pub const TestWindow = struct {
         .spriteAtlas = vAtlas,
         .updateImePosition = vIme,
         .close = vClose,
+        .attachNativeView = vAttachNative,
+        .placeNativeView = vPlaceNative,
+        .detachNativeView = vDetachNative,
+        .drawLayered = vDrawLayered,
+        .attachLiquidGlass = vAttachGlass,
+        .configureLiquidGlass = vConfigureGlass,
     };
+
+    fn vAttachNative(ptr: *anyopaque, _: *anyopaque, _: pf.NativeViewOptions) anyerror!pf.NativeViewId {
+        const self = c(ptr);
+        // Fresh ids first; then reuse detached slots (long-running glass churn).
+        const i: u32 = if (self.native_count < self.native_attached.len) blk: {
+            self.native_count += 1;
+            break :blk self.native_count - 1;
+        } else for (self.native_attached, 0..) |a, ix| {
+            if (!a) break @intCast(ix);
+        } else return error.TooManyNativeViews;
+        self.native_attached[i] = true;
+        self.glass_attach[i] = null;
+        self.glass_config[i] = null;
+        return @enumFromInt(i);
+    }
+    fn vAttachGlass(ptr: *anyopaque, options: pf.LiquidGlassAttach) anyerror!pf.NativeViewId {
+        const self = c(ptr);
+        var dummy: u8 = 0;
+        const id = try vAttachNative(ptr, @ptrCast(&dummy), .{ .z = options.z, .pass_through_mouse = true });
+        self.glass_attach[@intFromEnum(id)] = options;
+        return id;
+    }
+    fn vConfigureGlass(ptr: *anyopaque, id: pf.NativeViewId, config: pf.LiquidGlassConfig) void {
+        const self = c(ptr);
+        std.debug.assert(self.native_attached[@intFromEnum(id)]);
+        self.glass_config[@intFromEnum(id)] = config;
+    }
+    /// [liquid-glass] Number of attached glass views (any kind).
+    pub fn glassCount(self: *const TestWindow) usize {
+        var n: usize = 0;
+        for (self.glass_attach, self.native_attached) |g, a| {
+            if (g != null and a) n += 1;
+        }
+        return n;
+    }
+    fn vPlaceNative(ptr: *anyopaque, id: pf.NativeViewId, placement: ?pf.NativeViewPlacement) void {
+        const self = c(ptr);
+        const i = @intFromEnum(id);
+        std.debug.assert(self.native_attached[i]);
+        self.native_placement[i] = placement;
+    }
+    fn vDetachNative(ptr: *anyopaque, id: pf.NativeViewId) void {
+        const self = c(ptr);
+        self.native_attached[@intFromEnum(id)] = false;
+        self.native_placement[@intFromEnum(id)] = null;
+    }
+    fn vDrawLayered(ptr: *anyopaque, scene: *const scene_mod.Scene, overlay: []const pf.OverlayRange, capture: bool) anyerror!void {
+        const self = c(ptr);
+        self.last_overlay_len = @min(overlay.len, self.last_overlay.len);
+        @memcpy(self.last_overlay[0..self.last_overlay_len], overlay[0..self.last_overlay_len]);
+        self.last_capture_input = capture;
+        return vDraw(ptr, scene);
+    }
 
     fn c(ptr: *anyopaque) *TestWindow {
         return @ptrCast(@alignCast(ptr));

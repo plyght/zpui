@@ -1,0 +1,188 @@
+{
+  "kind": "Sequence",
+  "direction": "LeftRight",
+  "width": 550.0,
+  "height": 513.0,
+  "nodes": [
+    {
+      "id": "Engine",
+      "shape": "ActorBox",
+      "x": 400.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 107.520004,
+      "label_height": 24.0,
+      "label_lines": [
+        "Motor remoto"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "UI",
+      "shape": "ActorBox",
+      "x": 200.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "Zeron UI"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Usuario",
+      "shape": "ActorBox",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "Usuario"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "Usuario",
+      "to": "UI",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          75.0,
+          111.0
+        ],
+        [
+          275.0,
+          111.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        94.2
+      ],
+      "label_width": 107.520004,
+      "label_height": 24.0,
+      "label_lines": [
+        "Abrir README"
+      ]
+    },
+    {
+      "from": "UI",
+      "to": "Engine",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          157.0
+        ],
+        [
+          475.0,
+          157.0
+        ]
+      ],
+      "label_anchor": [
+        375.0,
+        140.2
+      ],
+      "label_width": 107.520004,
+      "label_height": 24.0,
+      "label_lines": [
+        "Leer archivo"
+      ]
+    },
+    {
+      "from": "Engine",
+      "to": "UI",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          475.0,
+          222.5
+        ],
+        [
+          275.0,
+          222.5
+        ]
+      ],
+      "label_anchor": [
+        375.0,
+        191.3
+      ],
+      "label_width": 92.704,
+      "label_height": 48.0,
+      "label_lines": [
+        "Markdown e",
+        "imágenes"
+      ]
+    },
+    {
+      "from": "UI",
+      "to": "Usuario",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          314.5
+        ],
+        [
+          75.0,
+          314.5
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        297.7
+      ],
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "Diagrama"
+      ]
+    },
+    {
+      "from": "UI",
+      "to": "Usuario",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          426.0
+        ],
+        [
+          75.0,
+          426.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        394.8
+      ],
+      "label_width": 98.56,
+      "label_height": 48.0,
+      "label_lines": [
+        "Código y",
+        "diagnóstico"
+      ]
+    }
+  ],
+  "subgraphs": []
+}

@@ -1,0 +1,58 @@
+{
+  "kind": "State",
+  "direction": "TopDown",
+  "width": 61.7608,
+  "height": 102.45999,
+  "nodes": [
+    {
+      "id": "A",
+      "shape": "RoundRect",
+      "x": 8.0,
+      "y": 45.3,
+      "width": 37.7608,
+      "height": 41.159996,
+      "label_width": 9.128,
+      "label_height": 21.0,
+      "label_lines": [
+        "A"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "__start_root__",
+      "shape": "Circle",
+      "x": 20.230396,
+      "y": 8.0,
+      "width": 13.3,
+      "height": 13.3,
+      "label_width": 0.0,
+      "label_height": 21.0,
+      "label_lines": [
+        ""
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "__start_root__",
+      "to": "A",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          26.880398,
+          21.3
+        ],
+        [
+          26.8804,
+          45.3
+        ]
+      ]
+    }
+  ],
+  "subgraphs": []
+}

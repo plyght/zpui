@@ -12,6 +12,7 @@ pub const key_context = @import("key_context.zig");
 pub const keymap = @import("keymap.zig");
 pub const dispatch_tree = @import("dispatch_tree.zig");
 pub const test_platform = @import("test_platform.zig");
+pub const lifecycle = @import("lifecycle.zig");
 
 pub const TypeId = type_id.TypeId;
 pub const typeId = type_id.typeId;
@@ -61,4 +62,5 @@ test {
     _ = dispatch_tree;
     _ = test_platform;
     _ = @import("app_tests.zig");
+    _ = @import("lifecycle_tests.zig");
 }

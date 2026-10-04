@@ -1,0 +1,508 @@
+{
+  "kind": "State",
+  "direction": "TopDown",
+  "width": 126.31293,
+  "height": 926.49005,
+  "nodes": [
+    {
+      "id": "Idle",
+      "shape": "RoundRect",
+      "x": 20.050964,
+      "y": 47.673847,
+      "width": 62.216,
+      "height": 41.159996,
+      "label_width": 31.36,
+      "label_height": 21.0,
+      "label_lines": [
+        "Idle"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "State1",
+      "shape": "RoundRect",
+      "x": 11.529083,
+      "y": 129.83946,
+      "width": 79.464,
+      "height": 41.159996,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "State1"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "State10",
+      "shape": "RoundRect",
+      "x": 8.0,
+      "y": 869.3301,
+      "width": 88.088005,
+      "height": 41.159996,
+      "label_width": 54.88,
+      "label_height": 21.0,
+      "label_lines": [
+        "State10"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "State2",
+      "shape": "RoundRect",
+      "x": 11.637793,
+      "y": 212.00508,
+      "width": 79.464,
+      "height": 41.159996,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "State2"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "State3",
+      "shape": "RoundRect",
+      "x": 11.749191,
+      "y": 294.17072,
+      "width": 79.464,
+      "height": 41.159996,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "State3"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "State4",
+      "shape": "RoundRect",
+      "x": 11.859388,
+      "y": 376.3363,
+      "width": 79.464,
+      "height": 41.159996,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "State4"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "State5",
+      "shape": "RoundRect",
+      "x": 11.964666,
+      "y": 458.5019,
+      "width": 79.464,
+      "height": 41.159996,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "State5"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "State6",
+      "shape": "RoundRect",
+      "x": 12.061592,
+      "y": 540.6675,
+      "width": 79.464,
+      "height": 41.159996,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "State6"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "State7",
+      "shape": "RoundRect",
+      "x": 12.147123,
+      "y": 622.8331,
+      "width": 79.464,
+      "height": 41.159996,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "State7"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "State8",
+      "shape": "RoundRect",
+      "x": 12.218672,
+      "y": 704.9988,
+      "width": 79.464,
+      "height": 41.159996,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "State8"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "State9",
+      "shape": "RoundRect",
+      "x": 12.274155,
+      "y": 787.1644,
+      "width": 79.464,
+      "height": 41.159996,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "State9"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "__end_root__",
+      "shape": "DoubleCircle",
+      "x": 97.012924,
+      "y": 790.546,
+      "width": 13.3,
+      "height": 13.3,
+      "label_width": 0.0,
+      "label_height": 21.0,
+      "label_lines": [
+        ""
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "__start_root__",
+      "shape": "Circle",
+      "x": 44.4172,
+      "y": 8.0,
+      "width": 13.3,
+      "height": 13.3,
+      "label_width": 0.0,
+      "label_height": 21.0,
+      "label_lines": [
+        ""
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "__start_root__",
+      "to": "Idle",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          51.1177,
+          21.299994
+        ],
+        [
+          51.1177,
+          47.673847
+        ]
+      ]
+    },
+    {
+      "from": "State1",
+      "to": "State2",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          51.315437,
+          170.99945
+        ],
+        [
+          51.315437,
+          212.00508
+        ]
+      ],
+      "label_anchor": [
+        51.315437,
+        191.50226
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "step1"
+      ]
+    },
+    {
+      "from": "State2",
+      "to": "State3",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          51.42549,
+          253.16507
+        ],
+        [
+          51.42549,
+          294.17072
+        ]
+      ],
+      "label_anchor": [
+        51.42549,
+        273.6679
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "step2"
+      ]
+    },
+    {
+      "from": "State3",
+      "to": "State4",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          51.53629,
+          335.33072
+        ],
+        [
+          51.53629,
+          376.3363
+        ]
+      ],
+      "label_anchor": [
+        51.53629,
+        355.8335
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "step3"
+      ]
+    },
+    {
+      "from": "State4",
+      "to": "State5",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          51.644028,
+          417.4963
+        ],
+        [
+          51.644028,
+          458.5019
+        ]
+      ],
+      "label_anchor": [
+        51.644028,
+        437.99908
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "step4"
+      ]
+    },
+    {
+      "from": "State5",
+      "to": "State6",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          51.74513,
+          499.6619
+        ],
+        [
+          51.74513,
+          540.6675
+        ]
+      ],
+      "label_anchor": [
+        51.74513,
+        520.1647
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "step5"
+      ]
+    },
+    {
+      "from": "State6",
+      "to": "State7",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          51.836357,
+          581.82745
+        ],
+        [
+          51.836357,
+          622.8331
+        ]
+      ],
+      "label_anchor": [
+        51.836357,
+        602.3303
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "step6"
+      ]
+    },
+    {
+      "from": "State7",
+      "to": "State8",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          51.914894,
+          663.9931
+        ],
+        [
+          51.914894,
+          704.9988
+        ]
+      ],
+      "label_anchor": [
+        51.914894,
+        684.496
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "step7"
+      ]
+    },
+    {
+      "from": "State8",
+      "to": "State9",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          51.978413,
+          746.15875
+        ],
+        [
+          51.978413,
+          787.1644
+        ]
+      ],
+      "label_anchor": [
+        51.978413,
+        766.6616
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "step8"
+      ]
+    },
+    {
+      "from": "State9",
+      "to": "State10",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          52.025078,
+          828.3244
+        ],
+        [
+          52.025078,
+          869.3301
+        ]
+      ],
+      "label_anchor": [
+        52.025078,
+        848.8273
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "step9"
+      ]
+    },
+    {
+      "from": "Idle",
+      "to": "State1",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          51.210022,
+          88.83385
+        ],
+        [
+          51.210022,
+          129.83946
+        ]
+      ],
+      "label_anchor": [
+        51.210022,
+        109.336655
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "start"
+      ]
+    },
+    {
+      "from": "State10",
+      "to": "__end_root__",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          68.04401,
+          869.3301
+        ],
+        [
+          68.04401,
+          867.5553
+        ],
+        [
+          102.33793,
+          867.5553
+        ],
+        [
+          102.33793,
+          803.7127
+        ]
+      ]
+    }
+  ],
+  "subgraphs": []
+}

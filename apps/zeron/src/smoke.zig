@@ -10,6 +10,12 @@
 //! success, 1 after a `FAIL: <reason>` line when frames never arrive within
 //! the watchdog timeout, the capture fails, or the image is blank (one flat
 //! color = nothing rendered).
+//!
+//! `ZERON_SMOKE_BROWSER_URL=<http(s) url>` (needs a selected chat, e.g. fixture mode):
+//! after the N frames, open a Browser tab in the right pane on that URL, wait until
+//! the page reports loaded (FAIL on a load error or after ~20 s), let it paint, then
+//! capture as above. Exercises the native web view (WKWebView child view on macOS,
+//! the WebKitGTK helper's offscreen frames on Linux).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -25,7 +31,13 @@ pub const Options = struct {
     out: ?[]const u8 = null,
     /// Watchdog: fail if the capture has not happened by then.
     timeout_s: i64 = 90,
+    /// Open a Browser tab on this URL before capturing (ZERON_SMOKE_BROWSER_URL).
+    browser_url: ?[]const u8 = null,
 };
+
+const shell_mod = @import("ui/shell/shell.zig");
+const right_pane_mod = @import("ui/shell/right_pane.zig");
+const browser = @import("ui/browser/root.zig");
 
 const State = struct {
     gpa: std.mem.Allocator,
@@ -64,6 +76,11 @@ const Tick = struct {
         _ = frames_seen.fetchAdd(1, .monotonic);
         if (self.left > 0) return win.onNextFrame(Tick{ .left = self.left - 1 }, tick);
         const s = &state.?;
+        if (s.opts.browser_url) |url| return openBrowser(s, win, app, url);
+        finish(s, win, app);
+    }
+
+    fn finish(s: *State, win: *Window, app: *App) void {
         s.exit_code = if (capture(s, win)) 0 else |err| blk: {
             std.debug.print("FAIL: zeron smoke: {t}\n", .{err});
             break :blk 1;
@@ -72,6 +89,50 @@ const Tick = struct {
         app.quit();
     }
 };
+
+/// Browser smoke: open the tab, then poll every frame until the page loaded.
+fn openBrowser(s: *State, win: *Window, app: *App, url: []const u8) void {
+    const root = win.root orelse return failNow(s, app, "no root view");
+    const shell = root.entity.downcast(shell_mod.Shell) orelse return failNow(s, app, "root view is not the shell");
+    const rp = shell.read(app).right_pane;
+    std.debug.print("zeron smoke: opening a Browser tab on {s}\n", .{url});
+    const pane = rp.update(app, right_pane_mod.RightPane.addBrowser, .{ url, win }) orelse
+        return failNow(s, app, "could not open a Browser tab (no selected chat?)");
+    _ = pane;
+    win.onNextFrame(BrowserWait{ .left = 1200, .settle = 30 }, BrowserWait.tick);
+}
+
+const BrowserWait = struct {
+    left: u64,
+    settle: u64,
+    loaded: bool = false,
+    fn tick(self: *const BrowserWait, win: *Window, app: *App) void {
+        _ = frames_seen.fetchAdd(1, .monotonic);
+        const s = &state.?;
+        if (browser.pane.smoke_failed.load(.acquire)) return failNow(s, app, "the browser page failed to load");
+        var next = self.*;
+        if (!next.loaded and browser.pane.smoke_loaded.load(.acquire)) {
+            next.loaded = true;
+            std.debug.print("zeron smoke: browser page loaded\n", .{});
+        }
+        if (next.loaded) {
+            if (next.settle == 0) return Tick.finish(s, win, app);
+            next.settle -= 1;
+        } else {
+            if (next.left == 0) return failNow(s, app, "the browser page did not finish loading in time");
+            next.left -= 1;
+        }
+        win.refresh(); // keep frames coming while the page paints
+        win.onNextFrame(next, tick);
+    }
+};
+
+fn failNow(s: *State, app: *App, reason: []const u8) void {
+    std.debug.print("FAIL: zeron smoke: {s}\n", .{reason});
+    s.exit_code = 1;
+    s.done.store(true, .release);
+    app.quit();
+}
 
 fn watchdog(io: std.Io, timeout_s: i64, frames: u64) void {
     io.sleep(.fromSeconds(timeout_s), .awake) catch return;

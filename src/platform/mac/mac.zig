@@ -16,6 +16,9 @@ const pf = @import("../platform.zig");
 const dispatcher_mod = @import("dispatcher.zig");
 const display_link = @import("display_link.zig");
 const window_mod = @import("window.zig");
+const file_dialog = @import("file_dialog.zig");
+const menu_mod = @import("menu.zig");
+const notify = @import("notify.zig");
 const CoreTextSystem = @import("../../text/coretext.zig").CoreTextSystem;
 
 pub const MacWindow = window_mod.MacWindow;
@@ -46,6 +49,8 @@ pub const MacPlatform = struct {
     app: id,
     delegate: ?id = null,
     quit_notified: bool = false,
+    /// `setMenus` installed the app's own menu bar (skip the minimal default).
+    menus_set: bool = false,
 
     /// Create the platform (main thread). Instantiates `NSApplication`.
     pub fn create(gpa: std.mem.Allocator) !*MacPlatform {
@@ -83,7 +88,68 @@ pub const MacPlatform = struct {
         .revealPath = vRevealPath,
         .prefersReducedMotion = vPrefersReducedMotion,
         .deinit = vDeinit,
+        .readClipboardImage = vReadClipboardImage,
+        .promptForPaths = vPromptForPaths,
+        .setMenus = vSetMenus,
+        .appCommand = vAppCommand,
+        .showAboutPanel = vShowAboutPanel,
+        .postNotification = vPostNotification,
+        .playSound = vPlaySound,
+        .supportsLiquidGlass = vSupportsLiquidGlass, // [liquid-glass]
     };
+
+    /// [liquid-glass] macOS 26+ with NSGlassEffectView (runtime check, cached).
+    fn vSupportsLiquidGlass(_: *anyopaque) bool {
+        return @import("native_views.zig").glassSupported();
+    }
+
+    fn vSetMenus(ptr: *anyopaque, menus: []const pf.Menu) void {
+        const self = cast(ptr);
+        const pool = objc.AutoreleasePool.push();
+        defer pool.pop();
+        // The delegate exists only inside `run`; before that, build against a placeholder
+        // owner (items target the responder chain, so only `menuWillOpen:` is lost).
+        const delegate = self.delegate orelse ensureDelegate(self);
+        self.app.msg(void, "setMainMenu:", .{menu_mod.build(menus, delegate)});
+        self.menus_set = true;
+    }
+
+    fn vAppCommand(ptr: *anyopaque, command: pf.AppCommand) void {
+        const app = cast(ptr).app;
+        switch (command) {
+            .hide => app.msg(void, "hide:", .{@as(?id, null)}),
+            .hide_other_apps => app.msg(void, "hideOtherApplications:", .{@as(?id, null)}),
+            .unhide_other_apps => app.msg(void, "unhideAllApplications:", .{@as(?id, null)}),
+        }
+    }
+
+    fn vShowAboutPanel(ptr: *anyopaque, options: pf.AboutPanelOptions) void {
+        const pool = objc.AutoreleasePool.push();
+        defer pool.pop();
+        // Empty build version: CFBundleVersion equals the marketing version, and AppKit
+        // would otherwise render "Version 0.2.61 (0.2.61)" (zeron `about_panel`).
+        const keys = [_]id{ ak.NSAboutPanelOptionApplicationName, ak.NSAboutPanelOptionApplicationVersion, ak.NSAboutPanelOptionVersion };
+        const values = [_]id{ ak.nsString(options.application_name), ak.nsString(options.version), ak.nsString("") };
+        const dict = ak.class("NSDictionary").msg(id, "dictionaryWithObjects:forKeys:count:", .{ &values, &keys, @as(NSUInteger, keys.len) });
+        cast(ptr).app.msg(void, "orderFrontStandardAboutPanelWithOptions:", .{dict});
+    }
+
+    fn vPostNotification(ptr: *anyopaque, n: pf.Notification) void {
+        notify.callbacks = &cast(ptr).callbacks;
+        notify.post(n, n.bundle_id);
+    }
+
+    fn vPlaySound(_: *anyopaque, bytes: []const u8) void {
+        notify.playSound(bytes);
+    }
+
+    fn vReadClipboardImage(_: *anyopaque, gpa: std.mem.Allocator) ?pf.ClipboardImage {
+        return file_dialog.readClipboardImage(gpa);
+    }
+
+    fn vPromptForPaths(ptr: *anyopaque, options: pf.PathPromptOptions, done: pf.PathsCallback) void {
+        file_dialog.prompt(cast(ptr).gpa, options, done);
+    }
 
     fn vDispatcher(ptr: *anyopaque) pf.Dispatcher {
         return cast(ptr).dispatcher_impl.dispatcher();
@@ -94,7 +160,9 @@ pub const MacPlatform = struct {
     }
 
     fn vSetCallbacks(ptr: *anyopaque, cbs: pf.PlatformCallbacks) void {
-        cast(ptr).callbacks = cbs;
+        const self = cast(ptr);
+        self.callbacks = cbs;
+        notify.callbacks = &self.callbacks;
     }
 
     fn vRun(ptr: *anyopaque, on_launch: pf.Callback(void, void)) void {
@@ -103,11 +171,9 @@ pub const MacPlatform = struct {
         const pool = objc.AutoreleasePool.push();
         defer pool.pop();
 
-        const delegate = delegateClass().msg(id, "new", .{});
-        self.delegate = delegate;
-        objc.setIvar(delegate, platform_ivar, self);
+        const delegate = ensureDelegate(self);
         self.app.msg(void, "setDelegate:", .{delegate});
-        self.app.msg(void, "setMainMenu:", .{buildMainMenu()});
+        if (!self.menus_set) self.app.msg(void, "setMainMenu:", .{buildMainMenu()});
 
         self.app.msg(void, "run", .{});
 
@@ -156,7 +222,10 @@ pub const MacPlatform = struct {
                     .size = .{ .width = @floatCast(v.size.width), .height = @floatCast(v.size.height) },
                 },
                 .scale_factor = @floatCast(screen.msg(ak.CGFloat, "backingScaleFactor", .{})),
+                // `screens[0]` holds the menu bar.
+                .primary = i == 0,
             };
+            d.uuid = ak.displayUuid(d.id);
         }
         return count;
     }
@@ -214,6 +283,15 @@ pub const MacPlatform = struct {
         self.gpa.destroy(self);
     }
 };
+
+/// The app delegate instance (created on first use; owned by the platform).
+fn ensureDelegate(self: *MacPlatform) id {
+    if (self.delegate) |d| return d;
+    const delegate = delegateClass().msg(id, "new", .{});
+    self.delegate = delegate;
+    objc.setIvar(delegate, platform_ivar, self);
+    return delegate;
+}
 
 /// Convenience: `MacPlatform.create(gpa)` as a `pf.Platform`.
 pub fn create(gpa: std.mem.Allocator) !pf.Platform {
@@ -279,6 +357,12 @@ fn delegateClass() *objc.Class {
     _ = b.addMethod("application:openURLs:", &openUrls, "v@:@@");
     _ = b.addMethod("onKeyboardLayoutChange:", &onKeyboardLayoutChange, "v@:@");
     _ = b.addMethod("onSystemWake:", &onSystemWake, "v@:@");
+    // Menu items target the responder chain, which ends at this delegate (menu.zig).
+    inline for (.{ menu_mod.handle_selector, "cut:", "copy:", "paste:", "selectAll:", "undo:", "redo:" }) |sel_name| {
+        _ = b.addMethod(sel_name, &handleMenuItem, "v@:@");
+    }
+    _ = b.addMethod("validateMenuItem:", &validateMenuItem, B ++ "@:@");
+    _ = b.addMethod("menuWillOpen:", &menuWillOpen, "v@:@");
     delegate_class = b.register();
     return delegate_class.?;
 }
@@ -324,6 +408,9 @@ fn shouldHandleReopen(this: id, _: SEL, _: id, has_visible_windows: BOOL) callco
 
 fn shouldTerminate(this: id, _: SEL, _: id) callconv(.c) NSUInteger {
     if (getPlatform(this)) |self| if (!self.quit_notified) {
+        // Dock "Quit", logout, a stray `terminate:`: the app may veto (unsaved files) and
+        // quits later through `Platform.quit` (zeron `native_quit`).
+        if (self.callbacks.should_quit) |f| if (!f(self.callbacks.ctx)) return ak.NSTerminateCancel;
         self.quit_notified = true;
         if (self.callbacks.quit) |f| f(self.callbacks.ctx);
     };
@@ -349,6 +436,21 @@ fn openUrls(this: id, _: SEL, _: id, urls: id) callconv(.c) void {
     f(self.callbacks.ctx, list);
 }
 
+fn handleMenuItem(this: id, _: SEL, item: id) callconv(.c) void {
+    const self = getPlatform(this) orelse return;
+    menu_mod.handle(self.callbacks, item);
+}
+
+fn validateMenuItem(this: id, _: SEL, item: id) callconv(.c) BOOL {
+    const self = getPlatform(this) orelse return YES;
+    return objc.toBOOL(menu_mod.validate(self.callbacks, item));
+}
+
+fn menuWillOpen(this: id, _: SEL, _: id) callconv(.c) void {
+    const self = getPlatform(this) orelse return;
+    if (self.callbacks.will_open_menu) |f| f(self.callbacks.ctx);
+}
+
 fn onKeyboardLayoutChange(this: id, _: SEL, _: id) callconv(.c) void {
     const self = getPlatform(this) orelse return;
     if (self.callbacks.keyboard_layout_change) |f| f(self.callbacks.ctx);
@@ -362,5 +464,7 @@ fn onSystemWake(this: id, _: SEL, _: id) callconv(.c) void {
 
 test {
     std.testing.refAllDecls(@This());
+    _ = menu_mod;
+    _ = notify;
     _ = @import("../../text/coretext.zig");
 }

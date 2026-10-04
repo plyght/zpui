@@ -69,6 +69,7 @@ const focus_mod = @import("../window/focus.zig");
 const text_mod = @import("../text/text.zig");
 const geometry = @import("../geometry.zig");
 const DispatchPhase = @import("dispatch_tree.zig").DispatchPhase;
+pub const lifecycle_mod = @import("lifecycle.zig");
 
 // ---------------------------------------------------------------------------------------
 // Erased callbacks. gpui boxes closures; zpui stores a function pointer plus small inline
@@ -83,7 +84,7 @@ pub const Captures = struct {
     /// Frees `ptr` when the callback is dropped.
     free: ?*const fn (ptr: *anyopaque, gpa: Allocator) void = null,
 
-    fn deinit(self: *Captures, gpa: Allocator) void {
+    pub fn deinit(self: *Captures, gpa: Allocator) void {
         if (self.free) |f| if (self.ptr) |p| f(p, gpa);
         self.free = null;
     }
@@ -231,6 +232,8 @@ pub const App = struct {
     global_action_listeners: std.AutoHashMapUnmanaged(u64, std.ArrayList(GlobalActionListener)) = .empty,
     /// Image cache + SVG renderer used by `img`/`svg` (window/image.zig); created on first use.
     image_services: ?*@import("../window/image.zig").ImageServices = null,
+    /// Quit / reopen / open-URL listeners and the menu bar (lifecycle.zig).
+    lifecycle: lifecycle_mod.Lifecycle = .{},
 
     /// Create an App that owns `plat` (deinit'ed with the App).
     pub fn init(gpa: Allocator, plat: platform.Platform) Allocator.Error!*App {
@@ -251,6 +254,7 @@ pub const App = struct {
             .focus_map = .init(gpa),
             .focus_listeners = .init(gpa),
         };
+        lifecycle_mod.install(app);
         return app;
     }
 
@@ -309,6 +313,7 @@ pub const App = struct {
         var gal = app.global_action_listeners.valueIterator();
         while (gal.next()) |l| l.deinit(gpa);
         app.global_action_listeners.deinit(gpa);
+        app.lifecycle.deinit(gpa);
         if (app.text_system) |ts| {
             ts.deinit();
             gpa.destroy(ts);
@@ -356,6 +361,81 @@ pub const App = struct {
     pub fn quit(app: *App) void {
         app.quit_requested = true;
         app.platform.quit();
+    }
+
+    // ---- lifecycle (lifecycle.zig) ------------------------------------------------------
+
+    /// Quit after every `onShouldQuit` listener agrees (menu Quit, ⌘Q); see lifecycle.zig.
+    pub fn requestQuit(app: *App) void {
+        lifecycle_mod.requestQuit(app);
+    }
+    /// `f(ctx, app)` once, when the app exits (gpui `on_app_quit`).
+    pub fn onQuit(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        return lifecycle_mod.onQuit(app, ctx, f);
+    }
+    /// `f(ctx, app) bool` before quitting; false cancels (the listener re-requests later).
+    pub fn onShouldQuit(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        return lifecycle_mod.onShouldQuit(app, ctx, f);
+    }
+    /// `f(ctx, app)` on a dock-icon click while no window is visible (macOS).
+    pub fn onReopen(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        return lifecycle_mod.onReopen(app, ctx, f);
+    }
+    /// `f(ctx, urls, app)` for URLs the OS opened with this app (URL schemes).
+    pub fn onOpenUrls(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        return lifecycle_mod.onOpenUrls(app, ctx, f);
+    }
+    pub fn onSystemWake(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        return lifecycle_mod.onSystemWake(app, ctx, f);
+    }
+    pub fn onKeyboardLayoutChange(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        return lifecycle_mod.onKeyboardLayoutChange(app, ctx, f);
+    }
+    /// `f(ctx, tag, app)` when a banner from `postNotification` is clicked.
+    pub fn onNotificationActivated(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        return lifecycle_mod.onNotificationActivated(app, ctx, f);
+    }
+    /// Install the menu bar (gpui `set_menus`).
+    pub fn setMenus(app: *App, menus: []const lifecycle_mod.Menu) Allocator.Error!void {
+        return lifecycle_mod.setMenus(app, menus);
+    }
+    pub fn hide(app: *App) void {
+        app.platform.appCommand(.hide);
+    }
+    pub fn hideOtherApps(app: *App) void {
+        app.platform.appCommand(.hide_other_apps);
+    }
+    pub fn unhideOtherApps(app: *App) void {
+        app.platform.appCommand(.unhide_other_apps);
+    }
+    /// Bring the app to the front (gpui `activate`).
+    pub fn activate(app: *App, ignoring_other_apps: bool) void {
+        app.platform.vtable.activate(app.platform.ptr, ignoring_other_apps);
+    }
+    pub fn postNotification(app: *App, n: platform.Notification) void {
+        app.platform.postNotification(n);
+    }
+    pub fn playSound(app: *App, wav: []const u8) void {
+        app.platform.playSound(wav);
+    }
+    /// Fill `out` with the connected displays; returns the count.
+    pub fn displays(app: *App, out: []platform.Display) usize {
+        return app.platform.vtable.displays(app.platform.ptr, out);
+    }
+    /// The key window (gpui `active_window`), if any.
+    pub fn activeWindow(app: *App) ?*Window {
+        for (app.windows.items) |slot| if (slot) |w| if (!w.removed and w.active) return w;
+        return null;
+    }
+    /// Whether some listener would handle action type `A` right now (gpui `is_action_available`).
+    pub fn isActionAvailable(app: *App, comptime A: type) bool {
+        return lifecycle_mod.isActionAvailable(app, typeId(A));
+    }
+    /// Dispatch an action like a menu pick (active window's focus path, else globals).
+    pub fn dispatchAction(app: *App, action: anytype) void {
+        var any = action_mod.AnyAction.init(app.gpa, action) catch @panic("OOM");
+        defer any.deinit(app.gpa);
+        lifecycle_mod.dispatchAction(app, &any);
     }
 
     // ---- updates and effects ---------------------------------------------------------

@@ -19,6 +19,8 @@ pub const diff_view = @import("diff_view.zig");
 pub const thought = @import("thought.zig");
 pub const file_icons = @import("zeron_ui_markdown").file_icons;
 pub const workspace_links = @import("workspace_links.zig");
+pub const subagents = @import("subagents.zig");
+pub const blobs = @import("blobs.zig");
 
 pub const TranscriptView = view.TranscriptView;
 pub const parseFixture = view.parseFixture;
@@ -28,4 +30,5 @@ pub const applyFrame = view.applyFrame;
 test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("view_test.zig");
+    _ = @import("wiring_test.zig"); // [wiring]
 }

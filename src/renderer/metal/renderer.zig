@@ -220,6 +220,12 @@ pub const MetalRenderer = struct {
     presents_with_transaction: bool = false,
     /// Window mode: the `CAMetalLayer` presented to (retained).
     metal_layer: ?id,
+    /// zui `new_overlay`: a second, transparent `CAMetalLayer` (retained) drawn with the
+    /// same device, pipelines and sprite atlas (`createOverlayLayer` / `drawOverlay`).
+    overlay_layer: ?id = null,
+    /// [liquid-glass] The top plane: a third transparent layer above floating native
+    /// glass (`createTopLayer` / `drawTop`).
+    top_layer: ?id = null,
     /// Offscreen mode: the render target (private storage).
     offscreen_target: ?id = null,
     /// Shared buffer offscreen targets are blitted into by `readPixels`.
@@ -323,6 +329,8 @@ pub const MetalRenderer = struct {
         if (self.offscreen_target) |t| t.release();
         if (self.readback) |b| b.release();
         if (self.metal_layer) |l| l.release();
+        if (self.overlay_layer) |l| l.release();
+        if (self.top_layer) |l| l.release();
         self.pipelines.deinit();
         self.unit_vertices.release();
         self.library.release();
@@ -345,6 +353,55 @@ pub const MetalRenderer = struct {
     pub fn setPresentsWithTransaction(self: *MetalRenderer, value: bool) void {
         self.presents_with_transaction = value;
         if (self.metal_layer) |l| mtl.Layer.setPresentsWithTransaction(l, value);
+        if (self.overlay_layer) |l| mtl.Layer.setPresentsWithTransaction(l, value);
+        if (self.top_layer) |l| mtl.Layer.setPresentsWithTransaction(l, value);
+    }
+
+    /// Create (once) the transparent overlay `CAMetalLayer` (zui `new_overlay`): it
+    /// resolves the same atlas tiles as the main layer. Returns the layer to host in a view.
+    pub fn createOverlayLayer(self: *MetalRenderer) !*anyopaque {
+        if (self.overlay_layer) |l| return @ptrCast(l);
+        const l = try self.configureLayer(null, true);
+        mtl.Layer.setPresentsWithTransaction(l, self.presents_with_transaction);
+        self.overlay_layer = l;
+        return @ptrCast(l);
+    }
+
+    /// [liquid-glass] Create (once) the top-plane layer (same device / atlas).
+    pub fn createTopLayer(self: *MetalRenderer) !*anyopaque {
+        if (self.top_layer) |l| return @ptrCast(l);
+        const l = try self.configureLayer(null, true);
+        mtl.Layer.setPresentsWithTransaction(l, self.presents_with_transaction);
+        self.top_layer = l;
+        return @ptrCast(l);
+    }
+
+    /// [liquid-glass] Render `scene` into the top layer (like `drawOverlay`).
+    pub fn drawTop(self: *MetalRenderer, scene: *const Scene, viewport: DeviceSize, scale_factor: f32) !void {
+        return self.drawTransparentLayer(self.top_layer orelse return error.NoTopLayer, scene, viewport, scale_factor);
+    }
+
+    /// Render `scene` into the overlay layer, cleared to transparent, and present it.
+    pub fn drawOverlay(self: *MetalRenderer, scene: *const Scene, viewport: DeviceSize, scale_factor: f32) !void {
+        return self.drawTransparentLayer(self.overlay_layer orelse return error.NoOverlayLayer, scene, viewport, scale_factor);
+    }
+
+    fn drawTransparentLayer(self: *MetalRenderer, overlay: id, scene: *const Scene, viewport: DeviceSize, scale_factor: f32) !void {
+        if (viewport.width <= 0 or viewport.height <= 0) return;
+        const size = mtl.Layer.drawableSize(overlay);
+        const want: objc.CGSize = .{ .width = @floatFromInt(viewport.width), .height = @floatFromInt(viewport.height) };
+        if (size.width != want.width or size.height != want.height) mtl.Layer.setDrawableSize(overlay, want);
+        // Draw through the main path with the layer and opacity swapped in; `size`
+        // matches the main drawable, so no resize (and no intermediate churn) happens.
+        const saved_layer = self.metal_layer;
+        const saved_opaque = self.is_opaque;
+        self.metal_layer = overlay;
+        self.is_opaque = false;
+        defer {
+            self.metal_layer = saved_layer;
+            self.is_opaque = saved_opaque;
+        }
+        try self.drawScene(scene, viewport, scale_factor, color.transparent_black);
     }
 
     pub fn setTransparent(self: *MetalRenderer, transparent: bool) void {

@@ -1,0 +1,305 @@
+{
+  "kind": "Flowchart",
+  "direction": "LeftRight",
+  "width": 903.1716,
+  "height": 135.76997,
+  "nodes": [
+    {
+      "id": "A",
+      "shape": "Rectangle",
+      "x": 8.0,
+      "y": 38.26102,
+      "width": 83.04,
+      "height": 41.0,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "Square"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "B",
+      "shape": "RoundRect",
+      "x": 126.70998,
+      "y": 36.686558,
+      "width": 85.646,
+      "height": 43.05,
+      "label_width": 41.86,
+      "label_height": 21.0,
+      "label_lines": [
+        "Round"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "C",
+      "shape": "Diamond",
+      "x": 248.02596,
+      "y": 10.687416,
+      "width": 93.784,
+      "height": 93.784,
+      "label_width": 62.72,
+      "label_height": 21.0,
+      "label_lines": [
+        "Decision"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "D",
+      "shape": "Stadium",
+      "x": 394.62646,
+      "y": 8.0,
+      "width": 70.36,
+      "height": 31.0,
+      "label_width": 54.88,
+      "label_height": 21.0,
+      "label_lines": [
+        "Stadium"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "E",
+      "shape": "Cylinder",
+      "x": 394.62646,
+      "y": 74.669975,
+      "width": 108.592,
+      "height": 45.100002,
+      "label_width": 62.72,
+      "label_height": 21.0,
+      "label_lines": [
+        "Database"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "F",
+      "shape": "DoubleCircle",
+      "x": 538.8884,
+      "y": 18.566076,
+      "width": 83.04,
+      "height": 83.04,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "Circle"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "G",
+      "shape": "Asymmetric",
+      "x": 657.5984,
+      "y": 39.753143,
+      "width": 80.832,
+      "height": 41.0,
+      "label_width": 31.36,
+      "label_height": 21.0,
+      "label_lines": [
+        "Flag"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "H",
+      "shape": "Hexagon",
+      "x": 774.10034,
+      "y": 37.786713,
+      "width": 113.071205,
+      "height": 45.100002,
+      "label_width": 58.225998,
+      "label_height": 21.0,
+      "label_lines": [
+        "Hexagon"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          91.04,
+          58.48629
+        ],
+        [
+          126.70998,
+          58.48629
+        ]
+      ]
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          212.35599,
+          57.895485
+        ],
+        [
+          248.02596,
+          57.895485
+        ]
+      ]
+    },
+    {
+      "from": "C",
+      "to": "D",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          341.80994,
+          57.579414
+        ],
+        [
+          352.65994,
+          57.579414
+        ],
+        [
+          352.65994,
+          38.0
+        ],
+        [
+          394.62646,
+          38.0
+        ]
+      ],
+      "label_anchor": [
+        372.97195,
+        54.339706
+      ],
+      "label_width": 27.824001,
+      "label_height": 24.0,
+      "label_lines": [
+        "Yes"
+      ]
+    },
+    {
+      "from": "C",
+      "to": "E",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          341.80994,
+          57.579414
+        ],
+        [
+          341.80994,
+          75.669975
+        ],
+        [
+          394.62646,
+          75.669975
+        ]
+      ],
+      "label_anchor": [
+        369.809,
+        91.86998
+      ],
+      "label_width": 21.392,
+      "label_height": 24.0,
+      "label_lines": [
+        "No"
+      ]
+    },
+    {
+      "from": "E",
+      "to": "F",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          503.21848,
+          75.87802
+        ],
+        [
+          542.09515,
+          75.87802
+        ]
+      ]
+    },
+    {
+      "from": "D",
+      "to": "F",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          464.98645,
+          38.0
+        ],
+        [
+          475.83646,
+          38.0
+        ],
+        [
+          529.2823,
+          49.999523
+        ],
+        [
+          540.13226,
+          49.999523
+        ]
+      ]
+    },
+    {
+      "from": "F",
+      "to": "G",
+      "directed": false,
+      "arrow_start": false,
+      "arrow_end": false,
+      "points": [
+        [
+          621.92847,
+          60.16961
+        ],
+        [
+          657.5984,
+          60.16961
+        ]
+      ]
+    },
+    {
+      "from": "G",
+      "to": "H",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          738.4304,
+          60.29493
+        ],
+        [
+          774.10034,
+          60.29493
+        ]
+      ]
+    }
+  ],
+  "subgraphs": []
+}

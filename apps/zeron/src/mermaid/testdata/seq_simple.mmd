@@ -1,0 +1,10 @@
+sequenceDiagram
+    participant A as Alice
+    participant B as Bob
+    A->>B: Hello Bob
+    B-->>A: Hi Alice
+    A-)B: Async note
+    Note over A,B: A shared note
+    loop Every minute
+        B->>A: Ping
+    end

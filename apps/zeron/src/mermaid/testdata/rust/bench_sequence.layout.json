@@ -1,0 +1,264 @@
+{
+  "kind": "Sequence",
+  "direction": "LeftRight",
+  "width": 550.0,
+  "height": 520.0,
+  "nodes": [
+    {
+      "id": "Client",
+      "shape": "ActorBox",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 53.760002,
+      "label_height": 24.0,
+      "label_lines": [
+        "Client"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Database",
+      "shape": "ActorBox",
+      "x": 400.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "Database"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Server",
+      "shape": "ActorBox",
+      "x": 200.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 53.760002,
+      "label_height": 24.0,
+      "label_lines": [
+        "Server"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "Client",
+      "to": "Server",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          75.0,
+          111.0
+        ],
+        [
+          275.0,
+          111.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        94.2
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "Request"
+      ]
+    },
+    {
+      "from": "Server",
+      "to": "Database",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          157.0
+        ],
+        [
+          475.0,
+          157.0
+        ]
+      ],
+      "label_anchor": [
+        375.0,
+        140.2
+      ],
+      "label_width": 45.28,
+      "label_height": 24.0,
+      "label_lines": [
+        "Query"
+      ]
+    },
+    {
+      "from": "Database",
+      "to": "Server",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          475.0,
+          203.0
+        ],
+        [
+          275.0,
+          203.0
+        ]
+      ],
+      "label_anchor": [
+        375.0,
+        186.2
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "Results"
+      ]
+    },
+    {
+      "from": "Server",
+      "to": "Client",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          249.0
+        ],
+        [
+          75.0,
+          249.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        232.2
+      ],
+      "label_width": 73.232,
+      "label_height": 24.0,
+      "label_lines": [
+        "Response"
+      ]
+    },
+    {
+      "from": "Client",
+      "to": "Server",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          75.0,
+          295.0
+        ],
+        [
+          275.0,
+          295.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        278.2
+      ],
+      "label_width": 54.0,
+      "label_height": 24.0,
+      "label_lines": [
+        "Update"
+      ]
+    },
+    {
+      "from": "Server",
+      "to": "Database",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          341.0
+        ],
+        [
+          475.0,
+          341.0
+        ]
+      ],
+      "label_anchor": [
+        375.0,
+        324.2
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "Write"
+      ]
+    },
+    {
+      "from": "Database",
+      "to": "Server",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          475.0,
+          387.0
+        ],
+        [
+          275.0,
+          387.0
+        ]
+      ],
+      "label_anchor": [
+        375.0,
+        370.2
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "Confirm"
+      ]
+    },
+    {
+      "from": "Server",
+      "to": "Client",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          433.0
+        ],
+        [
+          75.0,
+          433.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        416.2
+      ],
+      "label_width": 62.847996,
+      "label_height": 24.0,
+      "label_lines": [
+        "Success"
+      ]
+    }
+  ],
+  "subgraphs": []
+}

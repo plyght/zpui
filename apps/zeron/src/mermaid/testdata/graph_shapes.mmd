@@ -1,0 +1,9 @@
+graph LR
+    A[Square] --> B(Round)
+    B --> C{Decision}
+    C -->|Yes| D([Stadium])
+    C -->|No| E[(Database)]
+    E -.-> F((Circle))
+    D ==> F
+    F --- G>Flag]
+    G --> H{{Hexagon}}

@@ -1,0 +1,119 @@
+{
+  "kind": "Sequence",
+  "direction": "LeftRight",
+  "width": 368.22528,
+  "height": 385.4,
+  "nodes": [
+    {
+      "id": "A",
+      "shape": "ActorBox",
+      "x": 18.22527,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "Alice"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "B",
+      "shape": "ActorBox",
+      "x": 218.22527,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 29.2,
+      "label_height": 24.0,
+      "label_lines": [
+        "Bob"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          93.225266,
+          111.0
+        ],
+        [
+          293.22528,
+          111.0
+        ]
+      ],
+      "label_anchor": [
+        193.22527,
+        132.0
+      ],
+      "label_width": 80.64,
+      "label_height": 24.0,
+      "label_lines": [
+        "Hello Bob"
+      ]
+    },
+    {
+      "from": "B",
+      "to": "A",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          293.22528,
+          157.0
+        ],
+        [
+          93.225266,
+          157.0
+        ]
+      ],
+      "label_anchor": [
+        38.84,
+        144.4
+      ],
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "Hi Alice"
+      ]
+    },
+    {
+      "from": "B",
+      "to": "A",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          293.22528,
+          298.4
+        ],
+        [
+          93.225266,
+          298.4
+        ]
+      ],
+      "label_anchor": [
+        193.22527,
+        281.6
+      ],
+      "label_width": 35.84,
+      "label_height": 24.0,
+      "label_lines": [
+        "Ping"
+      ]
+    }
+  ],
+  "subgraphs": []
+}

@@ -34,6 +34,7 @@ pub const transcript_store = @import("transcript_store.zig");
 pub const queue_store = @import("queue_store.zig");
 pub const status = @import("status.zig");
 pub const app_state = @import("app_state.zig");
+pub const attachments = @import("attachments.zig");
 
 pub const Timestamp = time.Timestamp;
 pub const UiSettings = settings.UiSettings;

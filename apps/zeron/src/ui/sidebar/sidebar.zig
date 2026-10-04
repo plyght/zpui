@@ -19,7 +19,12 @@ const engine = @import("zeron_engine");
 const zt = @import("zeron_theme");
 const ui = @import("../components/root.zig");
 const prefs_mod = @import("../shell/prefs.zig");
+const app_update = @import("../../lifecycle/app_update.zig"); // [lifecycle]
 const project_icon_mod = @import("project_icon.zig");
+// [wiring] chat context menu: Rename (inline), Copy ▸, Delete… (shell confirms).
+const chat_menu = @import("chat_menu.zig");
+const input_mod = @import("zeron_input");
+const TextInput = input_mod.TextInput;
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -96,6 +101,21 @@ fn slideOffsetY(ix: usize, from: usize, over: usize) f32 {
 pub const OpenSettings = struct {};
 pub const NewSession = struct {};
 pub const SignOut = struct {};
+/// [wiring] "Delete…" in a row's context menu: the shell asks for confirmation.
+pub const DeleteChat = struct { chat_id: []const u8 };
+/// [wiring] User menu "Enable sync": the shell starts the browser sign-in.
+pub const EnableSync = struct {};
+/// [wiring] Project row menu (spaces filter): "Rename…" / "Remove…" (shell dialogs).
+pub const RenameSpace = struct { space_id: []const u8 };
+pub const DeleteSpace = struct { space_id: []const u8 };
+
+/// [wiring] An inline title editor on a session row (Rust `ChatRename`).
+const ChatRename = struct {
+    chat_id: []u8,
+    input: Entity(TextInput),
+    sub: zpui.Subscription,
+    blur: ?zpui.Subscription = null,
+};
 
 const list_gap: f32 = 2;
 const section_gap: f32 = 12;
@@ -193,7 +213,16 @@ pub const Sidebar = struct {
     pinned_count: usize = 0,
     pin_slots: std.ArrayList(f32) = .empty,
 
-    pub const Events = .{ OpenSettings, NewSession, SignOut };
+    // [wiring] context-menu page, inline rename, inline notice (Rust `sidebar_notice`).
+    ctx_page: chat_menu.Page = .root,
+    rename: ?ChatRename = null,
+    notice: ?[]u8 = null,
+
+    /// [wiring] Right-click menu over a project row in the spaces menu.
+    space_ctx: ?struct { id: []u8, pos: zpui.Point(f32) } = null,
+    emitted_space_id: ?[]u8 = null,
+
+    pub const Events = .{ OpenSettings, NewSession, SignOut, DeleteChat, EnableSync, RenameSpace, DeleteSpace };
 
     pub fn init(state: Entity(model.AppState), cx: *Context(Sidebar)) !Sidebar {
         var self: Sidebar = .{
@@ -221,6 +250,10 @@ pub const Sidebar = struct {
         self.collapsed_groups.deinit(self.gpa);
         self.icons.deinit(self.gpa);
         self.pin_slots.deinit(self.gpa);
+        self.dropRename(app);
+        self.clearSpaceCtx();
+        if (self.emitted_space_id) |e| self.gpa.free(e);
+        if (self.notice) |n| self.gpa.free(n);
         self.state.release(app);
     }
 
@@ -342,7 +375,163 @@ pub const Sidebar = struct {
 
     fn onRowContext(self: *Sidebar, ix: usize, ev: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(Sidebar)) void {
         self.ctx_menu = .{ .ix = ix, .pos = ev.position };
+        self.ctx_page = .root;
         cx.notify();
+    }
+
+    // ---- [wiring] Rename / Copy ▸ / Delete… -------------------------------------------
+
+    /// The inline notice under the lists (click dismisses).
+    pub fn setNotice(self: *Sidebar, text: ?[]const u8, cx: *Context(Sidebar)) void {
+        if (self.notice) |n| self.gpa.free(n);
+        self.notice = if (text) |t| self.gpa.dupe(u8, t) catch null else null;
+        cx.notify();
+    }
+
+    fn onNoticeClick(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        self.setNotice(null, cx);
+    }
+
+    fn onCtxRename(self: *Sidebar, _: *const zpui.ClickEvent, window: *Window, cx: *Context(Sidebar)) void {
+        const m = self.ctx_menu orelse return;
+        self.ctx_menu = null;
+        const id = self.rowId(m.ix) orelse return;
+        const copy = self.gpa.dupe(u8, id) catch return;
+        defer self.gpa.free(copy);
+        self.beginRename(copy, window, cx);
+    }
+
+    /// `open_rename_chat`: edit `chat_id`'s title in place on its row,
+    /// seeded with the current title (all selected). Enter or blur commits a
+    /// changed, non-empty title (`renameChat`); Escape drops it.
+    pub fn beginRename(self: *Sidebar, chat_id: []const u8, window: *Window, cx: *Context(Sidebar)) void {
+        if (self.rename != null) self.finishRename(true, cx);
+        const current = (self.state.read(cx).workspace.read(cx).chat(chat_id) orelse return).title orelse "";
+        const theme = ui.theme.get(cx);
+        const in = cx.newWith(TextInput, TextInput.init, .{input_mod.Options{
+            .placeholder = "Session title",
+            .key_context = "Composer",
+            .single_line = true,
+            .text_size = 13,
+            .line_height = 17,
+            .colors = .{ .text = theme.text, .placeholder = theme.text_faint, .caret = theme.caret, .selection = theme.selection, .ghost = theme.text_faint },
+            .edge_fade = false,
+        }}) catch return;
+        in.update(cx, TextInput.setText, .{current});
+        in.update(cx, TextInput.selectAllText, .{});
+        const sub = cx.subscribe(in, onRenameEvent) catch {
+            in.release(cx);
+            return;
+        };
+        const owned = self.gpa.dupe(u8, chat_id) catch {
+            var s2 = sub;
+            s2.deinit();
+            in.release(cx);
+            return;
+        };
+        self.rename = .{ .chat_id = owned, .input = in, .sub = sub };
+        const focus = in.read(cx).focusHandle();
+        window.focus(focus);
+        self.rename.?.blur = cx.onBlur(focus, window, onRenameBlur) catch null;
+        cx.notify();
+    }
+
+    fn onRenameBlur(_: *Sidebar, _: *Window, cx: *Context(Sidebar)) void {
+        cx.deferUpdate(struct {
+            fn f(sb_: *Sidebar, c: *Context(Sidebar)) void {
+                sb_.finishRename(true, c);
+            }
+        }.f);
+    }
+
+    fn onRenameEvent(self: *Sidebar, _: Entity(TextInput), ev: *const input_mod.TextInputEvent, cx: *Context(Sidebar)) void {
+        switch (ev.*) {
+            .submitted, .modified_submitted => self.finishRename(true, cx),
+            .escape => self.finishRename(false, cx),
+            else => {},
+        }
+    }
+
+    fn dropRename(self: *Sidebar, app: *App) void {
+        if (self.rename) |*r| {
+            if (r.blur) |*b| b.deinit();
+            r.sub.deinit();
+            r.input.release(app);
+            self.gpa.free(r.chat_id);
+        }
+        self.rename = null;
+    }
+
+    /// `finish_rename_chat`.
+    pub fn finishRename(self: *Sidebar, commit: bool, cx: *Context(Sidebar)) void {
+        const r = self.rename orelse return;
+        const title = std.mem.trim(u8, r.input.read(cx).text(), " \t\r\n");
+        const ws = self.state.read(cx).workspace;
+        const unchanged = if (ws.read(cx).chat(r.chat_id)) |c| (if (c.title) |t| std.mem.eql(u8, t, title) else false) else true;
+        if (commit and title.len > 0 and !unchanged) {
+            const t = self.gpa.dupe(u8, title) catch null;
+            defer if (t) |x| self.gpa.free(x);
+            if (t) |owned| ws.update(cx, model.WorkspaceStore.mutate, .{engine.protocol.Mutate{ .renameChat = .{ .chatId = r.chat_id, .title = owned } }}) catch |err| {
+                self.setNotice(if (err == error.NotConnected) "Engine not connected" else "Rename failed", cx);
+            };
+        }
+        self.dropRename(cx.app);
+        cx.notify();
+    }
+
+    fn onCtxCopyPage(self: *Sidebar, page: chat_menu.Page, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        cx.stopPropagation();
+        self.ctx_page = page;
+        cx.notify();
+    }
+
+    fn copyAndNotice(self: *Sidebar, text: []const u8, notice: []const u8, cx: *Context(Sidebar)) void {
+        cx.app.platform.vtable.writeClipboard(cx.app.platform.ptr, text);
+        self.setNotice(notice, cx);
+    }
+
+    /// Copy ▸ rows: 0 path, 1 Zeron conversation link, 2 harness link, 3 session id.
+    fn onCtxCopy(self: *Sidebar, which: u8, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        const m = self.ctx_menu orelse return;
+        self.ctx_menu = null;
+        self.ctx_page = .root;
+        const id = self.rowId(m.ix) orelse return;
+        const st = self.state.read(cx);
+        const ws = st.workspace.read(cx);
+        const c = ws.chat(id) orelse return;
+        switch (which) {
+            0 => if (chat_menu.chatCopyPath(c)) |p| self.copyAndNotice(p, "Path copied", cx),
+            1 => {
+                var buf: [16]u8 = undefined;
+                const auth = st.auth.read(cx).auth;
+                if (chat_menu.workspaceLocator(&buf, ws.workspace_scope, auth, ws.local_device_id)) |loc| {
+                    const link = chat_menu.zeronConversationLink(self.gpa, id, loc) catch return;
+                    defer self.gpa.free(link);
+                    self.copyAndNotice(link, "Zeron conversation link copied", cx);
+                } else self.setNotice("Conversation link is not ready yet", cx);
+            },
+            2 => if (chat_menu.harnessConversationLink(self.gpa, c) catch null) |l| {
+                defer self.gpa.free(l.url);
+                self.copyAndNotice(l.url, zpui.fmt("{s} copied", .{l.label}), cx);
+            },
+            else => if (chat_menu.harnessSessionId(c)) |sid| self.copyAndNotice(sid, "Harness session ID copied", cx),
+        }
+        cx.notify();
+    }
+
+    fn onCtxDelete(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        const m = self.ctx_menu orelse return;
+        self.ctx_menu = null;
+        const id = self.rowId(m.ix) orelse return;
+        cx.emit(DeleteChat{ .chat_id = id });
+        cx.notify();
+    }
+
+    /// The row's title, or its inline rename field.
+    fn titleCell(self: *Sidebar, r: *const RowData) zpui.Div {
+        const cell = div().flex1().minW0().flex().textSize(rems(13)).lineHeight(px(17));
+        if (self.rename) |rn| if (std.mem.eql(u8, rn.chat_id, r.chat.id)) return cell.child(rn.input);
+        return cell.child(ui.effects.fadedText(r.title, .{ .fill = true }));
     }
 
     fn onCtxPin(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
@@ -367,30 +556,53 @@ pub const Sidebar = struct {
         }
     }
 
-    fn onCtxNoop(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        self.ctx_menu = null;
-        cx.notify();
-    }
-
     fn renderContextMenu(self: *Sidebar, theme_in: *const Theme, cx: *Context(Sidebar)) ?zpui.AnyElement {
         const m = self.ctx_menu orelse return null;
         const id = self.rowId(m.ix) orelse return null;
         const theme = zpui.window.arena_mod.current().create(Theme, theme_in.forPopup());
         const pinned = prefs_mod.get(cx).isPinned(id);
-        const card = ui.popover.card(theme).w(px(216)).onMouseDownOut(cx.listener(Sidebar.onCtxDismiss))
-            .child(ui.popover.menuRow(theme, false).id("chat-menu-rename").onClick(cx.listener(Sidebar.onCtxNoop))
+        var card = ui.popover.card(theme).w(px(216)).onMouseDownOut(cx.listener(Sidebar.onCtxDismiss));
+        if (self.ctx_page == .copy) {
+            const c = self.state.read(cx).workspace.read(cx).chat(id);
+            card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-back").onClick(cx.listenerWith(chat_menu.Page.root, Sidebar.onCtxCopyPage))
+                .child(icon.of(.alt_arrow_left, 16, theme.text_muted)).child("Back"))
+                .child(ui.popover.separator(theme));
+            if (c != null and chat_menu.chatCopyPath(c.?) != null) card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-path").onClick(cx.listenerWith(@as(u8, 0), Sidebar.onCtxCopy))
+                .child(icon.of(.copy, 16, theme.text_muted)).child("Path"));
+            card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-zeron").onClick(cx.listenerWith(@as(u8, 1), Sidebar.onCtxCopy))
+                .child(icon.of(.copy, 16, theme.text_muted)).child("Zeron conversation link"));
+            if (c) |chat| if (chat.config) |cfg| if (cfg.harness == .codex and chat_menu.harnessSessionId(chat) != null) {
+                card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-harness").onClick(cx.listenerWith(@as(u8, 2), Sidebar.onCtxCopy))
+                    .child(icon.of(.copy, 16, theme.text_muted)).child("Codex conversation link"));
+            };
+            if (c != null and chat_menu.harnessSessionId(c.?) != null) card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-session").onClick(cx.listenerWith(@as(u8, 3), Sidebar.onCtxCopy))
+                .child(icon.of(.copy, 16, theme.text_muted)).child("Harness session ID"));
+            return ui.popover.anchoredAt(m.pos, card);
+        }
+        card = card
+            .child(ui.popover.menuRow(theme, false).id("chat-menu-rename").onClick(cx.listener(Sidebar.onCtxRename))
                 .child(icon.of(.pen, 16, theme.text_muted)).child("Rename"))
             .child(ui.popover.menuRow(theme, false).id("chat-menu-pin").onClick(cx.listener(Sidebar.onCtxPin))
                 .child(icon.of(.pin, 16, theme.text_muted)).child(if (pinned) "Unpin" else "Pin"))
             .child(ui.popover.menuRow(theme, false).id("chat-menu-archive").onClick(cx.listener(Sidebar.onCtxArchive))
                 .child(icon.of(.archive_minimalistic, 16, theme.text_muted)).child("Archive"))
-            .child(ui.popover.menuRow(theme, false).id("chat-menu-copy").onClick(cx.listener(Sidebar.onCtxNoop))
+            .child(ui.popover.menuRow(theme, false).id("chat-menu-copy").onClick(cx.listenerWith(chat_menu.Page.copy, Sidebar.onCtxCopyPage))
                 .child(icon.of(.copy, 16, theme.text_muted)).child(div().flex1().child("Copy"))
-                .child(icon.of(.alt_arrow_right, 12, theme.text_muted)))
+                .child(icon.of(.alt_arrow_right, 14, theme.text_muted)))
             .child(ui.popover.separator(theme))
-            .child(ui.popover.menuRow(theme, false).id("chat-menu-delete").onClick(cx.listener(Sidebar.onCtxNoop))
-                .child(icon.of(.trash_bin_minimalistic, 16, theme.text_muted)).child("Delete…"));
+            .child(ui.popover.menuRow(theme, false).id("chat-menu-delete").textColor(theme.danger).onClick(cx.listener(Sidebar.onCtxDelete))
+                .child(icon.of(.trash_bin_minimalistic, 16, theme.danger)).child("Delete…"));
         return ui.popover.anchoredAt(m.pos, card);
+    }
+
+    /// [wiring] `sidebar-notice`: the inline mutation / copy notice.
+    fn renderNotice(self: *Sidebar, theme: *const Theme, cx: *Context(Sidebar)) ?zpui.StatefulDiv {
+        const n = self.notice orelse return null;
+        return div().id("sidebar-notice").mx(px(zt.layout.space_sm)).mb(px(zt.layout.space_sm)).px(px(zt.layout.space_sm)).py(px(4))
+            .rounded(px(zt.layout.control_radius)).border1().borderColor(theme.danger)
+            .textSize(rems(11)).textColor(theme.danger).cursorPointer()
+            .onClick(cx.listener(Sidebar.onNoticeClick))
+            .child(n);
     }
 
     fn onArchiveClick(self: *Sidebar, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
@@ -399,20 +611,24 @@ pub const Sidebar = struct {
         const s = self.state.read(cx);
         const ws = s.workspace.read(cx);
         const c = ws.chat(id) orelse return;
-        const archived = !c.archived;
-        s.workspace.update(cx, struct {
-            fn f(w: *model.WorkspaceStore, chat_id: []const u8, value: bool, c2: *Context(model.WorkspaceStore)) void {
+        setChatArchived(s.workspace, id, !c.archived, cx);
+        self.hovered = null;
+        cx.notify();
+    }
+
+    /// `set_chat_archived`: flip the local row at once, then `setChatArchived`.
+    pub fn setChatArchived(ws_e: Entity(model.WorkspaceStore), chat_id: []const u8, archived: bool, cx: anytype) void {
+        ws_e.update(cx, struct {
+            fn f(w: *model.WorkspaceStore, id: []const u8, value: bool, c2: *Context(model.WorkspaceStore)) void {
                 if (w.chatsArena() == null) return;
-                for (w.chats()) |*ch| if (std.mem.eql(u8, ch.id, chat_id)) {
+                for (w.chats()) |*ch| if (std.mem.eql(u8, ch.id, id)) {
                     @constCast(ch).archived = value;
                 };
-                w.mutate(.{ .setChatArchived = .{ .chatId = chat_id, .archived = value } }, c2) catch {};
+                w.mutate(.{ .setChatArchived = .{ .chatId = id, .archived = value } }, c2) catch {};
                 c2.emit(model.workspace.ChatsChanged{});
                 c2.notify();
             }
-        }.f, .{ id, archived });
-        self.hovered = null;
-        cx.notify();
+        }.f, .{ chat_id, archived });
     }
 
     fn toggleSection(self: *Sidebar, which: u8, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
@@ -449,6 +665,12 @@ pub const Sidebar = struct {
     fn onSettings(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
         self.user_menu_open = false;
         cx.emit(OpenSettings{});
+        cx.notify();
+    }
+
+    fn onEnableSync(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        self.user_menu_open = false;
+        cx.emit(EnableSync{});
         cx.notify();
     }
 
@@ -716,6 +938,8 @@ pub const Sidebar = struct {
             .child(self.renderFilterRow(theme, prefs, ws, now, cx))
             .child(lists)
             .child(self.renderUpdateStrip(theme, cx))
+            .child(self.renderNotice(theme, cx))
+            .child(self.renderSpaceMenu(theme, cx))
             .child(div().p(px(zt.layout.space_sm)).flexNone().child(self.renderFooter(theme, cx)))
             .child(self.renderContextMenu(theme, cx));
     }
@@ -900,7 +1124,7 @@ pub const Sidebar = struct {
                 .child(div().size(px(13)).flexNone().flex().itemsCenter().justifyCenter().child(status_glyph))
                 .child(harness)
                 .child(project_icon)
-                .child(div().flex1().minW0().flex().textSize(rems(13)).lineHeight(px(17)).child(ui.effects.fadedText(r.title, .{ .fill = true })));
+                .child(self.titleCell(r));
             if (r.remote or hovered) line = line.child(corner);
             if (r.pr) |n| line = line.child(ui.badge.pullRequest(n, theme));
             line = line.child(div().w(px(30)).flexNone().whitespaceNowrap().textRight().textSize(rems(11)).lineHeight(px(14)).textColor(subline).child(r.time_ago));
@@ -916,7 +1140,7 @@ pub const Sidebar = struct {
         var title_line = div().wFull().flex().flexRow().itemsCenter().gap(px(zt.layout.space_sm))
             .child(harness)
             .child(project_icon)
-            .child(div().flex1().minW0().flex().textSize(rems(13)).lineHeight(px(17)).child(ui.effects.fadedText(r.title, .{ .fill = true })));
+            .child(self.titleCell(r));
         if (!show_label) {
             if (r.remote) title_line = title_line.child(icon.of(.remote_server, harness_icon_size, subline));
             title_line = title_line.child(corner);
@@ -999,6 +1223,7 @@ pub const Sidebar = struct {
             const tag, _ = ws.spaceDeviceTag(&buf, s, prefs.now(ws.io));
             card = card.child(ui.popover.menuRow(theme, active).id(.{ "spaces-row", i })
                 .onClick(cx.listenerWith(i, Sidebar.onPickSpace))
+                .onMouseDown(.right, cx.listenerWith(i, Sidebar.onSpaceContext)) // [wiring]
                 .child(ui.badge.monogram(view.spaceDisplayName(s), s.path, 16, false, null, theme))
                 .child(div().flex1().minW0().flex().itemsCenter().gap(px(6))
                     .child(ui.effects.fadedText(view.spaceDisplayName(s), .{}))
@@ -1011,6 +1236,52 @@ pub const Sidebar = struct {
             .child(icon.of(.add_circle, 16, theme.text_muted))
             .child("New project…"));
         return card;
+    }
+
+    // ---- [wiring] project row menu (`render_space_overlays`) ----
+
+    fn onSpaceContext(self: *Sidebar, ix: usize, ev: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(Sidebar)) void {
+        if (ix >= self.menu_space_ids.items.len) return;
+        self.clearSpaceCtx();
+        self.space_ctx = .{ .id = self.gpa.dupe(u8, self.menu_space_ids.items[ix]) catch return, .pos = ev.position };
+        cx.notify();
+    }
+
+    fn clearSpaceCtx(self: *Sidebar) void {
+        if (self.space_ctx) |c| self.gpa.free(c.id);
+        self.space_ctx = null;
+    }
+
+    fn onSpaceCtxDismiss(self: *Sidebar, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(Sidebar)) void {
+        self.clearSpaceCtx();
+        cx.notify();
+    }
+
+    fn onSpaceCtxAction(self: *Sidebar, delete: bool, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        const m = self.space_ctx orelse return;
+        self.space_ctx = null;
+        // The event is delivered after this handler returns: keep the id alive.
+        if (self.emitted_space_id) |old| self.gpa.free(old);
+        self.emitted_space_id = m.id;
+        self.spaces_menu_open = false;
+        const id = m.id;
+        if (delete) cx.emit(DeleteSpace{ .space_id = id }) else cx.emit(RenameSpace{ .space_id = id });
+        cx.notify();
+    }
+
+    fn renderSpaceMenu(self: *Sidebar, theme_in: *const Theme, cx: *Context(Sidebar)) ?zpui.AnyElement {
+        const m = self.space_ctx orelse return null;
+        // Beside the spaces card (Rust overlays it at the pointer; zpui's
+        // frosted spaces card composites above a later deferred overlay).
+        const theme = zpui.window.arena_mod.current().create(Theme, theme_in.forPopup());
+        const card = ui.popover.card(theme).w(px(170)).onMouseDownOut(cx.listener(Sidebar.onSpaceCtxDismiss))
+            .child(ui.popover.menuRow(theme, false).id("space-menu-rename").onClick(cx.listenerWith(false, Sidebar.onSpaceCtxAction))
+                .child(icon.of(.pen, 16, theme.text_muted)).child("Rename…"))
+            .child(ui.popover.separator(theme))
+            .child(ui.popover.menuRow(theme, false).id("space-menu-delete").textColor(theme.danger).onClick(cx.listenerWith(true, Sidebar.onSpaceCtxAction))
+                .child(icon.of(.trash_bin_minimalistic, 16, theme.danger)).child("Remove…"));
+        return zpui.intoAnyElement(zpui.deferred(zpui.anchored().position(.{ .x = @max(m.pos.x, prefs_mod.get(cx).sidebar_width - zt.layout.space_sm + 4), .y = m.pos.y }).snapToWindowWithMargin(.all(8))
+            .child(div().occlude().child(ui.popover.frostedCard(card)))).withPriority(2));
     }
 
     fn renderViewMenu(self: *Sidebar, theme_in: *const Theme, prefs: *const prefs_mod.Prefs, cx: *Context(Sidebar)) zpui.Div {
@@ -1075,6 +1346,11 @@ pub const Sidebar = struct {
         var label: []const u8 = undefined;
         if (prefs.update_label) |l| {
             label = l;
+        } else if (app_update.AppUpdate.global(cx.app)) |u| {
+            // [lifecycle] The app's own updater drives the strip (Rust `AppUpdate::strip`).
+            var buf: [160]u8 = undefined;
+            const strip = u.read(cx).strip(&buf) orelse return null;
+            label = zpui.fmt("{s}", .{strip[0]});
         } else {
             const up = self.state.read(cx).updates.read(cx).current() orelse return null;
             if (!up.updateAvailable) return null;
@@ -1085,7 +1361,20 @@ pub const Sidebar = struct {
             .flex().flexRow().itemsCenter()
             .textSize(rems(11)).fontWeight(500).textColor(theme.accent)
             .cursorPointer().hover(sb.bg(theme.accent.opacity(0.16)))
+            .onClick(cx.listener(Sidebar.onUpdateStripClick)) // [lifecycle]
             .child(div().flex1().minW0().child(label));
+    }
+
+    // [lifecycle] Strip click: download / restart / explain / advise (app_update.zig).
+    fn onUpdateStripClick(_: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        app_update.onStripClick(cx.app);
+    }
+
+    // [lifecycle] Account menu "Check for updates" (Linux; macOS uses the app menu).
+    fn onCheckUpdates(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        self.user_menu_open = false;
+        cx.notify();
+        if (app_update.AppUpdate.global(cx.app)) |u| u.update(cx.app, app_update.AppUpdate.checkForUpdates, .{});
     }
 
     fn renderFooter(self: *Sidebar, theme_in: *const Theme, cx: *Context(Sidebar)) zpui.Div {
@@ -1139,6 +1428,7 @@ pub const Sidebar = struct {
                 .child(div().px(px(8)).pt(px(6)).pb(px(4)).textSize(rems(11)).textColor(theme.text_muted).truncate().child(identity));
             if (scope != null and scope.? == .local) {
                 menu = menu.child(ui.popover.menuRow(theme, false).id("user-menu-enable-sync")
+                    .onClick(cx.listener(Sidebar.onEnableSync))
                     .child(icon.of(.global, 16, theme.text_muted)).child("Enable sync"));
             } else if (signed_in) {
                 menu = menu.child(ui.popover.menuRow(theme, false).id("user-menu-signout")
@@ -1147,6 +1437,7 @@ pub const Sidebar = struct {
             }
             if (@import("builtin").os.tag != .macos) {
                 menu = menu.child(ui.popover.menuRow(theme, false).id("user-menu-check-updates")
+                    .onClick(cx.listener(Sidebar.onCheckUpdates)) // [lifecycle]
                     .child(icon.of(.refresh, 16, theme.text_muted)).child("Check for updates"));
             }
             trigger = trigger.child(ui.popover.anchoredAbove(menu));

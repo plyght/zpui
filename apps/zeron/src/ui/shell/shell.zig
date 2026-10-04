@@ -15,6 +15,7 @@ const engine = @import("zeron_engine");
 const zt = @import("zeron_theme");
 const actions = @import("zeron_actions");
 const ui = @import("../components/root.zig");
+const app_update = @import("../../lifecycle/app_update.zig"); // [lifecycle]
 const prefs_mod = @import("prefs.zig");
 const fixtures_mod = @import("fixtures.zig");
 const sidebar_mod = @import("../sidebar/sidebar.zig");
@@ -26,6 +27,7 @@ const terminal_dock = @import("terminal_dock.zig");
 const right_pane_mod = @import("right_pane.zig");
 const pickers_mod = @import("../pickers/root.zig");
 const settings_ui = @import("../settings/root.zig"); // settings mode (ui/settings owns it)
+const wiring_mod = @import("wiring.zig"); // [wiring] event routing (composer, links, dialogs, actions)
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -117,6 +119,8 @@ pub const Shell = struct {
     // ---- settings mode (ui/settings/view.zig) ----
     settings_view: ?Entity(settings_ui.SettingsView) = null,
     settings_sub: ?zpui.Subscription = null,
+    // [wiring] routed flows' state (ui/shell/wiring.zig).
+    wiring: wiring_mod.State = .{},
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, server_decorations: bool, window: *Window, cx: *Context(Shell)) !Shell {
         const focus = cx.focusHandle();
@@ -147,10 +151,12 @@ pub const Shell = struct {
             self.splash = .gone;
         };
         self.nav.append(self.gpa, null) catch {};
+        try wiring_mod.attach(&self, cx); // [wiring]
         return self;
     }
 
     pub fn deinit(self: *Shell, app: *App) void {
+        wiring_mod.detach(self, app); // [wiring]
         self.subs.deinit(self.gpa);
         self.palette_subs.deinit(self.gpa);
         if (self.palette) |p| p.release(app);
@@ -448,6 +454,11 @@ pub const Shell = struct {
         cx.notify();
     }
 
+    /// [wiring] `/resume` and other programmatic opens of the command palette.
+    pub fn togglePalette(self: *Shell, window: *Window, cx: *Context(Shell)) void {
+        self.actTogglePalette(&shell_actions.ToggleCommandPalette{}, window, cx);
+    }
+
     fn closePalette(self: *Shell, window: *Window, cx: *Context(Shell)) void {
         self.palette_subs.deinit(self.gpa);
         self.palette_subs = .{};
@@ -697,6 +708,7 @@ pub const Shell = struct {
             .textColor(theme.text)
             .fontFamily(theme.font_sans)
             .textSize(ui.rems(14));
+        root = wiring_mod.actionsOn(root, cx); // [wiring] SaveFile / ArchiveSession / OpenModelPicker
         if (radius > 0) root = root.rounded(px(radius)).overflowHidden();
 
         root = switch (g) {
@@ -722,6 +734,15 @@ pub const Shell = struct {
 
         if (self.palette) |p| root = root.child(p);
         if (self.add_project) |p| root = root.child(p);
+        // [lifecycle] the "Check for Updates…" dialog (lifecycle/app_update.zig).
+        if (app_update.AppUpdate.global(cx.app)) |u| if (u.read(cx).prompt != null) {
+            root = root.child(u);
+        };
+        // [wiring] confirmations + per-frame upkeep (link root, explorer rows).
+        if (g == .ready) {
+            wiring_mod.tick(self, cx);
+            if (wiring_mod.overlays(self, window, cx)) |o| root = root.child(o);
+        }
         if (g != .ready and !is_mac) root = root.child(titlebar.dragStrip(self, "gate-titlebar-drag", cx));
         root = root.child(titlebar.linuxCaptions(self, window, theme, cx));
         root = root.child(titlebar.linuxResizeBorders(self, window));
@@ -765,8 +786,12 @@ pub const Shell = struct {
         if (radius > 0) {
             if (sidebar_now >= 2 * radius) tone = tone.roundedTl(px(radius)).roundedBl(px(radius)) else tone = tone.top(px(radius)).bottom(px(radius));
         }
+        // [liquid-glass] A floating native glass pane replaces the wash column; the
+        // sidebar, titlebar and cluster then paint on the overlay plane above glass.
+        const liquid = theme.isLiquid();
+        if (liquid) tone = liquidSidebarGlass(sidebar_now, radius);
 
-        if (settings_mode) return div().absolute().inset0().child(tone).child(div().absolute().inset0().child(self.settings_view.?));
+        if (settings_mode) return div().absolute().inset0().child(tone).child(div().absolute().inset0().child(zpui.overlayPlane(liquid, div().sizeFull().child(self.settings_view.?)))); // [liquid-glass]
 
         const sidebar_col = div().hFull().flexNone().overflowHidden().w(px(sidebar_now))
             .child(div().hFull().pt(px(layout.titlebar_height))
@@ -808,15 +833,36 @@ pub const Shell = struct {
         };
 
         const page = div().sizeFull().relative()
+            .child(if (liquid) liquidTitlebarGlass(sidebar_now) else null) // [liquid-glass]
             .child(div().sizeFull().flex().flexRow()
-                .child(sidebar_col)
+                .child(zpui.overlayPlane(liquid, sidebar_col))
                 .child(sidebar_seam)
                 .child(card)
                 .child(right_wrap)
                 .child(files_col))
-            .child(div().absolute().top(px(0)).left(px(0)).right(px(0)).child(titlebar.sessionBar(self, sidebar_now, right_now, files_now, theme, cx)))
-            .child(titlebar.cluster(self, theme, cx));
+            .child(div().absolute().top(px(0)).left(px(0)).right(px(0)).child(zpui.overlayPlane(liquid, titlebar.sessionBar(self, sidebar_now, right_now, files_now, theme, cx))))
+            .child(zpui.overlayPlane(liquid, titlebar.cluster(self, theme, cx))); // [liquid-glass] overlayPlane: pass-through unless Liquid Glass
 
         return div().absolute().inset0().child(tone).child(ui.anim.fadeIn("phase-app", page));
     }
 };
+
+// ---- [liquid-glass] native glass chrome (Settings → Appearance → Glass → Liquid Glass) ----
+
+/// Inset of the floating sidebar glass pane from the window edges.
+const liquid_sidebar_inset: f32 = 8;
+
+/// The sidebar's glass pane (absolute; replaces the wash column).
+fn liquidSidebarGlass(sidebar_now: f32, window_radius: f32) zpui.Div {
+    const inset = liquid_sidebar_inset;
+    const w = @max(sidebar_now - 2 * inset, 0);
+    const r = @max(window_radius - inset, 12);
+    return div().absolute().top(px(inset)).bottom(px(inset)).left(px(inset)).w(px(w))
+        .child(if (w > 1) zpui.liquidGlass("sidebar-glass", .{ .shape = .{ .rounded = r } }, div().sizeFull()) else null);
+}
+
+/// The titlebar band right of the sidebar: content scrolls under glass.
+fn liquidTitlebarGlass(sidebar_now: f32) zpui.Div {
+    return div().absolute().top(px(0)).right(px(0)).left(px(sidebar_now)).h(px(layout.titlebar_height))
+        .child(zpui.liquidGlass("titlebar-glass", .{}, div().sizeFull()));
+}

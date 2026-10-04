@@ -95,10 +95,35 @@ pub fn themeFor(s: *const UiSettings, appearance: zt.Appearance) zt.Theme {
     return theme;
 }
 
+// ---- [liquid-glass] -------------------------------------------------------------------
+
+/// Force the Liquid Glass preference for this run without persisting it
+/// (`ZERON_LIQUID_GLASS=1`; set before `boot`). Unsupported machines fall back to frost.
+pub var force_liquid: bool = false;
+
+/// Native Liquid Glass can be shown here (macOS 26+; tests pretend yes).
+pub fn liquidSupported(cx: anytype) bool {
+    return zpui.platformSupportsLiquidGlass(appOf(cx));
+}
+
+/// The UI theme with the Liquid Glass flag resolved against the platform.
+pub fn themeWithGlass(app: *App, s: *const UiSettings, appearance: zt.Appearance) zt.Theme {
+    var theme = themeFor(s, appearance);
+    const wants = force_liquid or s.theme.surface == .liquid;
+    if (!wants) return theme;
+    if (force_liquid and s.theme.surface != .liquid) {
+        var forced = s.*;
+        forced.theme.surface = .liquid;
+        theme = themeFor(&forced, appearance);
+    }
+    theme.liquid_glass = liquidSupported(app);
+    return theme;
+}
+
 /// Install the theme the settings describe and redraw every window.
 pub fn applyTheme(app: *App) void {
     const s = current(app);
-    ui.theme.set(app, themeFor(s, effectiveAppearance(app)));
+    ui.theme.set(app, themeWithGlass(app, s, effectiveAppearance(app))); // [liquid-glass] was themeFor
     const rem = s.theme.ui_font_size.normalized().pixels();
     for (app.windows.items) |w| if (w) |win| win.setRemSize(rem);
 }
@@ -107,6 +132,8 @@ pub fn applyTheme(app: *App) void {
 pub fn applyKeymap(app: *App) void {
     const s = current(app);
     actions.keymap.applyKeymap(app, &s.keymap, s.composerSendBehavior) catch {};
+    // [lifecycle] menu key equivalents follow the bindings (rendered at setMenus time).
+    if (app.lifecycle.menus.len > 0) @import("../../lifecycle/app_menus.zig").refresh(app);
 }
 
 /// Startup: install an in-memory store when none was loaded (seeding its
@@ -129,7 +156,7 @@ pub fn boot(app: *App, io: std.Io, override: ?zt.Appearance) void {
         return applyTheme(app);
     }
     if (override) |a| {
-        ui.theme.set(app, themeFor(current(app), a));
+        ui.theme.set(app, themeWithGlass(app, current(app), a)); // [liquid-glass] was themeFor
         return;
     }
     applyTheme(app);

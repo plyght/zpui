@@ -224,3 +224,8 @@ test "faded label eases its right-edge fade in with the overflow (zeron label_fa
     const deep = try fadeOf(60);
     try testing.expectApproxEqAbs(@as(f32, 60), deep.right_x, 0.01);
 }
+
+// [wiring] event-routing tests (ui/shell/wiring.zig).
+test {
+    _ = @import("wiring_test.zig");
+}

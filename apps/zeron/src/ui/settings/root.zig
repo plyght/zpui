@@ -26,4 +26,5 @@ pub const Section = view.Section;
 
 test {
     _ = @import("tests.zig");
+    _ = @import("liquid_glass_tests.zig"); // [liquid-glass]
 }

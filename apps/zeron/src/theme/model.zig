@@ -28,13 +28,25 @@ pub const SurfacePreference = enum {
     theme_default,
     frosted,
     opaque_,
+    /// [liquid-glass] Native Liquid Glass (macOS 26+) on chrome and floating surfaces;
+    /// the token math is the frosted theme's. Offered only where supported; elsewhere
+    /// it renders exactly like `.frosted`.
+    liquid,
 
+    /// The choices every platform offers (Settings → Appearance → Glass).
     pub const all = [_]SurfacePreference{ .theme_default, .frosted, .opaque_ };
+    /// [liquid-glass] With native Liquid Glass available (appended: indices of `all` keep).
+    pub const all_with_liquid = [_]SurfacePreference{ .theme_default, .frosted, .opaque_, .liquid };
+
+    /// [liquid-glass] The options to show.
+    pub fn offered(liquid_supported: bool) []const SurfacePreference {
+        return if (liquid_supported) &all_with_liquid else &all;
+    }
 
     pub fn resolve(self: SurfacePreference, recommended: SurfaceTreatment) SurfaceTreatment {
         return switch (self) {
             .theme_default => recommended,
-            .frosted => .frosted,
+            .frosted, .liquid => .frosted,
             .opaque_ => .opaque_,
         };
     }

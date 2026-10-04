@@ -1,0 +1,11 @@
+flowchart LR
+    subgraph Client
+        UI[Desktop UI] --> RPC[WebSocket RPC]
+    end
+    subgraph Engine
+        RPC --> Doc[(Doc store)]
+        RPC --> Runner[Agent runner]
+        Runner --> Harness[Harness CLI]
+    end
+    Harness -->|events| Runner
+    Runner -->|journal| Doc

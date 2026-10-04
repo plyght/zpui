@@ -1,0 +1,628 @@
+{
+  "kind": "Flowchart",
+  "direction": "TopDown",
+  "width": 984.28503,
+  "height": 610.07526,
+  "nodes": [
+    {
+      "id": "A1",
+      "shape": "Rectangle",
+      "x": 50.0,
+      "y": 60.5,
+      "width": 90.880005,
+      "height": 41.0,
+      "label_width": 54.88,
+      "label_height": 21.0,
+      "label_lines": [
+        "Ingress"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "A2",
+      "shape": "Rectangle",
+      "x": 167.45528,
+      "y": 60.5,
+      "width": 61.788002,
+      "height": 41.0,
+      "label_width": 25.788,
+      "label_height": 21.0,
+      "label_lines": [
+        "App"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "A3",
+      "shape": "Rectangle",
+      "x": 255.81856,
+      "y": 60.5,
+      "width": 78.01401,
+      "height": 41.0,
+      "label_width": 42.014004,
+      "label_height": 21.0,
+      "label_lines": [
+        "Cache"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "B1",
+      "shape": "Rectangle",
+      "x": 420.40784,
+      "y": 128.07527,
+      "width": 90.880005,
+      "height": 41.0,
+      "label_width": 54.88,
+      "label_height": 21.0,
+      "label_lines": [
+        "Ingress"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "B2",
+      "shape": "Rectangle",
+      "x": 626.2264,
+      "y": 128.07527,
+      "width": 61.788002,
+      "height": 41.0,
+      "label_width": 25.788,
+      "label_height": 21.0,
+      "label_lines": [
+        "App"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "B3",
+      "shape": "Rectangle",
+      "x": 730.8157,
+      "y": 60.5,
+      "width": 78.01401,
+      "height": 41.0,
+      "label_width": 42.014004,
+      "label_height": 21.0,
+      "label_lines": [
+        "Cache"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "C1",
+      "shape": "Rectangle",
+      "x": 167.45528,
+      "y": 433.5,
+      "width": 90.880005,
+      "height": 41.0,
+      "label_width": 54.88,
+      "label_height": 21.0,
+      "label_lines": [
+        "Ingress"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "C2",
+      "shape": "Rectangle",
+      "x": 284.91055,
+      "y": 433.5,
+      "width": 61.788002,
+      "height": 41.0,
+      "label_width": 25.788,
+      "label_height": 21.0,
+      "label_lines": [
+        "App"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "C3",
+      "shape": "Rectangle",
+      "x": 373.27383,
+      "y": 433.5,
+      "width": 78.01401,
+      "height": 41.0,
+      "label_width": 42.014004,
+      "label_height": 21.0,
+      "label_lines": [
+        "Cache"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "D1",
+      "shape": "Rectangle",
+      "x": 537.86316,
+      "y": 501.07526,
+      "width": 90.880005,
+      "height": 41.0,
+      "label_width": 54.88,
+      "label_height": 21.0,
+      "label_lines": [
+        "Ingress"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "D2",
+      "shape": "Rectangle",
+      "x": 743.6817,
+      "y": 501.07526,
+      "width": 61.788002,
+      "height": 41.0,
+      "label_width": 25.788,
+      "label_height": 21.0,
+      "label_lines": [
+        "App"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "D3",
+      "shape": "Rectangle",
+      "x": 848.271,
+      "y": 433.5,
+      "width": 78.01401,
+      "height": 41.0,
+      "label_width": 42.014004,
+      "label_height": 21.0,
+      "label_lines": [
+        "Cache"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "A1",
+      "to": "A2",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          140.88,
+          81.0
+        ],
+        [
+          167.45528,
+          81.0
+        ]
+      ]
+    },
+    {
+      "from": "A2",
+      "to": "A3",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          229.24329,
+          81.0
+        ],
+        [
+          255.81856,
+          81.0
+        ]
+      ]
+    },
+    {
+      "from": "B1",
+      "to": "B2",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          511.28784,
+          148.57527
+        ],
+        [
+          626.2264,
+          148.57527
+        ]
+      ]
+    },
+    {
+      "from": "B2",
+      "to": "B3",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          688.0144,
+          130.05148
+        ],
+        [
+          697.31573,
+          130.05148
+        ],
+        [
+          721.51434,
+          100.5
+        ],
+        [
+          730.8157,
+          100.5
+        ]
+      ]
+    },
+    {
+      "from": "A2",
+      "to": "B2",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          228.24329,
+          101.5
+        ],
+        [
+          228.24329,
+          114.787636
+        ],
+        [
+          627.2264,
+          114.787636
+        ],
+        [
+          627.2264,
+          128.07527
+        ]
+      ]
+    },
+    {
+      "from": "A3",
+      "to": "B3",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          333.83258,
+          81.0
+        ],
+        [
+          730.8157,
+          81.0
+        ]
+      ]
+    },
+    {
+      "from": "C1",
+      "to": "C2",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          258.33527,
+          454.0
+        ],
+        [
+          284.91055,
+          454.0
+        ]
+      ]
+    },
+    {
+      "from": "C2",
+      "to": "C3",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          346.69855,
+          454.0
+        ],
+        [
+          373.27383,
+          454.0
+        ]
+      ]
+    },
+    {
+      "from": "D1",
+      "to": "D2",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          628.74316,
+          521.57526
+        ],
+        [
+          743.6817,
+          521.57526
+        ]
+      ]
+    },
+    {
+      "from": "D2",
+      "to": "D3",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          805.4697,
+          503.05148
+        ],
+        [
+          814.77106,
+          503.05148
+        ],
+        [
+          838.96967,
+          473.5
+        ],
+        [
+          848.271,
+          473.5
+        ]
+      ]
+    },
+    {
+      "from": "C2",
+      "to": "D2",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          345.69855,
+          474.5
+        ],
+        [
+          345.69855,
+          487.78763
+        ],
+        [
+          744.6817,
+          487.78763
+        ],
+        [
+          744.6817,
+          501.07526
+        ]
+      ]
+    },
+    {
+      "from": "C3",
+      "to": "D3",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          451.28784,
+          454.0
+        ],
+        [
+          848.271,
+          454.0
+        ]
+      ]
+    },
+    {
+      "from": "B2",
+      "to": "C2",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          634.21136,
+          169.07527
+        ],
+        [
+          634.21136,
+          193.07527
+        ],
+        [
+          345.69855,
+          193.07527
+        ],
+        [
+          345.69855,
+          433.5
+        ]
+      ],
+      "label_anchor": [
+        489.95496,
+        209.27527
+      ],
+      "label_width": 80.64,
+      "label_height": 24.0,
+      "label_lines": [
+        "replicate"
+      ]
+    },
+    {
+      "from": "B3",
+      "to": "C3",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          750.17224,
+          101.5
+        ],
+        [
+          750.17224,
+          301.28763
+        ],
+        [
+          447.93127,
+          301.28763
+        ],
+        [
+          447.93127,
+          433.5
+        ]
+      ],
+      "label_anchor": [
+        599.05176,
+        317.48764
+      ],
+      "label_width": 80.64,
+      "label_height": 24.0,
+      "label_lines": [
+        "replicate"
+      ]
+    },
+    {
+      "from": "D2",
+      "to": "A2",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          744.6817,
+          501.07526
+        ],
+        [
+          744.6817,
+          491.77393
+        ],
+        [
+          752.6817,
+          491.77393
+        ],
+        [
+          752.6817,
+          375.6984
+        ],
+        [
+          225.16109,
+          375.6984
+        ],
+        [
+          225.16109,
+          101.5
+        ]
+      ],
+      "label_anchor": [
+        648.69855,
+        391.8984
+      ],
+      "label_width": 53.760002,
+      "label_height": 24.0,
+      "label_lines": [
+        "health"
+      ]
+    }
+  ],
+  "subgraphs": [
+    {
+      "index": 0,
+      "id": "RegionA",
+      "label": "Region A",
+      "nodes": [
+        "A1",
+        "A2",
+        "A3",
+        "B1",
+        "B2",
+        "B3"
+      ],
+      "x": 8.0,
+      "y": 8.0,
+      "width": 842.8297,
+      "height": 213.07527
+    },
+    {
+      "index": 1,
+      "id": "RegionB",
+      "label": "Region B",
+      "nodes": [
+        "C1",
+        "C2",
+        "C3",
+        "D1",
+        "D2",
+        "D3"
+      ],
+      "x": 125.45528,
+      "y": 381.0,
+      "width": 842.8298,
+      "height": 213.07526
+    },
+    {
+      "index": 2,
+      "id": "AZ2",
+      "label": "AZ-2",
+      "nodes": [
+        "B1",
+        "B2",
+        "B3"
+      ],
+      "x": 390.40784,
+      "y": 20.0,
+      "width": 448.42188,
+      "height": 189.07527
+    },
+    {
+      "index": 3,
+      "id": "AZ4",
+      "label": "AZ-4",
+      "nodes": [
+        "D1",
+        "D2",
+        "D3"
+      ],
+      "x": 507.86316,
+      "y": 393.0,
+      "width": 448.4219,
+      "height": 189.07526
+    },
+    {
+      "index": 4,
+      "id": "AZ1",
+      "label": "AZ-1",
+      "nodes": [
+        "A1",
+        "A2",
+        "A3"
+      ],
+      "x": 20.0,
+      "y": 20.0,
+      "width": 343.83258,
+      "height": 121.5
+    },
+    {
+      "index": 5,
+      "id": "AZ3",
+      "label": "AZ-3",
+      "nodes": [
+        "C1",
+        "C2",
+        "C3"
+      ],
+      "x": 137.45528,
+      "y": 393.0,
+      "width": 343.83258,
+      "height": 121.5
+    }
+  ]
+}

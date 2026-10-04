@@ -1,0 +1,215 @@
+{
+  "kind": "Er",
+  "direction": "TopDown",
+  "width": 347.248,
+  "height": 644.52,
+  "nodes": [
+    {
+      "id": "CUSTOMER",
+      "shape": "RoundRect",
+      "x": 173.24402,
+      "y": 8.0,
+      "width": 145.06801,
+      "height": 134.4,
+      "label_width": 94.08,
+      "label_height": 105.0,
+      "label_lines": [
+        "CUSTOMER",
+        "---",
+        "string id",
+        "string name",
+        "string email"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "LINE_ITEM",
+      "shape": "RoundRect",
+      "x": 173.24399,
+      "y": 339.43,
+      "width": 145.06801,
+      "height": 112.35,
+      "label_width": 94.08,
+      "label_height": 84.0,
+      "label_lines": [
+        "LINE_ITEM",
+        "---",
+        "int quantity",
+        "float price"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "ORDER",
+      "shape": "RoundRect",
+      "x": 160.30798,
+      "y": 184.73999,
+      "width": 170.94002,
+      "height": 112.35,
+      "label_width": 117.600006,
+      "label_height": 84.0,
+      "label_lines": [
+        "ORDER",
+        "---",
+        "string id",
+        "date ordered_at"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "PRODUCT",
+      "shape": "RoundRect",
+      "x": 177.556,
+      "y": 494.12,
+      "width": 136.44402,
+      "height": 134.4,
+      "label_width": 86.240005,
+      "label_height": 105.0,
+      "label_lines": [
+        "PRODUCT",
+        "---",
+        "string sku",
+        "string name",
+        "float price"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "SUPPLIER",
+      "shape": "RoundRect",
+      "x": 8.0,
+      "y": 8.0,
+      "width": 136.44402,
+      "height": 112.35,
+      "label_width": 86.240005,
+      "label_height": 84.0,
+      "label_lines": [
+        "SUPPLIER",
+        "---",
+        "string id",
+        "string name"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "CUSTOMER",
+      "to": "ORDER",
+      "directed": false,
+      "arrow_start": false,
+      "arrow_end": false,
+      "points": [
+        [
+          245.77803,
+          142.4
+        ],
+        [
+          245.778,
+          184.73999
+        ]
+      ],
+      "label_anchor": [
+        234.73802,
+        163.56996
+      ],
+      "label_width": 53.760002,
+      "label_height": 24.0,
+      "label_lines": [
+        "places"
+      ]
+    },
+    {
+      "from": "ORDER",
+      "to": "LINE_ITEM",
+      "directed": false,
+      "arrow_start": false,
+      "arrow_end": false,
+      "points": [
+        [
+          245.778,
+          297.09
+        ],
+        [
+          245.778,
+          339.43
+        ]
+      ],
+      "label_anchor": [
+        234.738,
+        318.26
+      ],
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "contains"
+      ]
+    },
+    {
+      "from": "LINE_ITEM",
+      "to": "PRODUCT",
+      "directed": false,
+      "arrow_start": false,
+      "arrow_end": false,
+      "points": [
+        [
+          245.778,
+          451.78
+        ],
+        [
+          245.778,
+          494.12
+        ]
+      ],
+      "label_anchor": [
+        234.738,
+        472.95
+      ],
+      "label_width": 89.6,
+      "label_height": 24.0,
+      "label_lines": [
+        "references"
+      ]
+    },
+    {
+      "from": "SUPPLIER",
+      "to": "PRODUCT",
+      "directed": false,
+      "arrow_start": false,
+      "arrow_end": false,
+      "points": [
+        [
+          92.22201,
+          120.35
+        ],
+        [
+          143.72,
+          120.35
+        ],
+        [
+          143.72,
+          494.12
+        ],
+        [
+          229.778,
+          494.12
+        ]
+      ],
+      "label_anchor": [
+        132.68001,
+        494.12
+      ],
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "supplies"
+      ]
+    }
+  ],
+  "subgraphs": []
+}

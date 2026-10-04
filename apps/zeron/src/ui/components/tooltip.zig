@@ -23,7 +23,7 @@ pub const TextTooltip = struct {
         const theme = theme_mod.get(cx);
         const card = div()
             .maxW(px(320)).px(px(9)).py(px(6)).rounded(px(6))
-            .border1().borderColor(theme.border)
+            .border1().borderColor(theme.onGlassBorder(theme.border)) // [liquid-glass]
             .bg(popover.surfaceBg(theme))
             .fontFamily(theme.font_sans)
             .textSize(px(11)).lineHeight(px(17.8)).textColor(theme.text_muted)

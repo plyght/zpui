@@ -158,6 +158,8 @@ pub const Options = struct {
     colors: ?Colors = null,
     /// Fade the top/bottom edges when the content overflows.
     edge_fade: bool = true,
+    /// Clipboard images beat text on paste (`pasted_image`; the composer).
+    paste_images: bool = false,
 };
 
 pub const TextInputEvent = union(enum) {
@@ -173,6 +175,8 @@ pub const TextInputEvent = union(enum) {
     mention_dismiss,
     /// File paths were pasted (read them with `pastedPaths()`).
     pasted_paths,
+    /// Image data was pasted (take it with `takePastedImage()`).
+    pasted_image,
     /// Plain text was pasted into `[start, end)` at `revision`.
     pasted_text: struct { start: usize, end: usize, revision: u64 },
     toggle_dictation,
@@ -239,6 +243,8 @@ pub const TextInput = struct {
     mention_open: bool = false,
     mention_has_selection: bool = false,
     pasted_paths: std.ArrayList([]u8) = .empty,
+    paste_images: bool = false,
+    pasted_image: ?zpui.platform.ClipboardImage = null,
 
     pub const Events = .{TextInputEvent};
 
@@ -267,6 +273,7 @@ pub const TextInput = struct {
             .configured_line_height = opts.line_height,
             .max_content_height = opts.max_content_height,
             .edge_fade = opts.edge_fade,
+            .paste_images = opts.paste_images,
             .line_height = opts.line_height,
             .content_height = opts.line_height,
         };
@@ -287,6 +294,13 @@ pub const TextInput = struct {
         self.ghost.deinit(self.gpa);
         self.clearPastedPaths();
         self.pasted_paths.deinit(self.gpa);
+        if (self.pasted_image) |img| self.gpa.free(img.bytes);
+    }
+
+    /// The image of the last `pasted_image` event (caller owns `bytes`).
+    pub fn takePastedImage(self: *TextInput) ?zpui.platform.ClipboardImage {
+        defer self.pasted_image = null;
+        return self.pasted_image;
     }
 
     fn clearPastedPaths(self: *TextInput) void {
@@ -577,6 +591,14 @@ pub const TextInput = struct {
 
     fn paste(self: *TextInput, _: *const A.Paste, _: *Window, cx: *Context(TextInput)) void {
         if (self.state.read_only) return;
+        // Image data beats text (the original composer's onPaste stages the
+        // images and skips the text insert).
+        if (self.paste_images) if (cx.app.platform.readClipboardImage(self.gpa)) |img| {
+            if (self.pasted_image) |old| self.gpa.free(old.bytes);
+            self.pasted_image = img;
+            cx.emit(TextInputEvent{ .pasted_image = {} });
+            return;
+        };
         const clip = readClipboard(cx.app, self.gpa) orelse return;
         defer self.gpa.free(clip);
         self.pasteText(clip, cx);

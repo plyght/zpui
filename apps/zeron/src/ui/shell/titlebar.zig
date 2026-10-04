@@ -232,7 +232,8 @@ fn onMaximize(_: *Shell, _: *const zpui.ClickEvent, window: *Window, cx: *Contex
 }
 fn onClose(_: *Shell, _: *const zpui.ClickEvent, window: *Window, cx: *Context(Shell)) void {
     cx.stopPropagation();
-    window.removeWindow();
+    // [lifecycle] through the unsaved-files gate + geometry save (lifecycle/root.zig).
+    @import("../../lifecycle/root.zig").closeWindow(cx.app, window);
 }
 
 fn preventDefault(_: *const zpui.input.MouseDownEvent, window: *Window, _: *zpui.App) void {

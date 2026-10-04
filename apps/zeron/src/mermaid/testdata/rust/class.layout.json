@@ -1,0 +1,83 @@
+{
+  "kind": "Class",
+  "direction": "TopDown",
+  "width": 156.52,
+  "height": 332.30002,
+  "nodes": [
+    {
+      "id": "Documento",
+      "shape": "Rectangle",
+      "x": 8.0,
+      "y": 8.0,
+      "width": 132.52,
+      "height": 123.100006,
+      "label_width": 101.92,
+      "label_height": 107.100006,
+      "label_lines": [
+        "Documento",
+        "---",
+        "+String path",
+        "+int revision",
+        "---",
+        "+preview()"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Preview",
+      "shape": "Rectangle",
+      "x": 23.679996,
+      "y": 225.30002,
+      "width": 101.159996,
+      "height": 91.0,
+      "label_width": 70.56,
+      "label_height": 53.550003,
+      "label_lines": [
+        "Preview",
+        "---",
+        "+render()"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "Documento",
+      "to": "Preview",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "arrow_end_kind": "ClassDependency",
+      "points": [
+        [
+          74.26,
+          131.1
+        ],
+        [
+          74.259995,
+          220.30002
+        ]
+      ],
+      "label_anchor": [
+        74.259995,
+        175.70001
+      ],
+      "label_width": 89.6,
+      "label_height": 24.0,
+      "label_lines": [
+        "representa"
+      ],
+      "start_label_anchor": [
+        74.26,
+        135.44
+      ],
+      "end_label_anchor": [
+        74.259995,
+        215.96002
+      ]
+    }
+  ],
+  "subgraphs": []
+}

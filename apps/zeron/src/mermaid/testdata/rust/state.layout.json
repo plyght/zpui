@@ -1,0 +1,272 @@
+{
+  "kind": "State",
+  "direction": "TopDown",
+  "width": 244.6582,
+  "height": 204.92,
+  "nodes": [
+    {
+      "id": "Cargando",
+      "shape": "RoundRect",
+      "x": 58.656143,
+      "y": 45.3,
+      "width": 98.0364,
+      "height": 41.159996,
+      "label_width": 63.924,
+      "label_height": 21.0,
+      "label_lines": [
+        "Cargando"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Error",
+      "shape": "RoundRect",
+      "x": 118.18387,
+      "y": 126.15999,
+      "width": 70.840004,
+      "height": 41.159996,
+      "label_width": 39.2,
+      "label_height": 21.0,
+      "label_lines": [
+        "Error"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Listo",
+      "shape": "RoundRect",
+      "x": 23.343872,
+      "y": 126.15999,
+      "width": 70.840004,
+      "height": 41.159996,
+      "label_width": 39.2,
+      "label_height": 21.0,
+      "label_lines": [
+        "Listo"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "__end_root__",
+      "shape": "DoubleCircle",
+      "x": 62.983593,
+      "y": 175.62,
+      "width": 13.3,
+      "height": 13.3,
+      "label_width": 0.0,
+      "label_height": 21.0,
+      "label_lines": [
+        ""
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "__start_root__",
+      "shape": "Circle",
+      "x": 102.32022,
+      "y": 8.0,
+      "width": 13.3,
+      "height": 13.3,
+      "label_width": 0.0,
+      "label_height": 21.0,
+      "label_lines": [
+        ""
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "__start_root__",
+      "to": "Cargando",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          108.82964,
+          21.298513
+        ],
+        [
+          108.82964,
+          27.298513
+        ],
+        [
+          107.67435,
+          39.3
+        ],
+        [
+          107.67435,
+          45.3
+        ]
+      ]
+    },
+    {
+      "from": "Cargando",
+      "to": "Listo",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          91.67435,
+          86.45999
+        ],
+        [
+          91.67435,
+          94.85999
+        ],
+        [
+          74.76387,
+          117.75999
+        ],
+        [
+          74.76387,
+          126.15999
+        ]
+      ],
+      "label_anchor": [
+        83.21911,
+        106.30999
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "éxito"
+      ]
+    },
+    {
+      "from": "Cargando",
+      "to": "Error",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          123.67435,
+          86.45999
+        ],
+        [
+          123.67435,
+          94.85999
+        ],
+        [
+          153.60388,
+          117.75999
+        ],
+        [
+          153.60388,
+          126.15999
+        ]
+      ],
+      "label_anchor": [
+        138.6391,
+        106.30999
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "fallo"
+      ]
+    },
+    {
+      "from": "Error",
+      "to": "Cargando",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          189.02388,
+          146.73999
+        ],
+        [
+          228.6582,
+          146.73999
+        ],
+        [
+          228.6582,
+          65.88
+        ],
+        [
+          156.69254,
+          65.88
+        ]
+      ],
+      "label_anchor": [
+        188.8582,
+        90.144325
+      ],
+      "label_width": 89.6,
+      "label_height": 24.0,
+      "label_lines": [
+        "reintentar"
+      ]
+    },
+    {
+      "from": "Listo",
+      "to": "Cargando",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          23.343872,
+          146.73999
+        ],
+        [
+          8.0,
+          146.73999
+        ],
+        [
+          8.0,
+          65.88
+        ],
+        [
+          58.656143,
+          65.88
+        ]
+      ],
+      "label_anchor": [
+        29.880001,
+        88.653854
+      ],
+      "label_width": 53.760002,
+      "label_height": 24.0,
+      "label_lines": [
+        "editar"
+      ]
+    },
+    {
+      "from": "Listo",
+      "to": "__end_root__",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          58.763874,
+          167.31998
+        ],
+        [
+          58.763874,
+          173.31998
+        ],
+        [
+          68.30859,
+          169.75333
+        ],
+        [
+          68.30859,
+          175.75333
+        ]
+      ]
+    }
+  ],
+  "subgraphs": []
+}

@@ -326,7 +326,7 @@ pub const Palette = struct {
             .captureKeyDown(cx.listener(Palette.onKey))
             .onMouseDownOut(cx.listener(Palette.onOutside))
             .w(px(@min(560, vp.width - 32))).flex().flexCol().rounded(px(16))
-            .border1().borderColor(theme.border)
+            .border1().borderColor(theme.onGlassBorder(theme.border)) // [liquid-glass]
             .bg(ui.popover.surfaceBg(theme)).textColor(theme.text)
             .fontFamily(theme.font_sans).textSize(ui.rems(13))
             .child(div().minH(px(44)).flexNone().px(px(16)).py(px(8)).flex().itemsCenter().gap(px(10))

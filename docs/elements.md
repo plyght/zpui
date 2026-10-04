@@ -381,6 +381,88 @@ deltas from wheels. `list` coalesces same-direction deltas per frame (20 px per 
 gpui). gpui implements no kinetic/momentum scrolling for desktop Linux (its momentum is only
 for touch-screen pans), so neither does zpui; use `animation.Spring`/`Tween` for glides.
 
+## 5b. Native child views and the overlay plane
+
+Platform views created by the app (macOS: any `NSView*` — a `WKWebView`, an
+`NSGlassEffectView`, …) can live inside a zpui window (zui fork's native-child
+compositing; contract in `src/platform/platform.zig`, `NativeViewId`; macOS backend in
+`src/platform/mac/native_views.zig`). Only macOS implements it; elsewhere
+`window.platform_window.supportsNativeViews()` is false.
+
+```zig
+const id = try window.attachNativeView(ns_view, .{});                 // .z = .above_content | .below_content, .pass_through_mouse
+div().relative().flex1().child(zpui.nativeView(id).absolute().inset0()) // placed at its bounds every frame it is painted
+zpui.nativeViewWith(id, .{ .corner_radius = 12 })                      // rounded (glass shapes)
+window.focusNativeView(id);  window.focusNativeView(null);            // keyboard to the view / back to zpui
+window.detachNativeView(id);                                           // removes and releases it
+```
+
+* Placements (bounds, clip = bounds ∩ content mask, corner radius) are recorded in
+  paint and applied right before the frame is presented; a view not painted in a frame
+  is hidden. They follow cached-view reuse like scene primitives.
+* Z-order inside the window's content view: `below_content` children < zpui surface <
+  `above_content` children < **overlay plane** (a second, transparent Metal layer) <
+  `above_overlay` children < **top plane** (created on demand; §5c).
+* The window draws with `drawLayered`: deferred draws (menus, popovers), drag previews
+  and tooltips go to the overlay plane automatically, so they appear above native
+  content; any element can paint there too between `window.pushOverlayPlane()` /
+  `popOverlayPlane()`. The overlay only takes the mouse while it holds deferred draws
+  or a drag.
+
+## 5c. Native Liquid Glass (macOS 26+)
+
+`zpui.liquidGlass` puts a real `NSGlassEffectView` behind an element; there is no
+shader imitation. Implementation: `src/elements/liquid_glass.zig` (elements),
+`src/window/liquid_glass.zig` (per-window view pool), `src/platform/mac/native_views.zig`
+(AppKit). User guide and limitations: `docs/LIQUID_GLASS.md`.
+
+```zig
+zpui.liquidGlass("sidebar-glass", .{ .shape = .{ .rounded = 16 } }, sidebar)      // glass at sidebar's bounds
+zpui.liquidGlass("send", .{ .shape = .capsule, .style = .clear, .tint = accent, .interactive = true }, button)
+zpui.liquidGlassGroup("tools", .{ .spacing = 12 }, row_of_glass_buttons)          // NSGlassEffectContainerView: shapes merge
+zpui.overlayPlane(on, titlebar_buttons)        // plain content that overlaps base glass
+zpui.platformSupportsLiquidGlass(cx)           // false on Linux/Windows/macOS < 26: offer the option at all?
+zpui.liquid_glass.paintGlass(window, cx, "name", bounds, opts, child)  // for custom wrappers; false = paint a fallback
+```
+
+How the layers stack (window content view, back to front):
+
+    [main Metal surface]  [base glass]  [overlay plane]  [floating glass]  [top plane]
+
+* The glass is a native child **above** the main surface, mouse pass-through. It
+  therefore samples and refracts everything zpui painted underneath it (window
+  background, transcript, wallpaper), like Apple's own glass over app content.
+* The element's child is the glass's foreground (text, icons, hover washes). It is
+  painted between `pushOverlayPlane`/`popOverlayPlane`, so it lands on the transparent
+  overlay Metal layer above the glass, in the same CA transaction as the glass geometry.
+  Hit testing is unaffected (zpui hitboxes; the glass never takes the mouse).
+* **Tiers.** Glass painted by the window's floating pass (deferred menus / popovers,
+  tooltips, drag previews) or inside a floating glass's foreground is *floating*: an
+  `.above_overlay` child with its foreground on the **top plane**
+  (`Window.pushTopPlane`, `OverlayRange.plane = .top`). A menu's glass thus covers the
+  sidebar's overlay-plane text. Everything else is *base* glass (an `.above_content`
+  child, foreground on the overlay plane).
+* **Rule of thumb:** anything zpui paints *over* a base-glass region must be on the
+  overlay plane too — either inside the glass element or wrapped in
+  `zpui.overlayPlane(true, ...)` — or it is hidden under the glass. Main-surface content
+  is what the glass sees, not what sits on it.
+* Shapes: `.rounded(r)` (uniform radius, the glass's own continuous corners) and
+  `.capsule` (half the short side, per frame). Concave / per-corner shapes are not
+  available natively; compose them with a `liquidGlassGroup`.
+* Style `.regular` / `.clear` (`NSGlassEffectView.Style`), optional `tint`
+  (`tintColor`), `interactive` (`effectIsInteractive`, sent only when AppKit has it).
+* Views are keyed by the element's global id (repeated ids under one parent are told
+  apart by paint order), attached on first paint, reconfigured only when options change,
+  hidden in frames that do not paint them and detached after
+  `liquid_glass_mod.keep_idle_presents` (120) presents, so menus reuse their glass.
+  Group members are subviews of the container's content view.
+* Without native glass the element simply paints its child (no planes, no views);
+  apps style that fallback (zeron keeps its frost). Support is
+  `Platform.supportsLiquidGlass` (macOS: `NSClassFromString("NSGlassEffectView")` and
+  `isOperatingSystemAtLeastVersion: 26`); the headless test platform pretends yes
+  (`TestPlatform.liquid_glass_supported`) and records attach options / configs
+  (`TestWindow.glass_attach`, `glass_config`, `glassCount()`).
+
 ## 6. State that is not in your view
 
 * **Element state** (for elements you write): `window.elementState(S, gid)` returns a
@@ -489,5 +571,5 @@ runnables without parking (livelock). Engine-backed zeron harnesses pass
 * Element phases cannot fail (OOM panics, like the core's fire-and-forget effects).
 * Not ported yet: prompts, inspector, a11y,
   external file drags (they move the mouse but carry no payload), `anchor_scroll`,
-  window-scoped `observe_in`/`spawn_in` (use the entity variants), presentation callbacks
-  and the macOS native-view overlay plane.
+  window-scoped `observe_in`/`spawn_in` (use the entity variants) and presentation callbacks
+  (native views use paint-recorded placements instead, §5b).

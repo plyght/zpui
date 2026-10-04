@@ -19,6 +19,8 @@
 //!   fixture overrides:      --gate ready|loading|sign_in|org_gate|failed:<msg>, --splash,
 //!                           --select <chat-id|none>, --compact, --detailed
 //!   --backend x11|wayland   force a Linux backend
+//!   ZERON_LIQUID_GLASS=1    force Settings → Appearance → Glass → Liquid Glass for this
+//!                           run (macOS 26+; frosted elsewhere; docs/LIQUID_GLASS.md)
 //!   --smoke-frames <n>      CI smoke test (also ZERON_SMOKE_FRAMES): render n frames,
 //!                           capture the window to zig-out/zeron-<os>[-light].png and
 //!                           exit 0, or exit 1 after a FAIL: line (see smoke.zig)
@@ -37,10 +39,15 @@ const fixtures_mod = @import("ui/shell/fixtures.zig");
 const shell_mod = @import("ui/shell/shell.zig");
 const settings_ui = @import("ui/settings/root.zig");
 const smoke = @import("smoke.zig");
+const lifecycle = @import("lifecycle/root.zig"); // [lifecycle] menus, quit/reopen, deep links, updates, logs
 const engine_bin = @import("engine_bin.zig");
 
 const App = zpui.App;
 const log = std.log.scoped(.zeron);
+
+// [lifecycle] std.log mirrors into {data_dir}/logs/zeron-headed.log; panics land there too.
+pub const std_options: std.Options = .{ .logFn = lifecycle.log_file.logFn, .log_level = .debug };
+pub const panic = std.debug.FullPanic(lifecycle.log_file.panicFn);
 
 const is_mac = builtin.os.tag == .macos;
 const is_linux = builtin.os.tag == .linux;
@@ -61,6 +68,10 @@ const Launch = struct {
     compact_override: ?bool = null,
     zeron_bin: ?[]const u8 = null,
     data_dir: ?[]u8 = null,
+    /// [lifecycle] `zeron <url>` (Rust `Cli.open_url`): delivered like an OS open-URL event.
+    open_url: ?[]const u8 = null,
+    /// [lifecycle] `--size` given: keep it instead of the remembered window geometry.
+    size_set: bool = false,
     // Owned by onLaunch, released in main after run returns.
     state: ?zpui.Entity(model.AppState) = null,
     fixtures: ?*fixtures_mod.Fixtures = null,
@@ -78,7 +89,6 @@ fn registerFonts(app: *App) void {
 }
 
 fn onLaunch(l: *Launch, app: *App) void {
-    app.quit_when_last_window_closes = true;
     registerFonts(app);
     actions.registerAll(app) catch |err| log.err("actions: {t}", .{err});
 
@@ -124,6 +134,14 @@ fn onLaunch(l: *Launch, app: *App) void {
         .surface = .frosted,
     });
     ui.theme.install(app, theme) catch @panic("theme");
+    // [liquid-glass] ZERON_LIQUID_GLASS=1: Liquid Glass for this run (not persisted);
+    // unsupported systems (Linux, macOS < 26) keep the frosted look. The line below is
+    // what CI greps to prove the fallback path ran.
+    if (l.environ.get("ZERON_LIQUID_GLASS")) |v| if (v.len > 0 and !std.mem.eql(u8, v, "0")) {
+        settings_ui.store.force_liquid = true;
+        const native = zpui.platformSupportsLiquidGlass(app);
+        std.debug.print("zeron: liquid glass forced: {s}\n", .{if (native) "native (NSGlassEffectView)" else "unsupported, frosted fallback"});
+    };
     // Settings: theme from ui-settings.json (or an in-memory store in fixture mode).
     settings_ui.store.boot(app, l.io, if (l.fixtures != null) appearance else l.appearance);
     prefs_mod.install(app, prefs) catch @panic("prefs");
@@ -141,8 +159,45 @@ fn onLaunch(l: *Launch, app: *App) void {
     l.state = state;
     if (l.fixtures) |f| fixtures_mod.applyToState(f, l.io, app, state);
 
+    // [lifecycle] menus, quit/close gate, reopen, deep links, banners + sounds, updater.
+    lifecycle.install(app, .{
+        .gpa = l.gpa,
+        .io = l.io,
+        .environ = l.environ,
+        .state = state,
+        .data_dir = l.data_dir,
+        .open_ctx = l,
+        .open_main = openMainWindow,
+        .persist_geometry = l.fixtures == null and !l.size_set,
+    }) catch |err| log.err("lifecycle: {t}", .{err});
+    const window = lifecycle.openMainWindow(app) orelse {
+        app.quit();
+        return;
+    };
+    if (l.open_url) |url| zpui.lifecycle.openUrls(app, &.{url});
+    // --- smoke test (CI): render N frames, capture, exit (smoke.zig) ---
+    if (l.smoke_frames) |n|
+        smoke.start(l.gpa, l.io, window, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT"), .browser_url = l.environ.get("ZERON_SMOKE_BROWSER_URL") });
+    if (l.max_frames) |n| {
+        const Quit = struct {
+            left: u64,
+            fn tick(self: *const @This(), win: *zpui.Window, a: *App) void {
+                if (self.left == 0) a.quit() else win.onNextFrame(@This(){ .left = self.left - 1 }, tick);
+            }
+        };
+        window.onNextFrame(Quit{ .left = n }, Quit.tick);
+    }
+}
+
+/// [lifecycle] Opens the main window (launch, and again on a Dock reopen after ⌘W).
+/// `restored` = remembered geometry fitted to the current displays (lifecycle/window_state.zig).
+fn openMainWindow(ctx: *anyopaque, app: *App, restored: ?lifecycle.window_state.Restored) ?zpui.WindowId {
+    const l: *Launch = @ptrCast(@alignCast(ctx));
+    const state = l.state orelse return null;
+    const theme = ui.theme.get(app);
     const options: zpui.WindowOptions = .{
-        .bounds = .{ .origin = .{ .x = 0, .y = 0 }, .size = l.size },
+        .bounds = if (restored) |r| r.bounds else .{ .origin = .{ .x = 0, .y = 0 }, .size = l.size },
+        .display_id = if (restored) |r| r.display_id else null,
         .titlebar = .{
             .title = if (builtin.os.tag == .windows) "Zeron" else "",
             .appears_transparent = true,
@@ -159,22 +214,11 @@ fn onLaunch(l: *Launch, app: *App) void {
     };
     const handle = app.openWindow(options, shell_mod.Shell, shell_mod.Shell.init, .{ state, l.fixtures, l.server_decorations }) catch |err| {
         log.err("openWindow: {t}", .{err});
-        app.quit();
-        return;
+        return null;
     };
-    if (handle.window(app)) |w| w.setRemSize(16);
-    // --- smoke test (CI): render N frames, capture, exit (smoke.zig) ---
-    if (l.smoke_frames) |n| if (handle.window(app)) |w|
-        smoke.start(l.gpa, l.io, w, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT") });
-    if (l.max_frames) |n| {
-        const Quit = struct {
-            left: u64,
-            fn tick(self: *const @This(), win: *zpui.Window, a: *App) void {
-                if (self.left == 0) a.quit() else win.onNextFrame(@This(){ .left = self.left - 1 }, tick);
-            }
-        };
-        handle.window(app).?.onNextFrame(Quit{ .left = n }, Quit.tick);
-    }
+    const w = handle.window(app) orelse return null;
+    w.setRemSize(16);
+    return handle.id;
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -187,6 +231,13 @@ pub fn main(init: std.process.Init) !void {
     if (argv.len > 1 and std.mem.eql(u8, argv[1], "headless")) {
         std.debug.print("zeron: this is the zeron desktop client, not the engine; point ZERON_BIN at the engine binary\n", .{});
         std.process.exit(2);
+    }
+    // [lifecycle] `zeron --version` (the self-updater verifies staged binaries with it).
+    if (argv.len > 1 and (std.mem.eql(u8, argv[1], "--version") or std.mem.eql(u8, argv[1], "-V"))) {
+        var out_buf: [64]u8 = undefined;
+        const line = std.fmt.bufPrint(&out_buf, "zeron {s}\n", .{lifecycle.build_info.version}) catch unreachable;
+        _ = std.c.write(1, line.ptr, line.len);
+        return;
     }
     var launch: Launch = .{ .gpa = gpa, .io = init.io, .environ = init.environ_map };
     var backend: if (is_linux) ?zpui.linux_platform.BackendKind else ?void = null;
@@ -208,6 +259,7 @@ pub fn main(init: std.process.Init) !void {
             var it = std.mem.splitScalar(u8, argv[i], 'x');
             launch.size.width = try std.fmt.parseFloat(f32, it.next() orelse "1320");
             launch.size.height = try std.fmt.parseFloat(f32, it.next() orelse "880");
+            launch.size_set = true;
         } else if (std.mem.eql(u8, a, "--light")) {
             launch.appearance = .light;
         } else if (std.mem.eql(u8, a, "--dark")) {
@@ -231,6 +283,8 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, a, "--backend") and i + 1 < argv.len) {
             i += 1;
             if (is_linux) backend = std.meta.stringToEnum(zpui.linux_platform.BackendKind, argv[i]);
+        } else if (a.len > 0 and a[0] != '-' and launch.open_url == null) {
+            launch.open_url = a; // [lifecycle] positional URL (`Exec=zeron %u`)
         }
     }
     if (launch.fixtures_dir == null) launch.fixtures_dir = init.environ_map.get("ZERON_FIXTURES");
@@ -244,6 +298,13 @@ pub fn main(init: std.process.Init) !void {
         init.environ_map.get("XDG_CURRENT_DESKTOP") == null and init.environ_map.get("XDG_SESSION_TYPE") == null)
         launch.server_decorations = true;
     resolveZeronBin(&launch, arena);
+    // [lifecycle] Rust `open_log_file("headed")`: {data_dir}/logs, rotated per launch.
+    lifecycle.log_file.setLevelFromEnv(init.environ_map.get("ZERON_LOG"));
+    if (launch.fixtures_dir == null) if (model.settings.dataDir(arena, init.environ_map, init.io)) |dir| {
+        const logs = try std.fs.path.join(arena, &.{ dir, "logs" });
+        if (lifecycle.log_file.open(logs, "headed") == null) log.warn("cannot open a log file in {s}", .{logs});
+    } else |_| {};
+    log.info("zeron {s} starting", .{lifecycle.build_info.version});
 
     const plat = if (is_linux)
         try zpui.linux_platform.create(gpa, .{ .io = init.io, .backend = backend })
@@ -267,6 +328,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test {
+    _ = @import("lifecycle/root.zig");
     _ = @import("smoke.zig");
     _ = @import("engine_bin.zig");
     _ = @import("ui/shell/shell_test.zig");

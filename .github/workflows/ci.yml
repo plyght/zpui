@@ -118,11 +118,67 @@ jobs:
       - name: Smoke test zeron, light (60 frames, reference fixtures)
         timeout-minutes: 5
         run: ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --light
+      # Browser pane: a WKWebView native child view (zpui native views + overlay plane)
+      # loading a local page. http, not file://: the browser only navigates http(s)
+      # (zeron's policy), so the page is served from a throwaway local server.
+      - name: Smoke test zeron browser pane (WKWebView on a local page)
+        timeout-minutes: 5
+        run: |
+          mkdir -p "$RUNNER_TEMP/site"
+          printf '%s' '<!doctype html><title>zeron smoke</title><body style="margin:0;padding:32px;font:24px -apple-system,sans-serif;background:linear-gradient(135deg,#fde68a,#93c5fd)"><h1>Hello from WKWebView</h1><p>Rendered as a native child view of the zpui window.</p></body>' > "$RUNNER_TEMP/site/index.html"
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory "$RUNNER_TEMP/site" > "$RUNNER_TEMP/http.log" 2>&1 &
+          sleep 1
+          ZERON_SMOKE_BROWSER_URL=http://127.0.0.1:8765/ ZERON_SMOKE_OUT=zig-out/zeron-macos-browser.png \
+            ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
+      # [liquid-glass] macOS 15 has no NSGlassEffectView: forcing the Liquid Glass setting
+      # must take the frosted fallback (no native glass views) and still render.
+      - name: Smoke test zeron, Liquid Glass forced → frosted fallback (macOS 15)
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          ZERON_LIQUID_GLASS=1 ZERON_SMOKE_OUT=zig-out/zeron-macos-liquid-fallback.png \
+            ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --dark 2>&1 | tee "$RUNNER_TEMP/liquid.log"
+          grep -q "liquid glass forced: unsupported, frosted fallback" "$RUNNER_TEMP/liquid.log" \
+            || { echo "FAIL: expected the frosted fallback on macOS 15"; exit 1; }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: zeron-macos
           path: zig-out/zeron-macos*.png
+          if-no-files-found: warn
+
+  # [liquid-glass] macOS 26 (Tahoe): native NSGlassEffectView. Intel image (Apple
+  # Silicon runners expose no Metal device): build, the Liquid Glass unit tests, and a
+  # smoke run with the setting forced that must report native glass. The window
+  # capture (zig-out/zeron-macos26-liquid.png) is uploaded for a visual check.
+  zeron-liquid-glass-macos26:
+    runs-on: macos-26-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: macOS version
+        run: sw_vers
+      - name: Liquid Glass unit tests (zpui)
+        run: zig build zpui-test -Dtest-filter=liquid -Dtest-filter=overlayPlane -Dtest-filter="native views" --summary all
+      - name: Build zeron (ReleaseSafe)
+        run: zig build zeron -Doptimize=ReleaseSafe --summary all
+      - name: Smoke test zeron with native Liquid Glass (dark + light)
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          for mode in dark light; do
+            ZERON_LIQUID_GLASS=1 ZERON_SMOKE_OUT=zig-out/zeron-macos26-liquid-$mode.png \
+              ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --$mode 2>&1 | tee "$RUNNER_TEMP/liquid-$mode.log"
+            grep -q "liquid glass forced: native (NSGlassEffectView)" "$RUNNER_TEMP/liquid-$mode.log" \
+              || { echo "FAIL: macOS 26 did not report native Liquid Glass"; exit 1; }
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zeron-macos26-liquid-glass
+          path: zig-out/zeron-macos26*.png
           if-no-files-found: warn
 
   # Same smoke test on Linux: Xvfb (X11, server decorations) + Vulkan lavapipe.

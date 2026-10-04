@@ -180,6 +180,8 @@ pub const FileEditor = struct {
 
     context_menu: ?ContextMenu = null,
     pending_focus: bool = false,
+    /// [wiring] A transcript link's `:line[:col]`, applied once the document loads.
+    pending_goto: ?struct { line: usize, col: ?usize } = null,
     window_id: zpui.WindowId = undefined,
 
     /// Row layouts computed outside a draw (listeners, IME queries).
@@ -328,6 +330,15 @@ pub const FileEditor = struct {
         self.afterMove(cx);
     }
 
+    /// [wiring] `goToLine` now if loaded, else as soon as the read lands.
+    pub fn goToLineWhenLoaded(self: *FileEditor, line_1: usize, col_1: ?usize, cx: *Context(FileEditor)) void {
+        if (self.phase == .loading) {
+            self.pending_goto = .{ .line = line_1, .col = col_1 };
+            return;
+        }
+        self.goToLine(line_1, col_1, cx);
+    }
+
     /// Select a byte range and scroll it into view.
     pub fn selectRange(self: *FileEditor, start: usize, end: usize, cx: *Context(FileEditor)) void {
         self.core.setSelection(.{ .anchor = start, .head = end });
@@ -417,6 +428,10 @@ pub const FileEditor = struct {
         self.highlightable = hl.supported(self.path, null) and self.core.len() <= hl.max_source_bytes;
         self.scheduleHighlight(0, cx);
         if (self.find_open) self.core.search.computed_for = null;
+        if (!silent) if (self.pending_goto) |g| {
+            self.pending_goto = null;
+            self.goToLine(g.line, g.col, cx);
+        };
         cx.emit(StateChanged{});
         cx.notify();
     }

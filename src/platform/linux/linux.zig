@@ -22,6 +22,9 @@ pub const presenter = @import("presenter.zig");
 pub const wayland = @import("wayland.zig");
 pub const x11 = @import("x11.zig");
 pub const appearance = @import("appearance.zig");
+pub const dbus = @import("dbus.zig");
+pub const file_dialog = @import("file_dialog.zig");
+pub const notifications = @import("notifications.zig");
 const text_mod = @import("../../text/text.zig");
 
 pub const BackendKind = enum { wayland, x11 };
@@ -53,6 +56,8 @@ pub const LinuxPlatform = struct {
     /// System light/dark (settings portal / gsettings; light when unknown).
     appearance: platform.WindowAppearance = .light,
     appearance_watcher: ?*appearance.Watcher = null,
+    /// Desktop banners (notifications.zig), created on the first `postNotification`.
+    notifier: ?*notifications.Notifier = null,
 
     /// Ends `run` after the current loop iteration.
     pub fn requestQuit(self: *LinuxPlatform) void {
@@ -81,7 +86,22 @@ pub const LinuxPlatform = struct {
         .revealPath = revealPath,
         .prefersReducedMotion = prefersReducedMotion,
         .deinit = deinitFn,
+        .readClipboardImage = readClipboardImage,
+        .promptForPaths = promptForPaths,
+        .postNotification = postNotification,
+        .playSound = playSound,
     };
+
+    fn postNotification(ptr: *anyopaque, n: platform.Notification) void {
+        const self = cast(ptr);
+        if (self.notifier == null) {
+            self.notifier = notifications.Notifier.create(self.gpa, self.disp.io, self.disp.dispatcher(), &self.callbacks, .fromProcess()) catch return;
+        }
+        self.notifier.?.post(n);
+    }
+    fn playSound(ptr: *anyopaque, bytes: []const u8) void {
+        notifications.playSound(cast(ptr).gpa, bytes);
+    }
 
     fn cast(ptr: *anyopaque) *LinuxPlatform {
         return @ptrCast(@alignCast(ptr));
@@ -145,6 +165,15 @@ pub const LinuxPlatform = struct {
             inline else => |b| b.readClipboard(gpa),
         };
     }
+    fn readClipboardImage(ptr: *anyopaque, gpa: Allocator) ?platform.ClipboardImage {
+        return switch (cast(ptr).backend) {
+            inline else => |b| b.readClipboardImage(gpa),
+        };
+    }
+    fn promptForPaths(ptr: *anyopaque, options: platform.PathPromptOptions, done: platform.PathsCallback) void {
+        const self = cast(ptr);
+        file_dialog.prompt(self.gpa, self.disp.dispatcher(), options, done);
+    }
     fn openUrl(ptr: *anyopaque, url: []const u8) void {
         spawnDetached(cast(ptr).gpa, &.{ "xdg-open", url });
     }
@@ -158,6 +187,7 @@ pub const LinuxPlatform = struct {
     fn deinitFn(ptr: *anyopaque) void {
         const self = cast(ptr);
         if (self.appearance_watcher) |w| w.destroy();
+        if (self.notifier) |n| n.destroy();
         switch (self.backend) {
             inline else => |b| b.destroy(),
         }

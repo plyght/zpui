@@ -20,9 +20,19 @@
 //! createChat` with the resolved config, select the chat and send once the
 //! selected-chat stores exist.
 //!
-//! Not ported (yet): attachment upload (paste/drop stage chips; sending
-//! them needs the upload pipeline), file mention chips + provider slash
-//! commands / skills (engine catalogs), the question wizard, dictation
+//! Attachments (Rust `attachments.rs` + composer staging): the paperclip
+//! opens the native picker, pastes of image data / copied files and drops on
+//! the conversation stage images per draft (BMP → PNG, 24 MB cap) as 56px
+//! thumbnails (click: lightbox, ×: remove). A send uploads them first —
+//! `UploadChunk`/`UploadCommit` to the local engine with `pending://` refs and
+//! transfer escorts when every engine involved is ≥ 0.2.12 (queued flow),
+//! else to the chat's host device with the committed paths — and the refs
+//! ride the prompt (`with_attachments`) and the Run request's `attachments`.
+//! Stop during the upload cancels it and hands the draft back.
+//!
+//! The question wizard, todo tray, queue drag / leased edit, `@` file
+//! mentions and provider slash commands / skills live in `extras.zig`.
+//! Not ported (yet): mention chip projection in the input, dictation
 //! capture (the mic button morphs and emits `dictation_toggled`), the dock
 //! choreography between canvas and thread positions.
 
@@ -38,6 +48,10 @@ const chrome = @import("chrome.zig");
 const rc = @import("run_config.zig");
 const slash = @import("slash.zig");
 const picker_mod = @import("model_picker.zig");
+const mentions = @import("mentions.zig"); // [wiring]
+const extras = @import("extras.zig"); // [wiring] wizard, todo tray, queue drag/lease, @ mentions, provider commands
+const media = @import("zeron_media");
+const att = model.attachments;
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -69,11 +83,51 @@ pub const ComposerEvent = union(enum) {
     dictation_toggled: bool,
 };
 
-pub const Attachment = struct {
-    path: []u8,
+/// An in-flight send whose attachments are uploading (Rust `send_task`).
+const Upload = struct {
+    is_new: bool,
+    queue: bool,
+    queued_flow: bool,
+    chat_id: [36]u8,
+    chat_id_len: usize,
+    message_id: [36]u8,
+    /// The draft key the send came from (restored on failure).
+    key: []u8,
+    /// The user's own words (restored on failure).
+    typed: []u8,
+    staged: std.ArrayList(att.Staged),
+    upload_ids: [][36]u8,
+    echo_paths: [][]u8,
+    /// Device the transcript reads attachments from (chat / target device).
+    device_id: []u8,
+    host_device_id: ?[]u8,
+    local_device_id: ?[]u8,
+    progress: *att.Progress,
 
-    pub fn name(self: Attachment) []const u8 {
-        return std.fs.path.basename(self.path);
+    fn chatId(u: *const Upload) []const u8 {
+        return u.chat_id[0..u.chat_id_len];
+    }
+};
+
+const StageBatch = struct { key: []u8, outcomes: []att.StageOutcome };
+
+/// A stage job tagged with the draft it belongs to.
+const StageForKey = struct {
+    inner: att.StageJob,
+    key: []u8,
+
+    pub fn run(self: *StageForKey) StageBatch {
+        const k = self.key;
+        self.key = &.{};
+        return .{ .key = k, .outcomes = self.inner.run() };
+    }
+    pub fn discard(self: *StageForKey, r: StageBatch) void {
+        self.inner.gpa.free(r.key);
+        att.freeOutcomes(self.inner.gpa, r.outcomes);
+    }
+    pub fn deinit(self: *StageForKey) void {
+        self.inner.gpa.free(self.key);
+        self.inner.deinit();
     }
 };
 
@@ -84,6 +138,9 @@ const PendingNew = struct {
     cwd: []u8,
     /// A "New worktree" plan: the host materializes it when the run drains.
     worktree: ?struct { repo_path: []u8, base: []u8, space_id: ?[]u8 } = null,
+    /// Attachment refs for the Run request, and transfer escorts (owned).
+    attachments: [][]u8 = &.{},
+    transfers: []protocol.AttachmentTransfer = &.{},
 };
 
 pub const ComposerView = struct {
@@ -113,7 +170,14 @@ pub const ComposerView = struct {
     available_width: ?f32 = null,
     failure: std.ArrayList(u8) = .empty,
     failure_warning: bool = false,
-    attachments: std.ArrayList(Attachment) = .empty,
+    /// Staged images per draft key ("" = the new-thread canvas).
+    staged_by_key: std.StringHashMapUnmanaged(std.ArrayList(att.Staged)) = .empty,
+    /// The full-size preview (lightbox) of a staged image.
+    lightbox: ?Entity(media.Lightbox) = null,
+    lightbox_sub: ?zpui.Subscription = null,
+    /// A send waiting on its attachment upload.
+    upload: ?Upload = null,
+    upload_task: zpui.Task(att.UploadResult) = .none,
     dictation_available: bool = false,
     dictating: bool = false,
     sending: bool = false,
@@ -132,6 +196,8 @@ pub const ComposerView = struct {
     git_row: ?zpui.AnyView = null,
     /// The new session's checkout plan (strings owned by the host).
     checkout_plan: ?model.view.CheckoutPlan = null,
+    /// [wiring] Run-time surfaces + completions state (extras.zig).
+    ext: extras.Extras = .{},
 
     pub const Events = .{ComposerEvent};
 
@@ -145,6 +211,7 @@ pub const ComposerView = struct {
             .line_height = m.input_line_height,
             .max_content_height = m.textarea_max - m.textarea_pad_v,
             .colors = input_mod.Colors.fromTheme(&theme),
+            .paste_images = true,
         }});
         const picker = try cx.newWith(ModelPicker, ModelPicker.init, .{state});
         var self: ComposerView = .{
@@ -165,18 +232,28 @@ pub const ComposerView = struct {
         try self.subs.add(cx.gpa(), try cx.observe(st.catalog, ComposerView.onObserved(model.CatalogStore)));
         try self.subs.add(cx.gpa(), try cx.observe(st.engine, ComposerView.onObserved(model.EngineState)));
         self.syncKey(cx);
+        extras.onStoresChanged(&self, cx); // [wiring] the selected chat's transcript (question wizard)
         return self;
     }
 
     pub fn deinit(self: *ComposerView, cx: *App) void {
+        self.ext.deinit(self.gpa, cx); // [wiring]
         self.subs.deinit(self.gpa);
         self.settle_task.cancel();
         self.input.release(cx);
         self.picker.release(cx);
         self.state.release(cx);
         self.failure.deinit(self.gpa);
-        for (self.attachments.items) |a| self.gpa.free(a.path);
-        self.attachments.deinit(self.gpa);
+        var sit = self.staged_by_key.iterator();
+        while (sit.next()) |e| {
+            for (e.value_ptr.items) |*st| st.deinit(self.gpa, cx);
+            e.value_ptr.deinit(self.gpa);
+            self.gpa.free(e.key_ptr.*);
+        }
+        self.staged_by_key.deinit(self.gpa);
+        self.closeLightbox(cx);
+        self.upload_task.cancel();
+        if (self.upload) |*u| self.freeUpload(u, cx);
         if (self.pending_new) |p| self.freePending(p);
         var it = self.drafts.iterator();
         while (it.next()) |e| {
@@ -190,6 +267,13 @@ pub const ComposerView = struct {
     fn freePending(self: *ComposerView, p: PendingNew) void {
         self.gpa.free(p.prompt);
         self.gpa.free(p.cwd);
+        for (p.attachments) |a| self.gpa.free(a);
+        self.gpa.free(p.attachments);
+        for (p.transfers) |t| {
+            self.gpa.free(t.uploadId);
+            self.gpa.free(t.fileName);
+        }
+        self.gpa.free(p.transfers);
         if (p.worktree) |w| {
             self.gpa.free(w.repo_path);
             self.gpa.free(w.base);
@@ -237,17 +321,189 @@ pub const ComposerView = struct {
         window.focus(self.input.read(cx).focus);
     }
 
-    /// Stage dropped / pasted file paths as attachment chips.
+    /// Stage image files (picker / drop / pasted paths) into the current
+    /// draft (`add_paths`). Non-images are skipped silently; read failures and
+    /// oversize files surface in the failure notice.
     pub fn addPaths(self: *ComposerView, paths: []const []const u8, cx: *Context(ComposerView)) void {
-        for (paths) |p| {
-            const owned = self.gpa.dupe(u8, p) catch @panic("OOM");
-            self.attachments.append(self.gpa, .{ .path = owned }) catch @panic("OOM");
+        const owned = self.gpa.alloc([]u8, paths.len) catch return;
+        for (paths, 0..) |p, i| owned[i] = self.gpa.dupe(u8, p) catch @panic("OOM");
+        self.stageInBackground(.{ .paths = owned }, cx);
+    }
+
+    /// Stage a pasted clipboard image (takes ownership of `img.bytes`).
+    pub fn addClipboardImage(self: *ComposerView, img: zpui.platform.ClipboardImage, cx: *Context(ComposerView)) void {
+        self.stageInBackground(.{ .clipboard = .{ .format = att.Format.fromClipboard(img.format), .bytes = img.bytes } }, cx);
+    }
+
+    /// `stage_in_background`: read / convert / decode on a worker, then add
+    /// what it staged to the draft that was current when it started.
+    fn stageInBackground(self: *ComposerView, input: att.StageInput, cx: *Context(ComposerView)) void {
+        const io = self.io orelse {
+            var job: att.StageJob = .{ .gpa = self.gpa, .io = undefined, .input = input };
+            job.deinit();
+            return;
+        };
+        const job: StageForKey = .{
+            .inner = .{ .gpa = self.gpa, .io = io, .input = input },
+            .key = self.gpa.dupe(u8, self.current_key.items) catch @panic("OOM"),
+        };
+        var task = cx.spawn(job, ComposerView.onStaged) catch return;
+        task.detach();
+    }
+
+    fn onStaged(self: *ComposerView, batch: StageBatch, cx: *Context(ComposerView)) void {
+        defer self.gpa.free(batch.key);
+        defer att.freeOutcomes(self.gpa, batch.outcomes);
+        const io = self.io orelse return;
+        for (batch.outcomes) |*o| switch (o.*) {
+            .err => |msg| self.setFailure(msg, false, cx),
+            .ok => {
+                const st = att.stagedFromOutcome(self.gpa, io, o) catch continue;
+                const list = self.stagedList(batch.key);
+                list.append(self.gpa, st) catch {
+                    var x = st;
+                    x.deinit(self.gpa, cx.app);
+                };
+            },
+        };
+        cx.notify();
+    }
+
+    fn stagedList(self: *ComposerView, key: []const u8) *std.ArrayList(att.Staged) {
+        const gop = self.staged_by_key.getOrPut(self.gpa, key) catch @panic("OOM");
+        if (!gop.found_existing) {
+            gop.key_ptr.* = self.gpa.dupe(u8, key) catch @panic("OOM");
+            gop.value_ptr.* = .empty;
+        }
+        return gop.value_ptr;
+    }
+
+    /// Staged images of the draft the composer is showing.
+    pub fn staged(self: *const ComposerView) []const att.Staged {
+        const list = self.staged_by_key.getPtr(self.current_key.items) orelse return &.{};
+        return list.items;
+    }
+
+    /// Move the staged list of `key` out (`takeAttachments`).
+    fn takeStaged(self: *ComposerView, key: []const u8) std.ArrayList(att.Staged) {
+        const kv = self.staged_by_key.fetchRemove(key) orelse return .empty;
+        self.gpa.free(kv.key);
+        return kv.value;
+    }
+
+    fn removeStaged(self: *ComposerView, ix: usize, cx: *Context(ComposerView)) void {
+        const list = self.staged_by_key.getPtr(self.current_key.items) orelse return;
+        if (ix >= list.items.len) return;
+        var st = list.orderedRemove(ix);
+        st.deinit(self.gpa, cx.app);
+        if (list.items.len == 0) {
+            var l = self.takeStaged(self.current_key.items);
+            l.deinit(self.gpa);
         }
         cx.notify();
     }
 
+    // ---- lightbox ----
+
+    fn openLightbox(self: *ComposerView, ix: usize, window: *Window, cx: *Context(ComposerView)) void {
+        const list = self.staged();
+        if (ix >= list.len) return;
+        const img = list[ix].image orelse return;
+        self.closeLightbox(cx.app);
+        const lb = cx.newWith(media.Lightbox, media.Lightbox.init, .{ media.LightboxOptions{
+            .image = img,
+            .name = list[ix].name,
+            .release = att.releaseImage,
+            .appearance = self.theme.appearance,
+        }, window }) catch return;
+        self.lightbox = lb;
+        self.lightbox_sub = cx.subscribe(lb, ComposerView.onLightboxClosed) catch null;
+        cx.notify();
+    }
+
+    fn closeLightbox(self: *ComposerView, app: *App) void {
+        if (self.lightbox_sub) |*sub| sub.deinit();
+        self.lightbox_sub = null;
+        if (self.lightbox) |lb| lb.release(app);
+        self.lightbox = null;
+    }
+
+    fn onLightboxClosed(self: *ComposerView, _: Entity(media.Lightbox), _: *const media.LightboxClosed, cx: *Context(ComposerView)) void {
+        self.closeLightbox(cx.app);
+        cx.notify();
+    }
+
+    // ---- file picker ----
+
+    const PickerCtx = struct { app: *App, id: zpui.EntityId };
+
+    /// Paperclip: the native image picker (`prompt_for_paths`, multiple files).
+    fn openFilePicker(self: *ComposerView, cx: *Context(ComposerView)) void {
+        const ctx = self.gpa.create(PickerCtx) catch return;
+        ctx.* = .{ .app = cx.app, .id = cx.entityId() };
+        cx.app.platform.promptForPaths(.{ .files = true, .directories = false, .multiple = true, .prompt = "Attach", .title = "Attach images" }, .{ .ctx = ctx, .func = onPickedPaths });
+    }
+
+    fn onPickedPaths(raw: ?*anyopaque, paths: ?[]const []const u8) void {
+        const ctx: *PickerCtx = @ptrCast(@alignCast(raw.?));
+        const app = ctx.app;
+        const id = ctx.id;
+        app.gpa.destroy(ctx);
+        const weak: zpui.WeakEntity(ComposerView) = .{ .id = id };
+        const Apply = struct {
+            fn f(self: *ComposerView, ps: ?[]const []const u8, cx: *Context(ComposerView)) void {
+                if (ps) |list| self.addPaths(list, cx);
+                cx.notify();
+            }
+        };
+        _ = weak.update(app, Apply.f, .{paths});
+    }
+
     pub fn text(self: *const ComposerView, cx: anytype) []const u8 {
         return self.input.read(cx).text();
+    }
+
+    // ---- [wiring] shell hooks ------------------------------------------------------------
+
+    /// `add_workspace_path` (explorer "Add to chat"): insert a canonical file
+    /// reference at the selection and focus the draft.
+    pub fn addWorkspacePath(self: *ComposerView, path: []const u8, is_dir: bool, window: ?*Window, cx: *Context(ComposerView)) void {
+        const in = self.input.read(cx);
+        const sel = in.state.selected;
+        const ins = (mentions.droppedFileMention(self.gpa, in.text(), sel.start, sel.end, path, is_dir) catch return) orelse return;
+        defer self.gpa.free(ins.text);
+        const start = sel.start;
+        self.input.update(cx, TextInput.replaceRange, .{ sel.start, sel.end, ins.text });
+        if (ins.cursor_advance > ins.text.len) {
+            const Move = struct {
+                fn f(t: *TextInput, at: usize, c: *Context(TextInput)) void {
+                    t.state.selected = .collapsed(@min(at, t.text().len));
+                    c.notify();
+                }
+            };
+            self.input.update(cx, Move.f, .{start + ins.cursor_advance});
+        }
+        if (window) |w| self.focusInput(w, cx);
+        cx.notify();
+    }
+
+    /// Forget a deleted chat's draft (`purge_chat`).
+    pub fn purgeChat(self: *ComposerView, chat_id: []const u8, cx: *Context(ComposerView)) void {
+        if (self.drafts.fetchRemove(chat_id)) |kv| {
+            self.gpa.free(kv.key);
+            self.gpa.free(kv.value);
+        }
+        cx.notify();
+    }
+
+    /// `shell::OpenModelPicker` / `/model`: open (or close) the model menu.
+    pub fn toggleModelPicker(self: *ComposerView, window: *Window, cx: *Context(ComposerView)) void {
+        self.picker.update(cx, ModelPicker.toggle, .{window});
+    }
+
+    /// Show `message` in the failure notice (`show_error`).
+    pub fn showError(self: *ComposerView, message: []const u8, cx: *Context(ComposerView)) void {
+        self.setFailure(message, false, cx);
     }
 
     // ---- selection / drafts -------------------------------------------------------------
@@ -262,6 +518,7 @@ pub const ComposerView = struct {
         const key: []const u8 = self.selectedChat(cx) orelse "";
         if (std.mem.eql(u8, key, self.current_key.items) and self.current_key.items.len + key.len > 0) return;
         if (std.mem.eql(u8, key, self.current_key.items)) return;
+        extras.beforeKeySwap(self, cx); // [wiring] the wizard / queue edit borrow the editor
         // Save the outgoing draft.
         const old = self.input.read(cx).text();
         if (self.drafts.fetchRemove(self.current_key.items)) |kv| {
@@ -305,7 +562,7 @@ pub const ComposerView = struct {
     }
 
     fn hasContent(self: *const ComposerView, cx: anytype) bool {
-        return m.composerHasContent(self.input.read(cx).text(), self.attachments.items.len, 0);
+        return m.composerHasContent(self.input.read(cx).text(), self.staged().len, 0);
     }
 
     pub fn buttonMode(self: *const ComposerView, cx: anytype) m.SendButtonMode {
@@ -330,31 +587,26 @@ pub const ComposerView = struct {
             .edited => {
                 self.slash_dismissed = null;
                 self.slash_active = 0;
-                self.updateSlashControls(cx);
+                extras.onEdited(self, cx); // [wiring] @ mentions + provider catalogs
                 cx.notify();
             },
             .cursor_moved => {
-                self.updateSlashControls(cx);
+                extras.onEdited(self, cx);
                 cx.notify();
             },
-            .mention_navigate => |d| {
-                var buf: [16]slash.CatalogEntry = undefined;
-                const n = self.slashRows(cx, &buf).len;
-                if (n > 0) {
-                    const cur: isize = @intCast(self.slash_active);
-                    self.slash_active = @intCast(@mod(cur + d, @as(isize, @intCast(n))));
-                }
-                cx.notify();
-            },
-            .mention_accept => self.acceptSlash(cx),
-            .mention_dismiss => {
-                if (self.slashToken(cx)) |t| self.slash_dismissed = t.start;
-                self.updateSlashControls(cx);
-                cx.notify();
-            },
+            .mention_navigate => |d| extras.navigate(self, d, cx),
+            .mention_accept => extras.accept(self, cx),
+            .mention_dismiss => extras.dismiss(self, cx),
+            .escape => extras.onEscape(self, cx),
             .pasted_paths => {
                 const paths = self.input.read(cx).pastedPaths();
                 self.addPaths(paths, cx);
+            },
+            .pasted_image => {
+                var l = self.input.lease(cx);
+                const img = l.value.takePastedImage();
+                l.end();
+                if (img) |i| self.addClipboardImage(i, cx);
             },
             .toggle_dictation => self.toggleDictation(cx),
             else => {},
@@ -371,6 +623,7 @@ pub const ComposerView = struct {
 
     fn onStores(self: *ComposerView, _: Entity(AppState), _: *const model.app_state.SelectedChatStoresChanged, cx: *Context(ComposerView)) void {
         self.syncKey(cx);
+        extras.onStoresChanged(self, cx); // [wiring] question wizard follows the transcript
         // A new thread's first send waits for its transcript store.
         const p = self.pending_new orelse return cx.notify();
         const st = self.state.read(cx);
@@ -380,7 +633,8 @@ pub const ComposerView = struct {
         defer self.freePending(p);
         const resolved = self.picker.read(cx).resolved(cx);
         const spec: ?protocol.WorktreeSpec = if (p.worktree) |w| .{ .repoPath = w.repo_path, .base = w.base, .spaceId = w.space_id } else null;
-        self.queueRunIn(t, &p.message_id, p.prompt, p.cwd, spec, resolved, cx);
+        const paths: []const []const u8 = @ptrCast(p.attachments);
+        self.queueRunIn(t, &p.message_id, p.prompt, p.cwd, spec, resolved, paths, p.transfers, true, cx);
         cx.notify();
     }
 
@@ -399,6 +653,7 @@ pub const ComposerView = struct {
     }
 
     fn updateSlashControls(self: *ComposerView, cx: *Context(ComposerView)) void {
+        if (true) return extras.updateControls(self, cx); // [wiring]
         var buf: [16]slash.CatalogEntry = undefined;
         const open = self.slashToken(cx) != null and self.slash_dismissed != (if (self.slashToken(cx)) |t| t.start else null);
         const rows = self.slashRows(cx, &buf);
@@ -415,6 +670,11 @@ pub const ComposerView = struct {
         // Actions consume only their trigger; the draft stays.
         self.input.update(cx, TextInput.replaceRange, .{ t.start, t.end, "" });
         self.executeCommand(row.command, cx);
+    }
+
+    /// [wiring] Zeron's own slash commands (`execute_workspace_command`).
+    pub fn executeWorkspaceCommand(self: *ComposerView, command: slash.WorkspaceCommand, cx: *Context(ComposerView)) void {
+        self.executeCommand(command, cx);
     }
 
     fn onSlashRow(self: *ComposerView, ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(ComposerView)) void {
@@ -437,6 +697,7 @@ pub const ComposerView = struct {
     // ---- submit / send ------------------------------------------------------------------
 
     fn onSubmit(self: *ComposerView, cx: *Context(ComposerView)) void {
+        if (extras.onSubmit(self, cx)) return; // [wiring] wizard advance / queue edit commit
         if (self.dictating) {
             self.dictating = false;
             cx.emit(ComposerEvent{ .dictation_toggled = false });
@@ -484,6 +745,9 @@ pub const ComposerView = struct {
         if (!st.engine.read(cx).isReady()) {
             return self.setFailure("Engine not connected", true, cx);
         }
+        // One upload at a time; the button shows Stop meanwhile.
+        if (self.upload != null) return;
+        if (self.staged().len > 0) return self.sendWithAttachments(queue, cx);
         const typed = self.input.read(cx).text();
         const prompt = self.gpa.dupe(u8, typed) catch @panic("OOM");
         defer self.gpa.free(prompt);
@@ -493,10 +757,8 @@ pub const ComposerView = struct {
 
         if (queue and !is_new) {
             const q = st.queue orelse return self.setFailure("Update the chat's engine to queue messages during a response.", false, cx);
-            var paths: [32][]const u8 = undefined;
-            const n = @min(self.attachments.items.len, paths.len);
-            for (self.attachments.items[0..n], 0..) |a, i| paths[i] = a.path;
-            q.update(cx, model.QueueStore.queueMessage, .{ prompt, paths[0..n], true }) catch |err| {
+            const no_paths: []const []const u8 = &.{};
+            q.update(cx, model.QueueStore.queueMessage, .{ prompt, no_paths, true }) catch |err| {
                 return self.setFailure(if (err == error.NotConnected) "Engine not connected" else "Send failed", err == error.NotConnected, cx);
             };
             self.clearAfterSend(cx);
@@ -507,7 +769,29 @@ pub const ComposerView = struct {
         const resolved = self.picker.read(cx).resolved(cx);
         const message_id = self.uuid();
         if (is_new) {
-            const chat_id = self.uuid();
+            self.startNewChat(self.uuid(), message_id, prompt, &.{}, &.{}, resolved, cx);
+            return;
+        }
+        _ = ws;
+
+        const chat_id = selected.?;
+        const t = st.transcript orelse return self.setFailure("Send failed: chat not loaded", false, cx);
+        if (!std.mem.eql(u8, t.read(cx).chat_id, chat_id)) return self.setFailure("Send failed: chat not loaded", false, cx);
+        const chat = st.workspace.read(cx).selectedChatRow();
+        const cwd = rc.sendCwd(false, null, if (chat) |c| c.cwd else null);
+        var chat_buf: [36]u8 = @splat('0');
+        @memcpy(chat_buf[0..@min(36, chat_id.len)], chat_id[0..@min(36, chat_id.len)]);
+        self.queueRunIn(t, &message_id, prompt, cwd, null, resolved, &.{}, &.{}, true, cx);
+        self.clearAfterSend(cx);
+        cx.emit(ComposerEvent{ .sent = .{ .chat_id = chat_buf, .message_id = message_id } });
+    }
+
+    /// The new-thread canvas's first send: `Mutate createChat` with the
+    /// resolved config, then the Run once the chat's stores exist.
+    fn startNewChat(self: *ComposerView, chat_id: [36]u8, message_id: [36]u8, prompt: []const u8, attachment_paths: []const []const u8, transfers: []const protocol.AttachmentTransfer, resolved: rc.Resolved, cx: *Context(ComposerView)) void {
+        const st = self.state.read(cx);
+        const ws = st.workspace.read(cx);
+        {
             const space = ws.selectedSpaceRow();
             var cwd = rc.sendCwd(true, if (space) |s| s.path else null, null);
             // The picked checkout: reuse an existing worktree (cwd override)
@@ -547,6 +831,8 @@ pub const ComposerView = struct {
                 .message_id = message_id,
                 .prompt = self.gpa.dupe(u8, prompt) catch @panic("OOM"),
                 .cwd = self.gpa.dupe(u8, cwd) catch @panic("OOM"),
+                .attachments = dupePaths(self.gpa, attachment_paths),
+                .transfers = dupeTransfers(self.gpa, transfers),
             };
             // A fresh worktree off the picked base (HEAD when the ref list
             // never arrived: the isolation the user picked must not be dropped).
@@ -565,30 +851,268 @@ pub const ComposerView = struct {
             st.workspace.update(cx, model.WorkspaceStore.selectChat, .{@as(?[]const u8, &chat_id)});
             return;
         }
+    }
 
-        const chat_id = selected.?;
-        const t = st.transcript orelse return self.setFailure("Send failed: chat not loaded", false, cx);
-        if (!std.mem.eql(u8, t.read(cx).chat_id, chat_id)) return self.setFailure("Send failed: chat not loaded", false, cx);
-        const chat = ws.selectedChatRow();
+    // ---- sends with attachments (Rust `send`, the staging half) ----
+
+    fn sendWithAttachments(self: *ComposerView, queue_in: bool, cx: *Context(ComposerView)) void {
+        const io = self.io orelse return;
+        const st = self.state.read(cx);
+        const engine_state = st.engine.read(cx);
+        const conn = engine_state.conn orelse return self.setFailure("Engine not connected", true, cx);
+        const ws = st.workspace.read(cx);
+        const selected = self.selectedChat(cx);
+        const is_new = selected == null;
+        const queue = queue_in and !is_new;
+        if (queue and (st.queue == null or !engine_state.supports(protocol.capabilities.message_queue_attachments_v1))) {
+            return self.setFailure("Update the chat's engine to queue messages during a response.", false, cx);
+        }
+        if (!is_new) {
+            const t = st.transcript orelse return self.setFailure("Send failed: chat not loaded", false, cx);
+            if (!std.mem.eql(u8, t.read(cx).chat_id, selected.?)) return self.setFailure("Send failed: chat not loaded", false, cx);
+        }
+        const local = ws.local_device_id;
+        const target = ws.effectiveDeviceId();
+        const chat_row = ws.selectedChatRow();
+        // Where the transcript reads the attachments back, and the upload host.
+        const device_id: []const u8 = if (is_new) (target orelse "local") else (if (chat_row) |c| c.deviceId else (local orelse "local"));
+        const host: ?[]const u8 = if (is_new)
+            (if (target) |t| (if (local != null and std.mem.eql(u8, local.?, t)) null else t) else null)
+        else if (chat_row) |c| c.deviceId else null;
+        const host_is_remote = if (host) |h| !(local != null and std.mem.eql(u8, local.?, h)) else false;
+        // Queued-attachment flow: commit to the LOCAL engine and let it deliver
+        // the bytes; needs every engine involved to understand `pending://`.
+        const queued_flow = !queue and local != null and ws.deviceVersionAtLeast(local.?, att.queued_attachments_min) and
+            (!host_is_remote or ws.deviceVersionAtLeast(host.?, att.queued_attachments_min));
+
+        const staged_list = self.takeStaged(self.current_key.items);
+        const n = staged_list.items.len;
+        const gpa = self.gpa;
+        var u: Upload = .{
+            .is_new = is_new,
+            .queue = queue,
+            .queued_flow = queued_flow,
+            .chat_id = undefined,
+            .chat_id_len = 36,
+            .message_id = self.uuid(),
+            .key = gpa.dupe(u8, self.current_key.items) catch @panic("OOM"),
+            .typed = gpa.dupe(u8, self.input.read(cx).text()) catch @panic("OOM"),
+            .staged = staged_list,
+            .upload_ids = gpa.alloc([36]u8, n) catch @panic("OOM"),
+            .echo_paths = gpa.alloc([]u8, n) catch @panic("OOM"),
+            .device_id = gpa.dupe(u8, device_id) catch @panic("OOM"),
+            .host_device_id = if (host) |h| (gpa.dupe(u8, h) catch @panic("OOM")) else null,
+            .local_device_id = if (local) |l| (gpa.dupe(u8, l) catch @panic("OOM")) else null,
+            .progress = undefined,
+        };
+        if (is_new) u.chat_id = self.uuid() else {
+            const id = selected.?;
+            u.chat_id_len = @min(id.len, 36);
+            @memcpy(u.chat_id[0..u.chat_id_len], id[0..u.chat_id_len]);
+        }
+        // Upload identities minted NOW: in the queued flow the `pending://` ref
+        // IS the persisted transport until the host rewrites it.
+        var total: u64 = 0;
+        for (staged_list.items, 0..) |*a, i| {
+            att.uuidV4(io, &u.upload_ids[i]);
+            u.echo_paths[i] = if (queued_flow)
+                std.fmt.allocPrint(gpa, "pending://{s}/{s}", .{ &u.upload_ids[i], a.name }) catch @panic("OOM")
+            else
+                std.fmt.allocPrint(gpa, "pending/{s}/{s}", .{ &a.id, a.name }) catch @panic("OOM");
+            total += a.bytes().len;
+        }
+        // Seed the transcript cache so the echo's thumbnails render from local bytes.
+        const cache = att.Cache.of(cx.app);
+        for (staged_list.items, 0..) |*a, i| {
+            const img = a.image orelse continue;
+            const local_other = if (local) |l| (if (!std.mem.eql(u8, l, device_id)) l else null) else null;
+            if (queued_flow) {
+                cache.seedAlias(cx.app, device_id, &u.upload_ids[i], a.name, img);
+                if (local_other) |l| cache.seedAlias(cx.app, l, &u.upload_ids[i], a.name, img);
+            }
+            cache.seed(cx.app, device_id, u.echo_paths[i], a.name, img);
+            if (local_other) |l| cache.seed(cx.app, l, u.echo_paths[i], a.name, img);
+        }
+        // Optimistic echo with attachment refs from the first frame (a queued
+        // message is represented by the queue panel instead).
+        if (!is_new and !queue) if (st.transcript) |t| {
+            const echo_paths: []const []const u8 = @ptrCast(u.echo_paths);
+            const echo_text = att.withAttachments(gpa, u.typed, echo_paths) catch @panic("OOM");
+            defer gpa.free(echo_text);
+            self.pushEchoFor(t, &u.message_id, echo_text, cx);
+            t.update(cx, model.TranscriptStore.beginPendingSend, .{@as([]const u8, &u.message_id)}) catch {};
+            var chat_buf: [36]u8 = @splat('0');
+            @memcpy(chat_buf[0..u.chat_id_len], u.chatId());
+            cx.emit(ComposerEvent{ .sent = .{ .chat_id = chat_buf, .message_id = u.message_id } });
+        };
+        u.progress = att.Progress.create(gpa, total) catch @panic("OOM");
+        cache.beginUploadProgress(u.progress);
+
+        const items = gpa.alloc(att.UploadItem, n) catch @panic("OOM");
+        for (staged_list.items, 0..) |*a, i| items[i] = .{
+            .upload_id = gpa.dupe(u8, &u.upload_ids[i]) catch @panic("OOM"),
+            .name = gpa.dupe(u8, a.name) catch @panic("OOM"),
+            .blob = a.blob.retain(),
+        };
+        const job: att.UploadJob = .{
+            .gpa = gpa,
+            .client = conn.client(),
+            .conn = conn.retain(),
+            .items = items,
+            .target_device_id = if (queued_flow) null else if (host) |h| (gpa.dupe(u8, h) catch null) else null,
+            .progress = u.progress.retain(),
+        };
+        self.input.update(cx, TextInput.setText, .{""});
+        if (self.drafts.fetchRemove(self.current_key.items)) |kv| {
+            gpa.free(kv.key);
+            gpa.free(kv.value);
+        }
+        self.failure.clearRetainingCapacity();
+        self.sending = true;
+        self.upload = u;
+        self.upload_task = cx.spawn(job, ComposerView.onUploaded) catch {
+            var uu = self.upload.?;
+            self.upload = null;
+            self.restoreFailedSend(&uu, "Couldn't upload the attachment — the device may be offline.", cx);
+            self.freeUpload(&uu, cx.app);
+            return;
+        };
+        cx.notify();
+    }
+
+    fn onUploaded(self: *ComposerView, result: att.UploadResult, cx: *Context(ComposerView)) void {
+        defer att.freeUploadResult(self.gpa, result);
+        self.upload_task = .none;
+        var u = self.upload orelse return;
+        self.upload = null;
+        defer self.freeUpload(&u, cx.app);
+        self.sending = false;
+        att.Cache.of(cx.app).endUploadProgress();
+        const paths = switch (result) {
+            .canceled => return self.restoreFailedSend(&u, null, cx),
+            .err => |e| {
+                std.log.scoped(.composer).warn("attachment upload failed: {s}", .{e});
+                return self.restoreFailedSend(&u, if (u.queued_flow) "Couldn't stage the attachment locally." else "Couldn't upload the attachment — the device may be offline.", cx);
+            },
+            .ok => |p| p,
+        };
+        const gpa = self.gpa;
+        const st = self.state.read(cx);
+        // The refs the Run carries: the queued flow's `pending://` echo refs
+        // (stable), else the host's committed absolute paths.
+        const refs: []const []const u8 = if (u.queued_flow) @ptrCast(u.echo_paths) else @ptrCast(paths);
+        var transfers: std.ArrayList(protocol.AttachmentTransfer) = .empty;
+        defer transfers.deinit(gpa);
+        if (u.queued_flow) {
+            for (u.staged.items, 0..) |*a, i| transfers.append(gpa, .{ .uploadId = &u.upload_ids[i], .fileName = a.name }) catch {};
+        } else {
+            // Seed the cache under the committed paths so the sent bubble never round-trips.
+            const cache = att.Cache.of(cx.app);
+            const seed_device = u.host_device_id orelse u.device_id;
+            for (u.staged.items, 0..) |*a, i| {
+                const img = a.image orelse continue;
+                cache.seed(cx.app, seed_device, paths[i], a.name, img);
+                if (!std.mem.eql(u8, seed_device, u.device_id)) cache.seed(cx.app, u.device_id, paths[i], a.name, img);
+            }
+        }
+        const content = att.withAttachments(gpa, u.typed, refs) catch @panic("OOM");
+        defer gpa.free(content);
+        const resolved = self.picker.read(cx).resolved(cx);
+
+        if (u.queue) {
+            const q = st.queue orelse return self.restoreFailedSend(&u, "Update the chat's engine to queue messages during a response.", cx);
+            // A queue row stays free of the attachment-path trailer when the
+            // engine rebuilds it (`message-queue-clean-attachment-text-v1`).
+            const clean = st.engine.read(cx).supports(protocol.capabilities.message_queue_clean_attachment_text_v1);
+            const queue_text: []const u8 = if (!clean) content else if (std.mem.trim(u8, u.typed, " \t\r\n").len == 0) att.attachment_only_text else u.typed;
+            q.update(cx, model.QueueStore.queueMessage, .{ queue_text, refs, true }) catch {
+                return self.restoreFailedSend(&u, "Send failed", cx);
+            };
+            cx.emit(ComposerEvent{ .queued = {} });
+            return cx.notify();
+        }
+        if (u.is_new) {
+            self.startNewChat(u.chat_id, u.message_id, content, refs, transfers.items, resolved, cx);
+            return cx.notify();
+        }
+        const t = st.transcript orelse return self.restoreFailedSend(&u, "Send failed: chat not loaded", cx);
+        if (!std.mem.eql(u8, t.read(cx).chat_id, u.chatId())) return self.restoreFailedSend(&u, "Send failed: chat not loaded", cx);
+        if (!u.queued_flow) {
+            // Refresh the echo in place with the uploaded refs.
+            t.update(cx, model.TranscriptStore.removeEcho, .{@as([]const u8, &u.message_id)});
+            self.pushEchoFor(t, &u.message_id, content, cx);
+        }
+        const chat = st.workspace.read(cx).selectedChatRow();
         const cwd = rc.sendCwd(false, null, if (chat) |c| c.cwd else null);
-        var chat_buf: [36]u8 = @splat('0');
-        @memcpy(chat_buf[0..@min(36, chat_id.len)], chat_id[0..@min(36, chat_id.len)]);
-        self.queueRun(t, chat_id, &message_id, prompt, cwd, resolved, cx);
-        self.clearAfterSend(cx);
-        cx.emit(ComposerEvent{ .sent = .{ .chat_id = chat_buf, .message_id = message_id } });
+        self.queueRunIn(t, &u.message_id, content, cwd, null, resolved, refs, transfers.items, false, cx);
+        cx.notify();
     }
 
-    fn queueRun(self: *ComposerView, t: Entity(model.TranscriptStore), chat_id: []const u8, message_id: []const u8, prompt: []const u8, cwd: []const u8, resolved: rc.Resolved, cx: *Context(ComposerView)) void {
-        _ = chat_id;
-        self.queueRunIn(t, message_id, prompt, cwd, null, resolved, cx);
+    /// Failure (or cancel): echo removed, prompt and staged files handed back
+    /// to their draft, and the message shown (null = silent).
+    fn restoreFailedSend(self: *ComposerView, u: *Upload, message: ?[]const u8, cx: *Context(ComposerView)) void {
+        self.sending = false;
+        att.Cache.of(cx.app).endUploadProgress();
+        const st = self.state.read(cx);
+        if (!u.is_new and !u.queue) if (st.transcript) |t| if (std.mem.eql(u8, t.read(cx).chat_id, u.chatId())) {
+            t.update(cx, model.TranscriptStore.removeEcho, .{@as([]const u8, &u.message_id)});
+            t.update(cx, model.TranscriptStore.endPendingSend, .{@as([]const u8, &u.message_id)});
+        };
+        if (std.mem.eql(u8, self.current_key.items, u.key)) {
+            if (self.input.read(cx).text().len == 0) self.input.update(cx, TextInput.setText, .{u.typed});
+        } else if (!self.drafts.contains(u.key)) {
+            const k = self.gpa.dupe(u8, u.key) catch @panic("OOM");
+            const v = self.gpa.dupe(u8, u.typed) catch @panic("OOM");
+            self.drafts.put(self.gpa, k, v) catch @panic("OOM");
+        }
+        // Merge by id: files staged while the send was in flight survive.
+        const list = self.stagedList(u.key);
+        var merged: std.ArrayList(att.Staged) = .empty;
+        merged.appendSlice(self.gpa, u.staged.items) catch @panic("OOM");
+        for (list.items) |e| {
+            var dup = false;
+            for (merged.items) |f| dup = dup or std.mem.eql(u8, &f.id, &e.id);
+            if (dup) {
+                var x = e;
+                x.deinit(self.gpa, cx.app);
+            } else merged.append(self.gpa, e) catch @panic("OOM");
+        }
+        list.deinit(self.gpa);
+        list.* = merged;
+        u.staged = .empty; // moved
+        if (message) |msg| self.setFailure(msg, false, cx);
+        cx.notify();
     }
 
-    fn queueRunIn(self: *ComposerView, t: Entity(model.TranscriptStore), message_id: []const u8, prompt: []const u8, cwd: []const u8, worktree: ?protocol.WorktreeSpec, resolved: rc.Resolved, cx: *Context(ComposerView)) void {
-        var paths: [32][]const u8 = undefined;
-        const n = @min(self.attachments.items.len, paths.len);
-        for (self.attachments.items[0..n], 0..) |a, i| paths[i] = a.path;
-        // Optimistic echo: the client-minted id doubles as the persisted id.
-        var parts = [_]protocol.MessagePart{.{ .text = .{ .id = "t0", .text = prompt } }};
+    fn freeUpload(self: *ComposerView, u: *Upload, app: *App) void {
+        const gpa = self.gpa;
+        gpa.free(u.key);
+        gpa.free(u.typed);
+        for (u.staged.items) |*a| a.deinit(gpa, app);
+        u.staged.deinit(gpa);
+        gpa.free(u.upload_ids);
+        for (u.echo_paths) |p| gpa.free(p);
+        gpa.free(u.echo_paths);
+        gpa.free(u.device_id);
+        if (u.host_device_id) |h| gpa.free(h);
+        if (u.local_device_id) |l| gpa.free(l);
+        u.progress.release();
+    }
+
+    fn dupePaths(gpa: std.mem.Allocator, paths: []const []const u8) [][]u8 {
+        const out = gpa.alloc([]u8, paths.len) catch @panic("OOM");
+        for (paths, 0..) |p, i| out[i] = gpa.dupe(u8, p) catch @panic("OOM");
+        return out;
+    }
+
+    fn dupeTransfers(gpa: std.mem.Allocator, ts: []const protocol.AttachmentTransfer) []protocol.AttachmentTransfer {
+        const out = gpa.alloc(protocol.AttachmentTransfer, ts.len) catch @panic("OOM");
+        for (ts, 0..) |t, i| out[i] = .{ .uploadId = gpa.dupe(u8, t.uploadId) catch @panic("OOM"), .fileName = gpa.dupe(u8, t.fileName) catch @panic("OOM") };
+        return out;
+    }
+
+    fn pushEchoFor(self: *ComposerView, t: Entity(model.TranscriptStore), message_id: []const u8, text_: []const u8, cx: *Context(ComposerView)) void {
+        var parts = [_]protocol.MessagePart{.{ .text = .{ .id = "t0", .text = text_ } }};
         const created: i64 = if (self.nowTimestamp()) |ts| @intCast(@divTrunc(ts.toNanos(), std.time.ns_per_ms)) else 0;
         t.update(cx, model.TranscriptStore.pushEcho, .{protocol.SessionMessageEntry{
             .id = message_id,
@@ -597,9 +1121,20 @@ pub const ComposerView = struct {
             .createdAt = created,
             .deviceId = "local",
         }}) catch {};
-        t.update(cx, model.TranscriptStore.beginPendingSend, .{message_id}) catch {};
-        const cmd = rc.runCommand(resolved, .{ .prompt = prompt, .cwd = cwd, .message_id = message_id, .attachments = paths[0..n], .worktree = worktree });
-        t.update(cx, model.TranscriptStore.queueCommand, .{cmd}) catch |err| {
+    }
+
+    fn queueRunIn(self: *ComposerView, t: Entity(model.TranscriptStore), message_id: []const u8, prompt: []const u8, cwd: []const u8, worktree: ?protocol.WorktreeSpec, resolved: rc.Resolved, attachment_paths: []const []const u8, transfers: []const protocol.AttachmentTransfer, push_echo: bool, cx: *Context(ComposerView)) void {
+        // Optimistic echo: the client-minted id doubles as the persisted id.
+        if (push_echo) {
+            self.pushEchoFor(t, message_id, prompt, cx);
+            t.update(cx, model.TranscriptStore.beginPendingSend, .{message_id}) catch {};
+        }
+        const cmd = rc.runCommand(resolved, .{ .prompt = prompt, .cwd = cwd, .message_id = message_id, .attachments = attachment_paths, .worktree = worktree });
+        const queued = if (transfers.len > 0)
+            t.update(cx, model.TranscriptStore.queueCommandWithTransfers, .{ cmd, transfers })
+        else
+            t.update(cx, model.TranscriptStore.queueCommand, .{cmd});
+        queued catch |err| {
             t.update(cx, model.TranscriptStore.removeEcho, .{message_id});
             t.update(cx, model.TranscriptStore.endPendingSend, .{message_id});
             self.setFailure(if (err == error.NotConnected) "Engine not connected" else "Send failed", err == error.NotConnected, cx);
@@ -608,8 +1143,6 @@ pub const ComposerView = struct {
 
     fn clearAfterSend(self: *ComposerView, cx: *Context(ComposerView)) void {
         self.input.update(cx, TextInput.setText, .{""});
-        for (self.attachments.items) |a| self.gpa.free(a.path);
-        self.attachments.clearRetainingCapacity();
         self.failure.clearRetainingCapacity();
         if (self.drafts.fetchRemove(self.current_key.items)) |kv| {
             self.gpa.free(kv.key);
@@ -619,6 +1152,17 @@ pub const ComposerView = struct {
     }
 
     fn interrupt(self: *ComposerView, cx: *Context(ComposerView)) void {
+        // Stop while the attachments upload cancels the send and hands the
+        // draft back (nothing reached the host yet).
+        if (self.upload != null) {
+            self.upload_task.cancel();
+            self.upload_task = .none;
+            var u = self.upload.?;
+            self.upload = null;
+            self.restoreFailedSend(&u, null, cx);
+            self.freeUpload(&u, cx.app);
+            return;
+        }
         const st = self.state.read(cx);
         const t = st.transcript orelse return;
         t.update(cx, model.TranscriptStore.queueCommand, .{protocol.SessionCommandPayload{ .interrupt = {} }}) catch |err| {
@@ -659,6 +1203,7 @@ pub const ComposerView = struct {
             return cx.notify();
         }
         cx.emit(ComposerEvent{ .attach_requested = {} });
+        self.openFilePicker(cx);
     }
 
     fn onMicClick(self: *ComposerView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ComposerView)) void {
@@ -671,9 +1216,13 @@ pub const ComposerView = struct {
     }
 
     fn onRemoveAttachment(self: *ComposerView, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ComposerView)) void {
-        if (ix >= self.attachments.items.len) return;
-        self.gpa.free(self.attachments.orderedRemove(ix).path);
-        cx.notify();
+        // The button overhangs the thumbnail: don't also open the preview.
+        cx.stopPropagation();
+        self.removeStaged(ix, cx);
+    }
+
+    fn onThumbClick(self: *ComposerView, ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(ComposerView)) void {
+        self.openLightbox(ix, window, cx);
     }
 
     fn onPillMouseDown(self: *ComposerView, _: *const zpui.input.MouseDownEvent, window: *Window, cx: *Context(ComposerView)) void {
@@ -698,10 +1247,8 @@ pub const ComposerView = struct {
     }
 
     fn onQueueEdit(self: *ComposerView, ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(ComposerView)) void {
-        const q = self.state.read(cx).queue orelse return;
-        const items = q.read(cx).items();
-        if (ix >= items.len) return;
-        self.input.update(cx, TextInput.setText, .{items[ix].text});
+        // [wiring] `begin_queue_edit`: the host's edit lease first.
+        extras.beginQueueEdit(self, ix, cx);
         self.focusInput(window, cx);
     }
 
@@ -770,7 +1317,7 @@ pub const ComposerView = struct {
 
         // Heights.
         const strip_width_hint = (self.available_width orelse m.composer_max_width) - 2.0 * zt.layout.space_lg - 2.0;
-        const strip_h = m.attachmentStripHeight(self.attachments.items.len, strip_width_hint);
+        const strip_h = m.attachmentStripHeight(self.staged().len, strip_width_hint);
         const base_height = if (expanded) m.composerTotalHeight(content_height) else m.compact_total_height;
         const target_height = base_height + strip_h;
         self.height_morph = m.flipMorphStep(self.height_morph, @abs(target_height - self.last_target_height) > 0.5, self.last_rendered_height, now_ms, reduced, false);
@@ -809,8 +1356,8 @@ pub const ComposerView = struct {
 
         var pill = div()
             .onMouseDown(.left, cx.listener(ComposerView.onPillMouseDown))
-            .rounded(px(m.composer_radius)).border1().borderColor(theme.composerSurfaceBorder())
-            .bg(theme.composerSurfaceBg());
+            .rounded(px(m.composer_radius)).border1().borderColor(theme.onGlassBorder(theme.composerSurfaceBorder()))
+            .bg(theme.onGlass(theme.composerSurfaceBg())); // [liquid-glass] onGlass: no-op unless Liquid Glass
         if (!theme.isFrost()) pill = pill.shadowLg();
 
         const body = if (expanded)
@@ -834,20 +1381,24 @@ pub const ComposerView = struct {
                         .flex().itemsCenter().gap(px(m.action_primary_gap)).child(primaryGroup(mic, send_button))));
         };
 
-        const pill_surface = div().relative().id("composer-surface")
+        // [wiring] a pending question replaces the pill; completions float above it.
+        const pill_surface = extras.renderWizard(self, window, cx) orelse div().relative().id("composer-surface")
             .child(chrome.frosted(theme, m.composer_radius, zt.layout.menu_blur, body))
-            .child(self.renderSlashPopup(window, cx));
+            .child(extras.renderPopup(self, window, cx));
 
         var container = div().wFull().maxW(px(self.available_width orelse m.composer_max_width)).mxAuto()
             .flex().flexCol().gap(px(zt.layout.space_sm)).px(px(zt.layout.space_lg)).pb(px(zt.layout.space_lg))
             .fontFamily(theme.font_sans);
         if (self.failure.items.len > 0) container = container.child(self.renderFailure(cx));
-        if (self.renderQueue(cx)) |q| {
+        const queue_tray = self.renderQueue(cx);
+        if (extras.renderTodo(self, queue_tray != null, cx)) |t| container = container.child(t); // [wiring] todo tray
+        if (queue_tray) |q| {
             container = container.child(div().mx(px(m.queue_side_inset)).mb(px(-(zt.layout.space_sm + m.queue_composer_overlap))).child(q));
         }
         if (new_chat) container = container.child(self.renderTargetSelectors(cx));
         container = container.child(pill_surface);
         container = container.child(self.renderFooter(new_chat, cx));
+        if (self.lightbox) |lb| container = container.child(lb);
         return container;
     }
 
@@ -906,21 +1457,31 @@ pub const ComposerView = struct {
         return b;
     }
 
+    /// The staged-thumbnail strip (attachment-ui.tsx AttachmentStrip):
+    /// `flex flex-wrap gap-2 px-4 pt-3`, 56px rounded thumbs, a remove button
+    /// revealed on hover, click opens the full-size preview.
     fn renderAttachmentStrip(self: *ComposerView, cx: *Context(ComposerView)) ?zpui.Div {
-        if (self.attachments.items.len == 0) return null;
+        const list = self.staged();
+        if (list.len == 0) return null;
         const theme = &self.theme;
-        var strip = div().flexNone().flex().flexRow().flexWrap().gap(px(m.strip_gap)).px(px(m.strip_pad_x)).pt(px(m.strip_pad_top));
-        for (self.attachments.items, 0..) |a, ix| {
-            strip = strip.child(div().id(.{ "attachment", ix }).group("attachment").relative()
-                .size(px(m.strip_thumb)).flexNone().rounded(px(10)).border1().borderColor(theme.border).bg(theme.ink(0.05))
-                .flex().flexCol().itemsCenter().justifyCenter().gap(px(4)).px(px(4))
-                .child(chrome.icon(.file_image, 18, theme.text_muted))
-                .child(div().wFull().textSize(px(9)).textColor(theme.text_muted).truncate().textCenter().child(a.name()))
-                .child(div().id(.{ "attachment-remove", ix }).absolute().top(px(3)).right(px(3)).size(px(16)).roundedFull()
-                    .flex().itemsCenter().justifyCenter().bg(theme.bg.opacity(0.8)).opacity(0).cursorPointer()
-                    .groupHover("attachment", sb.opacity(1))
+        var strip = div().wFull().flexNone().flex().flexRow().flexWrap().gap(px(m.strip_gap)).px(px(m.strip_pad_x)).pt(px(m.strip_pad_top));
+        for (list, 0..) |a, ix| {
+            const group = zpui.fmt("composer-att-{s}", .{&a.id});
+            var thumb = div().id(.{ "composer-att-thumb", ix }).size(px(m.strip_thumb)).rounded(px(8)).overflowHidden()
+                .border1().borderColor(theme.hairline(0.10)).cursorPointer()
+                .onClick(cx.listenerWith(ix, ComposerView.onThumbClick));
+            thumb = if (a.image) |r|
+                thumb.child(zpui.img(r).w(px(m.strip_thumb - 2)).h(px(m.strip_thumb - 2)).rounded(px(7)).objectFit(.cover))
+            else
+                thumb.bg(theme.ink(0.05)).flex().itemsCenter().justifyCenter().child(chrome.icon(.file_image, 18, theme.text_muted));
+            strip = strip.child(div().group(group).flexNone().relative()
+                .child(thumb)
+                .child(zpui.layered(div().id(.{ "composer-att-remove", ix }).absolute().top(px(-6)).right(px(-6)).size(px(18)).roundedFull()
+                    .bg(theme.bg).flex().itemsCenter().justifyCenter().cursorPointer().shadowSm().opacity(0)
+                    .groupHover(group, sb.opacity(1))
                     .onClick(cx.listenerWith(ix, ComposerView.onRemoveAttachment))
-                    .child(chrome.icon(.close, 10, theme.text))));
+                    .tooltipWith(chrome.TipData{ .text = zpui.fmt("Remove {s}", .{a.name}), .dark = theme.appearance.isDark() }, chrome.buildTooltip)
+                    .child(chrome.icon(.close_circle, 14, theme.text_muted)))));
         }
         return strip;
     }
@@ -971,7 +1532,7 @@ pub const ComposerView = struct {
         if (items.len == 0) return null;
         const theme = &self.theme;
         var panel = div().occlude().roundedT(px(16))
-            .bg(if (theme.isFrost() and theme.appearance.isDark()) theme.composerSidebarTint() else theme.inputGlassBg())
+            .bg(theme.onGlass(if (theme.isFrost() and theme.appearance.isDark()) theme.composerSidebarTint() else theme.inputGlassBg())) // [liquid-glass]
             .border1().borderColor(theme.border)
             .px(px(4)).pt(px(4)).pb(px(m.queue_composer_overlap)).flex().flexCol();
         if (!theme.isFrost()) panel = panel.shadowLg();
@@ -995,9 +1556,9 @@ pub const ComposerView = struct {
                         .tooltipWith(chrome.TipData{ .text = "Send now (interrupt)", .dark = theme.appearance.isDark() }, chrome.buildTooltip)
                         .onClick(cx.listenerWith(ix, ComposerView.onQueueSend))
                         .child("Send now")));
-            panel = panel.child(row);
+            panel = panel.child(extras.queueRow(self, row, ix, item.id, cx)); // [wiring] drag reorder / edit wash
         }
-        return chrome.frosted(theme, 16, zt.layout.menu_blur, panel);
+        return chrome.frosted(theme, 16, zt.layout.menu_blur, extras.queuePanel(self, panel, cx));
     }
 
     fn queueAction(theme: *const Theme, id: anytype, i: chrome.Icon, label: []const u8) zpui.StatefulDiv {

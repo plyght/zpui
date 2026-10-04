@@ -1,0 +1,818 @@
+{
+  "kind": "Flowchart",
+  "direction": "TopDown",
+  "width": 511.6545,
+  "height": 1204.3823,
+  "nodes": [
+    {
+      "id": "A",
+      "shape": "Rectangle",
+      "x": 198.22006,
+      "y": 797.6601,
+      "width": 98.72,
+      "height": 41.0,
+      "label_width": 62.72,
+      "label_height": 21.0,
+      "label_lines": [
+        "Worker A"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "B",
+      "shape": "Rectangle",
+      "x": 198.21991,
+      "y": 957.1012,
+      "width": 98.72,
+      "height": 41.0,
+      "label_width": 62.72,
+      "label_height": 21.0,
+      "label_lines": [
+        "Worker B"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "C",
+      "shape": "Rectangle",
+      "x": 198.21994,
+      "y": 1116.5422,
+      "width": 98.72,
+      "height": 41.0,
+      "label_width": 62.72,
+      "label_height": 21.0,
+      "label_lines": [
+        "Worker C"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "M",
+      "shape": "Rectangle",
+      "x": 304.13992,
+      "y": 1128.3619,
+      "width": 78.098,
+      "height": 41.0,
+      "label_width": 42.098,
+      "label_height": 21.0,
+      "label_lines": [
+        "Merge"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "O",
+      "shape": "Rectangle",
+      "x": 304.14008,
+      "y": 826.1405,
+      "width": 70.328,
+      "height": 41.0,
+      "label_width": 34.328,
+      "label_height": 21.0,
+      "label_lines": [
+        "Done"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "P",
+      "shape": "Diamond",
+      "x": 178.34415,
+      "y": 90.0,
+      "width": 138.472,
+      "height": 138.472,
+      "label_width": 109.76,
+      "label_height": 21.0,
+      "label_lines": [
+        "Priority split"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Q",
+      "shape": "Rectangle",
+      "x": 178.62015,
+      "y": 8.0,
+      "width": 137.92,
+      "height": 41.0,
+      "label_width": 101.92,
+      "label_height": 21.0,
+      "label_lines": [
+        "Ingress queue"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "Q",
+      "to": "P",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          247.58014,
+          49.0
+        ],
+        [
+          247.58014,
+          90.00001
+        ]
+      ]
+    },
+    {
+      "from": "P",
+      "to": "A",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          247.58014,
+          228.47198
+        ],
+        [
+          247.58014,
+          241.07199
+        ],
+        [
+          294.9601,
+          241.07199
+        ],
+        [
+          294.9601,
+          797.6601
+        ],
+        [
+          263.58008,
+          797.6601
+        ]
+      ],
+      "label_anchor": [
+        252.44211,
+        257.272
+      ],
+      "label_width": 53.760002,
+      "label_height": 24.0,
+      "label_lines": [
+        "urgent"
+      ]
+    },
+    {
+      "from": "P",
+      "to": "B",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          231.58014,
+          212.472
+        ],
+        [
+          231.58014,
+          225.072
+        ],
+        [
+          123.58003,
+          225.072
+        ],
+        [
+          123.58003,
+          957.1012
+        ],
+        [
+          231.57993,
+          957.1012
+        ]
+      ],
+      "label_anchor": [
+        156.86005,
+        718.11096
+      ],
+      "label_width": 53.760002,
+      "label_height": 24.0,
+      "label_lines": [
+        "normal"
+      ]
+    },
+    {
+      "from": "P",
+      "to": "C",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          231.58011,
+          212.47198
+        ],
+        [
+          231.58011,
+          225.07199
+        ],
+        [
+          101.98001,
+          225.07199
+        ],
+        [
+          101.98001,
+          1116.5422
+        ],
+        [
+          231.57996,
+          1116.5422
+        ]
+      ],
+      "label_anchor": [
+        80.94396,
+        1123.9673
+      ],
+      "label_width": 35.84,
+      "label_height": 24.0,
+      "label_lines": [
+        "bulk"
+      ]
+    },
+    {
+      "from": "A",
+      "to": "M",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          279.58008,
+          838.6601
+        ],
+        [
+          279.58008,
+          929.0212
+        ],
+        [
+          352.28116,
+          929.0212
+        ],
+        [
+          352.28116,
+          1107.762
+        ],
+        [
+          321.2622,
+          1107.762
+        ],
+        [
+          321.2622,
+          1128.3619
+        ]
+      ],
+      "label_anchor": [
+        317.44006,
+        908.40063
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "success"
+      ]
+    },
+    {
+      "from": "B",
+      "to": "M",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          279.57993,
+          998.1012
+        ],
+        [
+          279.57993,
+          1010.7012
+        ],
+        [
+          347.24442,
+          1010.7012
+        ],
+        [
+          347.24442,
+          1128.3619
+        ],
+        [
+          327.18893,
+          1128.3619
+        ]
+      ],
+      "label_anchor": [
+        309.3844,
+        1034.4612
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "success"
+      ]
+    },
+    {
+      "from": "C",
+      "to": "M",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          295.93994,
+          1157.5422
+        ],
+        [
+          295.93994,
+          1170.1422
+        ],
+        [
+          305.13992,
+          1115.762
+        ],
+        [
+          305.13992,
+          1128.3619
+        ]
+      ],
+      "label_anchor": [
+        258.17993,
+        1182.1823
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "success"
+      ]
+    },
+    {
+      "from": "A",
+      "to": "A",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          198.22006,
+          818.1601
+        ],
+        [
+          188.62007,
+          818.1601
+        ],
+        [
+          200.22006,
+          818.1601
+        ],
+        [
+          190.22006,
+          818.1601
+        ],
+        [
+          190.22006,
+          789.6601
+        ],
+        [
+          304.94006,
+          789.6601
+        ],
+        [
+          304.94006,
+          776.0601
+        ],
+        [
+          200.22006,
+          776.0601
+        ],
+        [
+          247.58008,
+          776.0601
+        ],
+        [
+          247.58008,
+          797.6601
+        ]
+      ],
+      "label_anchor": [
+        268.53503,
+        759.8601
+      ],
+      "label_width": 161.28,
+      "label_height": 24.0,
+      "label_lines": [
+        "retry with backoff"
+      ]
+    },
+    {
+      "from": "B",
+      "to": "B",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          296.9399,
+          977.6012
+        ],
+        [
+          306.53992,
+          977.6012
+        ],
+        [
+          294.53992,
+          977.6012
+        ],
+        [
+          304.9399,
+          977.6012
+        ],
+        [
+          304.9399,
+          1006.1012
+        ],
+        [
+          190.21991,
+          1006.1012
+        ],
+        [
+          190.21991,
+          935.5012
+        ],
+        [
+          294.53992,
+          935.5012
+        ],
+        [
+          247.57993,
+          935.5012
+        ],
+        [
+          247.57993,
+          957.1012
+        ]
+      ],
+      "label_anchor": [
+        147.89992,
+        921.0412
+      ],
+      "label_width": 161.28,
+      "label_height": 24.0,
+      "label_lines": [
+        "retry with backoff"
+      ]
+    },
+    {
+      "from": "C",
+      "to": "C",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          198.21994,
+          1137.0422
+        ],
+        [
+          188.61993,
+          1137.0422
+        ],
+        [
+          190.21994,
+          1137.0422
+        ],
+        [
+          190.21994,
+          1108.5422
+        ],
+        [
+          304.93994,
+          1108.5422
+        ],
+        [
+          304.93994,
+          1094.9423
+        ],
+        [
+          232.21994,
+          1094.9423
+        ],
+        [
+          247.57993,
+          1094.9423
+        ],
+        [
+          247.57993,
+          1116.5422
+        ]
+      ],
+      "label_anchor": [
+        171.87033,
+        1082.7822
+      ],
+      "label_width": 161.28,
+      "label_height": 24.0,
+      "label_lines": [
+        "retry with backoff"
+      ]
+    },
+    {
+      "from": "A",
+      "to": "B",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          247.58005,
+          838.6601
+        ],
+        [
+          181.32,
+          838.6601
+        ],
+        [
+          181.32,
+          957.1012
+        ],
+        [
+          247.57996,
+          957.1012
+        ]
+      ],
+      "label_anchor": [
+        242.20001,
+        869.1903
+      ],
+      "label_width": 107.520004,
+      "label_height": 24.0,
+      "label_lines": [
+        "peer handoff"
+      ]
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          263.57993,
+          998.1012
+        ],
+        [
+          197.31993,
+          998.1012
+        ],
+        [
+          197.31993,
+          1116.5422
+        ],
+        [
+          263.57993,
+          1116.5422
+        ]
+      ],
+      "label_anchor": [
+        119.55993,
+        1043.094
+      ],
+      "label_width": 107.520004,
+      "label_height": 24.0,
+      "label_lines": [
+        "peer handoff"
+      ]
+    },
+    {
+      "from": "C",
+      "to": "A",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          198.21994,
+          1121.0422
+        ],
+        [
+          126.420006,
+          1121.0422
+        ],
+        [
+          126.420006,
+          834.1601
+        ],
+        [
+          198.22006,
+          834.1601
+        ]
+      ],
+      "label_anchor": [
+        66.26,
+        977.6012
+      ],
+      "label_width": 107.520004,
+      "label_height": 24.0,
+      "label_lines": [
+        "peer handoff"
+      ]
+    },
+    {
+      "from": "A",
+      "to": "Q",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          198.22006,
+          802.1601
+        ],
+        [
+          138.22012,
+          802.1601
+        ],
+        [
+          138.22012,
+          44.5
+        ],
+        [
+          178.62015,
+          44.5
+        ]
+      ],
+      "label_anchor": [
+        170.04411,
+        407.3301
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "requeue"
+      ]
+    },
+    {
+      "from": "B",
+      "to": "Q",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          296.9399,
+          961.6012
+        ],
+        [
+          423.06808,
+          961.6012
+        ],
+        [
+          423.06808,
+          44.5
+        ],
+        [
+          316.54016,
+          44.5
+        ]
+      ],
+      "label_anchor": [
+        369.8041,
+        28.3
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "requeue"
+      ]
+    },
+    {
+      "from": "C",
+      "to": "Q",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          198.21994,
+          1121.0422
+        ],
+        [
+          198.21994,
+          1130.0422
+        ],
+        [
+          185.61993,
+          1130.0422
+        ],
+        [
+          185.61993,
+          1129.0422
+        ],
+        [
+          95.02004,
+          1129.0422
+        ],
+        [
+          95.02004,
+          36.5
+        ],
+        [
+          166.02014,
+          36.5
+        ],
+        [
+          166.02014,
+          53.5
+        ],
+        [
+          178.62015,
+          53.5
+        ],
+        [
+          178.62015,
+          44.5
+        ]
+      ],
+      "label_anchor": [
+        113.715096,
+        20.4
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "requeue"
+      ]
+    },
+    {
+      "from": "M",
+      "to": "O",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          359.18893,
+          1128.3619
+        ],
+        [
+          359.18893,
+          879.7405
+        ],
+        [
+          339.30408,
+          879.7405
+        ],
+        [
+          339.30408,
+          867.1405
+        ]
+      ]
+    },
+    {
+      "from": "M",
+      "to": "Q",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          382.23795,
+          1148.8619
+        ],
+        [
+          438.63907,
+          1148.8619
+        ],
+        [
+          438.63907,
+          48.0
+        ],
+        [
+          316.54016,
+          48.0
+        ]
+      ],
+      "label_anchor": [
+        445.3945,
+        1165.0619
+      ],
+      "label_width": 107.520004,
+      "label_height": 24.0,
+      "label_lines": [
+        "late failure"
+      ]
+    }
+  ],
+  "subgraphs": []
+}

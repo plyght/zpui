@@ -168,6 +168,24 @@ pub const QueueStore = struct {
         try self.mutation(.MoveQueuedMessage, .{ .chatId = self.chat_id, .id = id, .toIndex = to_index }, cx);
     }
 
+    /// Optimistic reorder (`move_queued`): the watch frame that follows is
+    /// what every device sees; a failed `MoveQueuedMessage` refreshes it.
+    pub fn moveLocal(self: *QueueStore, from: usize, to: usize, cx: *Context(QueueStore)) void {
+        const f = self.frame orelse return;
+        const list: []protocol.QueuedMessage = @constCast(f.value.items);
+        if (from >= list.len or from == to) return;
+        const dest = @min(to, list.len - 1);
+        const moved = list[from];
+        if (from < dest) {
+            std.mem.copyForwards(protocol.QueuedMessage, list[from..dest], list[from + 1 .. dest + 1]);
+        } else {
+            std.mem.copyBackwards(protocol.QueuedMessage, list[dest + 1 .. from + 1], list[dest..from]);
+        }
+        list[dest] = moved;
+        cx.emit(QueueChanged{});
+        cx.notify();
+    }
+
     pub fn removeQueuedMessage(self: *QueueStore, id: []const u8, cx: *Context(QueueStore)) !void {
         try self.mutation(.RemoveQueuedMessage, .{ .chatId = self.chat_id, .id = id }, cx);
     }

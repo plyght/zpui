@@ -21,6 +21,11 @@ pub const slash = @import("slash.zig");
 pub const chrome = @import("chrome.zig");
 pub const model_picker = @import("model_picker.zig");
 pub const composer = @import("composer.zig");
+pub const mentions = @import("mentions.zig");
+pub const wizard = @import("wizard.zig");
+pub const todo_panel = @import("todo_panel.zig");
+pub const completions = @import("completions.zig");
+pub const extras = @import("extras.zig");
 
 pub const ComposerView = composer.ComposerView;
 pub const ComposerEvent = composer.ComposerEvent;
@@ -30,4 +35,5 @@ pub const TextInput = @import("zeron_input").TextInput;
 test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("tests.zig");
+    _ = @import("extras_test.zig"); // [wiring]
 }

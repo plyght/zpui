@@ -125,7 +125,7 @@ pub const RowKind = union(enum) {
     input_chip: struct { header: []const u8, resolved: bool },
     error_chip: struct { message: []const u8 },
     fork_marker: struct { source_title: []const u8 },
-    generated_image: struct { path: []const u8, name: []const u8, mime_type: []const u8 },
+    generated_image: struct { owner: []const u8, path: []const u8, name: []const u8, mime_type: []const u8 },
 };
 
 pub const Row = struct {
@@ -609,7 +609,7 @@ pub fn parseUserMessageImages(a: Allocator, content: []const u8) Allocator.Error
             if (atts.items.len == 0) return .{ .text = content, .attachments = &.{} };
             const body = std.mem.trimEnd(u8, content[0..gap], " \t\r\n");
             return .{
-                .text = if (std.mem.eql(u8, std.mem.trim(u8, body, " \t\r\n"), "(attached images)")) "" else body,
+                .text = if (std.mem.eql(u8, std.mem.trim(u8, body, " \t\r\n"), "See the attached image(s).")) "" else body,
                 .attachments = atts.items,
             };
         }
@@ -769,7 +769,7 @@ pub fn buildEntryRows(gpa: Allocator, parsers: *Parsers, entry: *const SessionMe
                     .image => |im| try rows.append(a, .{
                         .id = try std.fmt.allocPrint(a, "{s}#{s}", .{ entry.id, im.id }),
                         .version = fnv1a(im.path) ^ fnv1a(im.name),
-                        .kind = .{ .generated_image = .{ .path = try a.dupe(u8, im.path), .name = try a.dupe(u8, im.name), .mime_type = try a.dupe(u8, im.mimeType) } },
+                        .kind = .{ .generated_image = .{ .owner = try a.dupe(u8, entry.deviceId), .path = try a.dupe(u8, im.path), .name = try a.dupe(u8, im.name), .mime_type = try a.dupe(u8, im.mimeType) } },
                         .entry_id = entry_id,
                     }),
                     .input => |in| {

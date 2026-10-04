@@ -175,8 +175,12 @@ pub fn spec(v: *SettingsView, id: SelectId, cx: anytype) Spec {
             };
         },
         .surface => {
-            for (zt.SurfacePreference.all) |p| list.append(a, .{ .label = surfaceLabel(p) }) catch {};
-            const sel = std.mem.indexOfScalar(zt.SurfacePreference, &zt.SurfacePreference.all, t.surface) orelse 0;
+            // [liquid-glass] "Liquid Glass" only where native glass exists; a stored
+            // `.liquid` elsewhere shows (and renders) as Frosted.
+            const offered = zt.SurfacePreference.offered(store.liquidSupported(cx));
+            for (offered) |p| list.append(a, .{ .label = surfaceLabel(p) }) catch {};
+            const shown: zt.SurfacePreference = if (t.surface == .liquid and offered.len == zt.SurfacePreference.all.len) .frosted else t.surface;
+            const sel = std.mem.indexOfScalar(zt.SurfacePreference, offered, shown) orelse 0;
             return .{ .label = "Glass", .options = list.items, .selected = sel, .width = 148 };
         },
         .reduce_motion => {
@@ -249,6 +253,7 @@ pub fn surfaceLabel(p: zt.SurfacePreference) []const u8 {
         .theme_default => "Theme default",
         .frosted => "Frosted",
         .opaque_ => "Opaque",
+        .liquid => "Liquid Glass", // [liquid-glass]
     };
 }
 
@@ -273,7 +278,7 @@ pub fn commit(v: *SettingsView, id: SelectId, ix: usize, cx: *Context(SettingsVi
             s.theme.theme_selection.dark = vid;
         }
         fn surface(i: usize, s: *UiSettings, _: std.mem.Allocator) void {
-            s.theme.surface = zt.SurfacePreference.all[i];
+            s.theme.surface = zt.SurfacePreference.all_with_liquid[i]; // [liquid-glass] `all` is its prefix
         }
         fn motion(i: usize, s: *UiSettings, _: std.mem.Allocator) void {
             s.theme.reduce_motion = zt.motion.ReduceMotion.all[i];
@@ -320,7 +325,7 @@ pub fn commit(v: *SettingsView, id: SelectId, ix: usize, cx: *Context(SettingsVi
             store.applyTheme(cx.app);
         },
         .surface => {
-            if (ix >= zt.SurfacePreference.all.len) return;
+            if (ix >= zt.SurfacePreference.offered(store.liquidSupported(cx)).len) return; // [liquid-glass]
             store.update(cx, .debounced, ix, T.surface);
             store.applyTheme(cx.app);
         },

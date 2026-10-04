@@ -1,0 +1,58 @@
+{
+  "kind": "Flowchart",
+  "direction": "LeftRight",
+  "width": 187.51099,
+  "height": 65.0,
+  "nodes": [
+    {
+      "id": "A",
+      "shape": "Rectangle",
+      "x": 8.0,
+      "y": 8.000002,
+      "width": 75.2,
+      "height": 41.0,
+      "label_width": 39.2,
+      "label_height": 21.0,
+      "label_lines": [
+        "Start"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "B",
+      "shape": "Rectangle",
+      "x": 110.479,
+      "y": 8.0,
+      "width": 61.031998,
+      "height": 41.0,
+      "label_width": 25.031998,
+      "label_height": 21.0,
+      "label_lines": [
+        "End"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          83.2,
+          28.5
+        ],
+        [
+          110.479,
+          28.5
+        ]
+      ]
+    }
+  ],
+  "subgraphs": []
+}

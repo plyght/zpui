@@ -21,6 +21,8 @@ pub const decode_mod = @import("decode.zig");
 pub const fit = @import("fit.zig");
 pub const cache = @import("cache.zig");
 pub const render_image = @import("render_image.zig");
+pub const encode = @import("encode.zig");
+pub const encodePng = encode.encodePng;
 
 pub const SvgRenderer = svg.SvgRenderer;
 pub const SvgDocument = svg.Document;
@@ -60,4 +62,5 @@ test {
     _ = fit;
     _ = cache;
     _ = render_image;
+    _ = encode;
 }

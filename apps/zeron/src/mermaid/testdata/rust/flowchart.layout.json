@@ -1,0 +1,225 @@
+{
+  "kind": "Flowchart",
+  "direction": "LeftRight",
+  "width": 939.156,
+  "height": 222.524,
+  "nodes": [
+    {
+      "id": "A",
+      "shape": "Rectangle",
+      "x": 44.0,
+      "y": 93.51099,
+      "width": 83.04,
+      "height": 41.0,
+      "label_width": 47.04,
+      "label_height": 21.0,
+      "label_lines": [
+        "Inicio"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "B",
+      "shape": "Diamond",
+      "x": 167.04001,
+      "y": 48.5,
+      "width": 131.024,
+      "height": 131.024,
+      "label_width": 101.92,
+      "label_height": 21.0,
+      "label_lines": [
+        "¿Hay cambios?"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "C",
+      "shape": "Rectangle",
+      "x": 350.996,
+      "y": 93.51297,
+      "width": 169.28,
+      "height": 41.0,
+      "label_width": 133.28,
+      "label_height": 21.0,
+      "label_lines": [
+        "Guardar documento"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "D",
+      "shape": "Rectangle",
+      "x": 560.276,
+      "y": 93.51374,
+      "width": 130.08,
+      "height": 41.0,
+      "label_width": 94.08,
+      "label_height": 21.0,
+      "label_lines": [
+        "Vista previa"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "E",
+      "shape": "Rectangle",
+      "x": 730.356,
+      "y": 72.51416,
+      "width": 192.8,
+      "height": 83.0,
+      "label_width": 156.8,
+      "label_height": 63.0,
+      "label_lines": [
+        "Renderizar etiquetas",
+        "largas sin perder",
+        "contenido"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          127.04,
+          114.01099
+        ],
+        [
+          167.04047,
+          114.01155
+        ]
+      ]
+    },
+    {
+      "from": "B",
+      "to": "C",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          298.0637,
+          114.012314
+        ],
+        [
+          350.996,
+          114.01297
+        ]
+      ],
+      "label_anchor": [
+        324.52963,
+        130.21281
+      ],
+      "label_width": 19.216,
+      "label_height": 24.0,
+      "label_lines": [
+        "Sí"
+      ]
+    },
+    {
+      "from": "B",
+      "to": "D",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          282.064,
+          130.012
+        ],
+        [
+          294.664,
+          130.012
+        ],
+        [
+          294.664,
+          151.61287
+        ],
+        [
+          560.276,
+          151.61287
+        ],
+        [
+          560.276,
+          117.68216
+        ]
+      ],
+      "label_anchor": [
+        416.66956,
+        167.81287
+      ],
+      "label_width": 21.392,
+      "label_height": 24.0,
+      "label_lines": [
+        "No"
+      ]
+    },
+    {
+      "from": "C",
+      "to": "D",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          520.276,
+          114.01297
+        ],
+        [
+          532.876,
+          114.01297
+        ],
+        [
+          547.676,
+          109.05058
+        ],
+        [
+          560.276,
+          109.05058
+        ]
+      ]
+    },
+    {
+      "from": "D",
+      "to": "E",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          690.356,
+          114.01388
+        ],
+        [
+          730.356,
+          114.01416
+        ]
+      ]
+    }
+  ],
+  "subgraphs": [
+    {
+      "index": 0,
+      "id": "Cliente",
+      "label": "Cliente",
+      "nodes": [
+        "A",
+        "B"
+      ],
+      "x": 8.0,
+      "y": 8.0,
+      "width": 326.064,
+      "height": 198.524
+    }
+  ]
+}

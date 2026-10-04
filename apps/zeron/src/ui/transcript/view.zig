@@ -26,6 +26,10 @@ const rows = @import("rows.zig");
 const tools = @import("tools.zig");
 const files = md.file_icons;
 const wl = @import("workspace_links.zig");
+const subagents = @import("subagents.zig"); // [wiring] spawn chips → subagent tabs
+const blobs_mod = @import("blobs.zig"); // [wiring] "Show full output" (FetchToolBlob)
+const media = @import("zeron_media");
+const att = model.attachments;
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -122,6 +126,18 @@ pub const TranscriptView = struct {
     workspace_root: ?[]u8 = null,
     probe: wl.Probe = undefined,
     roots_buf: [1][]const u8 = undefined,
+    /// The full-size preview of a transcript image (attachment-ui.tsx dialog).
+    lightbox: ?Entity(media.Lightbox) = null,
+    lightbox_sub: ?zpui.Subscription = null,
+
+    /// [wiring] Fetched sidecar blobs (full outputs / diffs) + in-flight requests.
+    blobs: blobs_mod.Blobs = .{},
+    blob_requests: std.ArrayList(Entity(BlobRequest)) = .empty,
+    /// [wiring] The "Scroll to bottom" pill is offered (hysteresis: 320px / 2px).
+    show_jump: bool = false,
+
+    // [wiring] spawn-chip links: the shell hosts the subagent surface.
+    pub const Events = .{subagents.OpenSubagent};
 
     pub fn init(app_state: Entity(AppState), cx: *Context(TranscriptView)) !TranscriptView {
         var self = initBase(cx);
@@ -161,7 +177,171 @@ pub const TranscriptView = struct {
         self.user_expanded.deinit(self.gpa);
         self.entrance.deinit(self.gpa);
         self.list.release();
+        self.blobs.deinit(self.gpa); // [wiring]
+        for (self.blob_requests.items) |r| r.release(app);
+        self.blob_requests.deinit(self.gpa);
         self.focus.release(app);
+        self.closeLightbox(app);
+    }
+
+    // ---- images (attachments.rs read-back + the shared lightbox) ----
+
+    fn closeLightbox(self: *TranscriptView, app: *App) void {
+        if (self.lightbox_sub) |*sub| sub.deinit();
+        self.lightbox_sub = null;
+        if (self.lightbox) |lb| lb.release(app);
+        self.lightbox = null;
+    }
+
+    fn onLightboxClosed(self: *TranscriptView, _: Entity(media.Lightbox), _: *const media.LightboxClosed, window: *Window, cx: *Context(TranscriptView)) void {
+        self.closeLightbox(cx.app);
+        window.focus(self.focus);
+        cx.notify();
+    }
+
+    fn onLightboxClosedNoWindow(self: *TranscriptView, _: Entity(media.Lightbox), _: *const media.LightboxClosed, cx: *Context(TranscriptView)) void {
+        self.closeLightbox(cx.app);
+        cx.notify();
+    }
+
+    const ImageClick = struct { key: u64 };
+
+    /// Open the lightbox for the cache entry `key` (device/path/mime key hash
+    /// resolved at click time from the row's attachment).
+    fn openImage(self: *TranscriptView, img: *zpui.RenderImage, name: []const u8, window: *Window, cx: *Context(TranscriptView)) void {
+        self.closeLightbox(cx.app);
+        const lb = cx.newWith(media.Lightbox, media.Lightbox.init, .{ media.LightboxOptions{
+            .image = img,
+            .name = name,
+            .release = att.releaseImage,
+            .appearance = themeOf(cx.app).appearance,
+        }, window }) catch return;
+        self.lightbox = lb;
+        self.lightbox_sub = cx.subscribe(lb, onLightboxClosedNoWindow) catch null;
+        cx.notify();
+    }
+
+    /// Devices that may own a user message's attachment files: the chat's
+    /// host device plus this device (`attachment_device_ids`).
+    fn attachmentDevices(self: *const TranscriptView, cx: *Context(TranscriptView), out: [][]const u8) [][]const u8 {
+        const st = (self.app_state orelse return out[0..0]).read(cx);
+        const ws = st.workspace.read(cx);
+        var n: usize = 0;
+        if (ws.selectedChatRow()) |c| {
+            out[n] = c.deviceId;
+            n += 1;
+        }
+        if (ws.local_device_id) |l| if (n == 0 or !std.mem.eql(u8, out[0], l)) {
+            out[n] = l;
+            n += 1;
+        };
+        return out[0..n];
+    }
+
+    fn localDevice(self: *const TranscriptView, cx: *Context(TranscriptView)) ?[]const u8 {
+        const st = (self.app_state orelse return null).read(cx);
+        return st.workspace.read(cx).local_device_id;
+    }
+
+    fn engineEntity(self: *const TranscriptView, cx: *Context(TranscriptView)) ?Entity(model.EngineState) {
+        if (self.app_state) |a| return a.read(cx).engine;
+        if (self.store) |s| return s.read(cx).engine;
+        return null;
+    }
+
+    fn imageState(self: *TranscriptView, devices: []const []const u8, path: []const u8, mime: ?[]const u8, cx: *Context(TranscriptView)) att.Snapshot {
+        const eng = self.engineEntity(cx) orelse return .{ .failed = .{ .retry_in_ns = std.math.maxInt(u64) } };
+        return att.attachmentState(cx.app, eng, devices, self.localDevice(cx), path, mime);
+    }
+
+    const ThumbClick = struct { row: u64, aix: u32 };
+
+    fn onThumbClick(self: *TranscriptView, data: ThumbClick, _: *const zpui.ClickEvent, window: *Window, cx: *Context(TranscriptView)) void {
+        for (self.order.items) |row| {
+            if (row.key != data.row) continue;
+            switch (row.kind) {
+                .user => |u| {
+                    if (data.aix >= u.attachments.len) return;
+                    const a = u.attachments[data.aix];
+                    var buf: [4][]const u8 = undefined;
+                    const devices = self.attachmentDevices(cx, &buf);
+                    switch (self.imageState(devices, a.path, null, cx)) {
+                        .loaded => |l| self.openImage(l.image, l.name, window, cx),
+                        else => {},
+                    }
+                },
+                .generated_image => |g| {
+                    var fb: [4][]const u8 = undefined;
+                    var buf: [6][]const u8 = undefined;
+                    const devices = att.generatedImageDevices(g.owner, self.attachmentDevices(cx, &fb), &buf);
+                    switch (self.imageState(devices, g.path, g.mime_type, cx)) {
+                        .loaded => |l| self.openImage(l.image, g.name, window, cx),
+                        else => {},
+                    }
+                },
+                else => {},
+            }
+            return;
+        }
+    }
+
+    /// One user-attachment thumbnail (`render_user_attachments`).
+    fn attachmentThumb(self: *TranscriptView, row: *const Row, a: rows.Attachment, aix: usize, theme: *const Theme, window: *Window, cx: *Context(TranscriptView)) zpui.StatefulDiv {
+        var buf: [4][]const u8 = undefined;
+        const devices = self.attachmentDevices(cx, &buf);
+        const state = self.imageState(devices, a.path, null, cx);
+        const key = mixKey(row.key, aix);
+        const frame = div().id(.{ "att", key }).flexNone().w(px(att_thumb_w)).h(px(att_thumb_h)).rounded(px(8)).overflowHidden();
+        const sending = std.mem.startsWith(u8, a.path, "pending://") or std.mem.startsWith(u8, a.path, "pending/");
+        const now = cx.app.executor.now();
+        switch (state) {
+            .loaded => |l| {
+                var thumb = frame.relative().border1().borderColor(theme.hairline(0.11)).bg(theme.ink(0.035)).cursorPointer()
+                    .onClick(cx.listenerWith(ThumbClick{ .row = row.key, .aix = @intCast(aix) }, onThumbClick))
+                    .child(zpui.img(l.image).w(px(att_thumb_w - 2)).h(px(att_thumb_h - 2)).rounded(px(7)).objectFit(.cover));
+                if (sending) {
+                    // Progress on the thumbnail: this transfer's percent, else
+                    // the send-wide upload's, else the indeterminate spinner.
+                    const pulse = media.widgets.pulseWave(now);
+                    const pct = att.Cache.of(cx.app).uploadPercent();
+                    const indicator = if (pct) |p| media.widgets.progressRing(p, 34) else media.widgets.miniGlyphSpinner(3, theme.glyph.rows(), media.widgets.phaseAt(now, zt.motion.gradient_spin));
+                    thumb = thumb.child(div().absolute().inset0().rounded(px(7)).flex().itemsCenter().justifyCenter()
+                        .bg(zpui.hsla(0, 0, 0, 0.38 + 0.05 * pulse)).child(indicator));
+                    window.requestAnimationFrame();
+                }
+                return thumb;
+            },
+            .failed => return frame.border1().borderDashed().borderColor(theme.hairline(0.14)).bg(theme.ink(0.025)),
+            .loading => {
+                window.requestAnimationFrame();
+                return frame.border1().borderColor(theme.hairline(0.08)).bg(theme.ink(0.055))
+                    .opacity(0.35 + 0.4 * media.widgets.pulseWave(now));
+            },
+        }
+    }
+
+    /// A generated image part (`render_generated_image`).
+    fn generatedImage(self: *TranscriptView, row: *const Row, theme: *const Theme, cx: *Context(TranscriptView)) AnyElement {
+        const g = row.kind.generated_image;
+        var fb: [4][]const u8 = undefined;
+        var buf: [6][]const u8 = undefined;
+        const devices = att.generatedImageDevices(g.owner, self.attachmentDevices(cx, &fb), &buf);
+        const state = self.imageState(devices, g.path, g.mime_type, cx);
+        const frame = div().id(.{ "gen-img", row.key }).w(px(512)).maxWFull().h(px(320)).maxH(px(420)).flex().itemsCenter().justifyCenter()
+            .rounded(px(12)).overflowHidden().bg(theme.ink(0.045));
+        return zpui.intoAnyElement(switch (state) {
+            .loaded => |l| blk: {
+                const size = l.image.size(0);
+                const w: f32 = @floatFromInt(@max(size.width, 1));
+                const h: f32 = @floatFromInt(@max(size.height, 1));
+                const scale = @min(@min(512.0 / w, 420.0 / h), 1.0);
+                break :blk frame.w(px(w * scale)).h(px(h * scale)).cursorPointer()
+                    .onClick(cx.listenerWith(ThumbClick{ .row = row.key, .aix = 0 }, onThumbClick))
+                    .child(zpui.img(l.image).sizeFull().rounded(px(12)).objectFit(.contain));
+            },
+            .loading => frame.textColor(theme.text_muted).child("Loading generated image\u{2026}"),
+            .failed => frame.textColor(theme.text_muted).child("Generated image unavailable"),
+        });
     }
 
     fn clearEntries(self: *TranscriptView) void {
@@ -480,7 +660,106 @@ pub const TranscriptView = struct {
             root = root.child(zpui.elements.list(self.list, cx, renderRow).sizeFull());
             root = root.child(self.renderRail(theme, window, cx));
         }
+        if (self.lightbox) |lb| root = root.child(lb);
+        // [wiring] "Scroll to bottom" pill over the composer.
+        self.list.setScrollHandler(cx.listener(onListScroll));
+        if (self.order.items.len > 0) self.updateJump();
+        if (self.show_jump) root = root.child(self.renderJump(theme, cx));
         return zpui.intoAnyElement(root);
+    }
+
+    // ---- [wiring] jump to bottom ---------------------------------------------------
+
+    /// Distance (px) from the end of the list, from the last layout.
+    pub fn distanceFromEnd(self: *const TranscriptView) f32 {
+        const max = self.list.maxOffsetForScrollbar().y;
+        const cur = -self.list.scrollPxOffsetForScrollbar().y;
+        return @max(max - cur, 0);
+    }
+
+    /// `jump_visibility`: offered past 320px, kept until within 2px.
+    pub fn jumpVisibility(was_shown: bool, distance: f32) bool {
+        return distance > (if (was_shown) jump_at_bottom_px else jump_threshold_px);
+    }
+
+    fn updateJump(self: *TranscriptView) void {
+        self.show_jump = jumpVisibility(self.show_jump, self.distanceFromEnd());
+    }
+
+    fn onListScroll(self: *TranscriptView, _: *const zpui.elements.list_mod.ListScrollEvent, _: *Window, cx: *Context(TranscriptView)) void {
+        const was = self.show_jump;
+        self.updateJump();
+        if (was != self.show_jump) cx.notify();
+    }
+
+    /// The pill's click: back to the end, re-pinned to the tail.
+    pub fn jumpToBottom(self: *TranscriptView, cx: *Context(TranscriptView)) void {
+        self.list.setFollowMode(.tail);
+        self.list.scrollToEnd();
+        self.show_jump = false;
+        cx.notify();
+    }
+
+    fn onJumpClick(self: *TranscriptView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(TranscriptView)) void {
+        self.jumpToBottom(cx);
+    }
+
+    fn renderJump(self: *TranscriptView, theme_in: *const Theme, cx: *Context(TranscriptView)) zpui.Div {
+        const theme = zpui.window.arena_mod.current().create(Theme, theme_in.forPopup());
+        const glass = theme.isFrost();
+        var pill = div().id("jump-to-bottom").h(px(30)).roundedFull().border1().borderColor(theme.border).cursorPointer()
+            .bg(if (glass) (if (theme.appearance.isDark()) theme.composerSidebarTint() else theme.glassOverlay()) else theme.surface_raised)
+            .hover(sb.bg(if (glass) theme.glassHover() else theme.surface_raised_hover))
+            .onClick(cx.listener(onJumpClick))
+            .child(div().hFull().roundedFull().flex().itemsCenter().gap(px(6)).pl(px(11)).pr(px(13))
+                .child(div().textSize(px(13)).textColor(theme.text_muted).child("\u{2193}"))
+                .child(div().textSize(px(13)).textColor(theme.text).child("Scroll to bottom")));
+        if (!glass) pill = pill.shadowMd();
+        // Floating just above the composer pill (Rust: `top(-36)` over the
+        // docked composer; the shell's clearance = pill stack + 64).
+        const bottom = @max(self.bottom_clearance - 18, 12);
+        // Frosted like the composer pill (one scene layer: blur, then the pill).
+        return div().absolute().left(px(0)).right(px(10)).bottom(px(bottom)).flex().justifyCenter()
+            .child(zpui.frosted(15, layout.menu_blur, pill));
+    }
+
+    // ---- [wiring] sidecar blobs ------------------------------------------------------
+
+    /// "Show full output": fetch the blob (or re-show a fetched one).
+    pub fn requestBlob(self: *TranscriptView, blob_ref: []const u8, cx: *Context(TranscriptView)) void {
+        if (!self.blobs.request(self.gpa, blob_ref)) return cx.notify();
+        const store = (self.store orelse return).read(cx);
+        const req = cx.newWith(BlobRequest, BlobRequest.init, .{ cx.entityId(), blob_ref }) catch return;
+        self.blob_requests.append(self.gpa, req) catch {};
+        model.EngineState.request(store.engine, cx, BlobRequest, req.id, .FetchToolBlob, .{ .blobRef = blob_ref }, BlobRequest.onResult) catch {
+            self.blobs.land(self.gpa, blob_ref, null);
+        };
+        self.remeasureAll();
+        cx.notify();
+    }
+
+    pub fn onBlobClick(self: *TranscriptView, data: BlobClick, _: *const zpui.ClickEvent, _: *Window, cx: *Context(TranscriptView)) void {
+        const ix = self.indexOfKey(data.row_key) orelse return;
+        const row = self.order.items[ix];
+        if (row.kind != .tool_group or data.tool_ix >= row.kind.tool_group.tools.len) return;
+        var buf: [96]u8 = undefined;
+        const aff = self.blobs.affordance(row.kind.tool_group.tools[data.tool_ix], &buf) orelse return;
+        self.requestBlob(aff.blob_ref, cx);
+    }
+
+    /// A fetch landed (`text` null = failed): the detail upgrades in place.
+    pub fn landBlob(self: *TranscriptView, blob_ref: []const u8, text: ?[]const u8, req_id: zpui.EntityId, cx: *Context(TranscriptView)) void {
+        self.blobs.land(self.gpa, blob_ref, text);
+        for (self.blob_requests.items, 0..) |r, i| if (r.id == req_id) {
+            self.blob_requests.swapRemove(i).release(cx);
+            break;
+        };
+        self.remeasureAll();
+        cx.notify();
+    }
+
+    fn remeasureAll(self: *TranscriptView) void {
+        self.list.remeasure();
     }
 
     fn nowMs(self: *const TranscriptView, cx: *Context(TranscriptView)) i64 {
@@ -513,7 +792,7 @@ pub const TranscriptView = struct {
             .input_chip => |c| inputChip(c.header, c.resolved, theme),
             .error_chip => |c| errorChip(c.message, row.key, theme),
             .fork_marker => |f| forkMarker(f.source_title, theme),
-            .generated_image => |g| generatedImage(g.path, row.key, theme),
+            .generated_image => self.generatedImage(row, theme, cx),
         };
 
         const entry_key = rows.hashStr(row.entry_id);
@@ -561,12 +840,11 @@ pub const TranscriptView = struct {
     }
 
     fn renderUser(self: *TranscriptView, row: *const Row, theme: *const Theme, window: *Window, cx: *Context(TranscriptView)) AnyElement {
-        _ = window;
         const u = row.kind.user;
         var column = div().wFull().flex().flexCol();
         if (u.attachments.len > 0) {
             var strip = div().wFull().minW0().flexNone().flex().flexRow().flexWrap().justifyEnd().itemsStart().gap(px(8)).px(px(4)).pt(px(4)).pb(px(6));
-            for (u.attachments, 0..) |att, aix| strip = strip.child(attachmentThumb(att, mixKey(row.key, aix), theme));
+            for (u.attachments, 0..) |a, aix| strip = strip.child(self.attachmentThumb(row, a, aix, theme, window, cx));
             column = column.child(strip);
         }
         if (u.text.len > 0) {
@@ -601,6 +879,44 @@ pub const TranscriptView = struct {
     }
 
     /// The working loader under the last row while the run is live.
+    // ---- [wiring] retry + spawn chips -------------------------------------------------
+
+    fn onRetryClick(self: *TranscriptView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(TranscriptView)) void {
+        self.retrySend(cx);
+    }
+
+    /// `retry_send`: restart the pending-send grace window and ask the engine
+    /// for a fresh delivery attempt (`RetryDelivery {chatId}`).
+    pub fn retrySend(self: *TranscriptView, cx: *Context(TranscriptView)) void {
+        const store = self.store orelse return;
+        store.update(cx, TranscriptStore.retryPendingSend, .{});
+        const st = store.read(cx);
+        model.EngineState.send(st.engine, cx, .RetryDelivery, engine.protocol.params.ChatId{ .chatId = st.chat_id }) catch |err| {
+            std.log.scoped(.zeron_transcript).warn("delivery retry RPC failed: {t}", .{err});
+        };
+        cx.notify();
+    }
+
+    /// A spawn chip (`row_key`, tool `ix`): emit `OpenSubagent` for its doc.
+    pub fn onSpawnClick(self: *TranscriptView, data: [2]u64, _: *const zpui.ClickEvent, _: *Window, cx: *Context(TranscriptView)) void {
+        const ix = self.indexOfKey(data[0]) orelse return;
+        const row = self.order.items[ix];
+        if (row.kind != .tool_group) return;
+        const tools_ = row.kind.tool_group.tools;
+        if (data[1] >= tools_.len) return;
+        const item = tools_[data[1]];
+        const doc = item.subagent_ref orelse return;
+        const store = (self.store orelse return).read(cx);
+        // The event is delivered after this handler: a static title buffer.
+        const buf = &spawn_title_buf;
+        const title = blk: {
+            const entry = store.findEntry(row.entry_id) orelse break :blk "Subagent";
+            const t = subagents.findTool(entry, item.part_id) orelse break :blk "Subagent";
+            break :blk subagents.subagentTabTitle(buf, t.call);
+        };
+        cx.emit(subagents.OpenSubagent{ .chat_id = store.chat_id, .doc_id = doc, .title = title, .frozen = subagents.isFrozen(item.subagent_status) });
+    }
+
     fn renderTrailer(self: *TranscriptView, theme: *const Theme, window: *Window, cx: *Context(TranscriptView)) ?zpui.Div {
         const store_e = self.store orelse return null;
         const store = store_e.read(cx);
@@ -625,8 +941,11 @@ pub const TranscriptView = struct {
         if (store.pendingEchoes().len > 0 or store.pending_send != null) {
             const ts = model.Timestamp.fromUnixMillis(now_ms);
             if (store.sendUndelivered(ts)) {
-                return div().flex().flexRow().itemsCenter().gap(px(layout.space_sm)).pt(px(layout.space_lg))
-                    .textSize(px(12)).textColor(theme.danger).child("Not delivered \u{2014} click to retry");
+                // [wiring] the trailer IS the retry affordance (`retry_send`).
+                return div().child(div().id("undelivered-retry").flex().flexRow().itemsCenter().gap(px(layout.space_sm)).pt(px(layout.space_lg))
+                    .textSize(px(12)).textColor(theme.danger).cursorPointer()
+                    .onClick(cx.listener(onRetryClick))
+                    .child("Not delivered \u{2014} click to retry"));
             }
             if (!working) {
                 working = true;
@@ -723,6 +1042,39 @@ pub const TranscriptView = struct {
     }
 };
 
+var spawn_title_buf: [256]u8 = undefined;
+
+/// [wiring] `SCROLL_BUTTON_THRESHOLD_PX` / `AT_BOTTOM_PX`.
+pub const jump_threshold_px: f32 = 320;
+pub const jump_at_bottom_px: f32 = 2;
+
+/// [wiring] A chip's blob affordance click target.
+pub const BlobClick = struct { row_key: u64, tool_ix: usize };
+
+/// [wiring] One in-flight `FetchToolBlob`, routing its reply to the view.
+pub const BlobRequest = struct {
+    gpa: Allocator,
+    view: zpui.EntityId,
+    blob_ref: []u8,
+
+    pub fn init(view: zpui.EntityId, blob_ref: []const u8, cx: *Context(BlobRequest)) !BlobRequest {
+        return .{ .gpa = cx.gpa(), .view = view, .blob_ref = try cx.gpa().dupe(u8, blob_ref) };
+    }
+
+    pub fn deinit(self: *BlobRequest) void {
+        self.gpa.free(self.blob_ref);
+    }
+
+    pub fn onResult(self: *BlobRequest, result: model.engine_state.CallResult, cx: *Context(BlobRequest)) void {
+        const text: ?[]const u8 = switch (result) {
+            .ok => |v| if (v == .object) (if (v.object.get("text")) |t| (if (t == .string) t.string else null) else null) else null,
+            .err => null,
+        };
+        const weak: zpui.WeakEntity(TranscriptView) = .{ .id = self.view };
+        _ = weak.update(cx.app, TranscriptView.landBlob, .{ self.blob_ref, text, cx.entityId() });
+    }
+};
+
 fn truncatePreview(a: Allocator, text: []const u8, max_chars: usize) []const u8 {
     const flat = model.view.singleLine(a, text) catch return text;
     const n = std.unicode.utf8CountCodepoints(flat) catch flat.len;
@@ -758,15 +1110,6 @@ pub fn gradientSpinner(cell: f32, phase: f32) zpui.Div {
         col = col.child(line);
     }
     return col;
-}
-
-fn attachmentThumb(att: rows.Attachment, key: u64, theme: *const Theme) zpui.StatefulDiv {
-    const frame = div().id(.{ "att", key }).flexNone().w(px(att_thumb_w)).h(px(att_thumb_h)).rounded(px(8)).overflowHidden()
-        .relative().border1().borderColor(theme.hairline(0.11)).bg(theme.ink(0.035));
-    const pending = std.mem.startsWith(u8, att.path, "pending://") or std.mem.startsWith(u8, att.path, "pending/");
-    if (pending) return frame.child(div().absolute().inset0().flex().itemsCenter().justifyCenter().bg(zpui.hsla(0, 0, 0, 0.38)));
-    return frame.child(zpui.img(zpui.ImageSource{ .path = att.path }).w(px(att_thumb_w - 2)).h(px(att_thumb_h - 2))
-        .rounded(px(7)).objectFit(.cover));
 }
 
 /// `input_chip`: a passive one-line chip marking a question the agent asked.
@@ -815,13 +1158,6 @@ pub fn forkMarker(title: []const u8, theme: *const Theme) AnyElement {
             .child(div().flexNone().textSize(px(12)).textColor(theme.text_muted.opacity(0.7)).child("Forked from"))
             .child(rule(theme)))
         .child(div().wFull().minW0().truncate().textCenter().textSize(px(13)).fontWeight(500).textColor(theme.text_muted).child(title)));
-}
-
-/// A generated image part (`render_generated_image`).
-pub fn generatedImage(path: []const u8, key: u64, theme: *const Theme) AnyElement {
-    return zpui.intoAnyElement(div().id(.{ "gen-img", key }).w(px(512)).maxWFull().h(px(320)).flex().itemsCenter().justifyCenter()
-        .rounded(px(12)).overflowHidden().bg(theme.ink(0.045)).textColor(theme.text_muted)
-        .child(zpui.img(zpui.ImageSource{ .path = path }).sizeFull().rounded(px(12)).objectFit(.contain)));
 }
 
 // ---------------------------------------------------------------------------

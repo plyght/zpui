@@ -31,6 +31,7 @@ const geometry = @import("../../geometry.zig");
 const scene_mod = @import("../../scene.zig");
 const atlas_mod = @import("../../atlas.zig");
 const Renderer = @import("../../renderer/renderer.zig").Renderer;
+const native_views = @import("native_views.zig");
 
 const log = std.log.scoped(.mac_window);
 
@@ -196,6 +197,8 @@ pub const MacWindow = struct {
     transparent_titlebar: bool = false,
     activated_at_least_once: bool = false,
     closed: bool = false,
+    /// Native child views + the overlay plane (native_views.zig).
+    natives: native_views.Host = .{},
 
     // -- construction ---------------------------------------------------------
 
@@ -224,7 +227,8 @@ pub const MacWindow = struct {
         };
 
         // Position relative to the main screen, top-left origin (zui `MacWindow::open`).
-        const screen = ak.class("NSScreen").msg(?id, "mainScreen", .{});
+        const screen = (if (params.display_id) |did| ak.screenForDisplayId(did) else null) orelse
+            ak.class("NSScreen").msg(?id, "mainScreen", .{});
         const screen_frame: NSRect = if (screen) |s| ak.frame(s) else .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 1440, .height = 900 } };
         const top_left: NSPoint = .{
             .x = screen_frame.origin.x + params.bounds.origin.x,
@@ -351,6 +355,10 @@ pub const MacWindow = struct {
         return deviceSize(self.contentSize(), self.scaleFactor());
     }
 
+    pub fn drawableSizePub(self: *const MacWindow) geometry.Size(geometry.DevicePixels) {
+        return self.drawableSize();
+    }
+
     fn boundsImpl(self: *const MacWindow) Bounds {
         const f = ak.frame(self.native_window);
         const screen = self.native_window.msg(?id, "screen", .{}) orelse
@@ -402,7 +410,8 @@ pub const MacWindow = struct {
         self.renderer.setPresentsWithTransaction(true);
         self.stopDisplayLink();
         self.requestFrameCallback(true);
-        self.renderer.setPresentsWithTransaction(false);
+        // With native children both planes always present inside the CA transaction.
+        self.renderer.setPresentsWithTransaction(self.natives.enabled());
         self.startDisplayLink();
     }
 
@@ -411,6 +420,7 @@ pub const MacWindow = struct {
     fn updateScaleFactorAndSize(self: *MacWindow) void {
         const scale = self.scaleFactor();
         if (self.renderer.layer()) |layer| @as(id, @ptrCast(layer)).msg(void, "setContentsScale:", .{@as(ak.CGFloat, scale)});
+        native_views.updateScale(self);
         self.renderer.resize(self.drawableSize()) catch |err| log.err("renderer resize: {s}", .{@errorName(err)});
         if (self.callbacks.resize) |f| f(self.callbacks.ctx, self.contentSize(), scale);
     }
@@ -549,6 +559,7 @@ pub const MacWindow = struct {
         objc.setIvar(self.native_window, state_ivar, null);
         self.native_window.msg(void, "setDelegate:", .{@as(?id, null)});
         if (self.blurred_view) |v| v.release();
+        self.natives.deinit(self);
         self.renderer.deinit();
         self.native_window.release();
         self.gpa.destroy(self);
@@ -584,13 +595,54 @@ pub const MacWindow = struct {
         .spriteAtlas = vSpriteAtlas,
         .updateImePosition = vUpdateImePosition,
         .close = vClose,
+        .displayId = vDisplayId,
+        .attachNativeView = vAttachNativeView,
+        .placeNativeView = vPlaceNativeView,
+        .detachNativeView = vDetachNativeView,
+        .focusNativeView = vFocusNativeView,
+        .drawLayered = vDrawLayered,
+        .attachLiquidGlass = vAttachLiquidGlass, // [liquid-glass]
+        .configureLiquidGlass = vConfigureLiquidGlass,
     };
+
+    // [liquid-glass] NSGlassEffectView children (native_views.zig).
+    fn vAttachLiquidGlass(ptr: *anyopaque, options: platform.LiquidGlassAttach) anyerror!platform.NativeViewId {
+        return native_views.attachGlass(cast(ptr), options);
+    }
+    fn vConfigureLiquidGlass(ptr: *anyopaque, view: platform.NativeViewId, config: platform.LiquidGlassConfig) void {
+        const self = cast(ptr);
+        if (self.closed) return;
+        native_views.configureGlass(self, view, config);
+    }
+
+    fn vAttachNativeView(ptr: *anyopaque, native: *anyopaque, options: platform.NativeViewOptions) anyerror!platform.NativeViewId {
+        return native_views.attach(cast(ptr), native, options);
+    }
+    fn vPlaceNativeView(ptr: *anyopaque, view: platform.NativeViewId, placement: ?platform.NativeViewPlacement) void {
+        const self = cast(ptr);
+        if (self.closed) return;
+        native_views.place(self, view, placement);
+    }
+    fn vDetachNativeView(ptr: *anyopaque, view: platform.NativeViewId) void {
+        native_views.detach(cast(ptr), view);
+    }
+    fn vFocusNativeView(ptr: *anyopaque, view: ?platform.NativeViewId) void {
+        native_views.focus(cast(ptr), view);
+    }
+    fn vDrawLayered(ptr: *anyopaque, scene: *const scene_mod.Scene, overlay: []const platform.OverlayRange, capture_input: bool) anyerror!void {
+        const self = cast(ptr);
+        if (self.closed) return;
+        try native_views.drawLayered(self, scene, overlay, capture_input);
+    }
 
     fn cast(ptr: *anyopaque) *MacWindow {
         return @ptrCast(@alignCast(ptr));
     }
     fn vSetCallbacks(ptr: *anyopaque, cbs: platform.WindowCallbacks) void {
         cast(ptr).callbacks = cbs;
+    }
+    fn vDisplayId(ptr: *anyopaque) ?u32 {
+        return ak.displayIdForScreen(cast(ptr).native_window.msg(?id, "screen", .{}));
     }
     fn vBounds(ptr: *anyopaque) Bounds {
         return cast(ptr).boundsImpl();
@@ -1126,7 +1178,7 @@ fn mouseExited(this: id, s: SEL, event: id) callconv(.c) void {
     if (w.callbacks.hover_status_change) |f| f(w.callbacks.ctx, false);
 }
 
-fn handleViewEvent(this: id, _: SEL, native_event: id) callconv(.c) void {
+pub fn handleViewEvent(this: id, _: SEL, native_event: id) callconv(.c) void {
     const w = state(this) orelse return;
     const translated = events.translate(native_event, w.contentSize().height) orelse return;
     var event = switch (translated) {

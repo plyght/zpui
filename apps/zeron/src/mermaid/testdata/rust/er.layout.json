@@ -1,0 +1,114 @@
+{
+  "kind": "Er",
+  "direction": "TopDown",
+  "width": 203.56401,
+  "height": 379.58,
+  "nodes": [
+    {
+      "id": "DOCUMENT",
+      "shape": "RoundRect",
+      "x": 16.624008,
+      "y": 96.53999,
+      "width": 162.316,
+      "height": 112.35,
+      "label_width": 109.76,
+      "label_height": 84.0,
+      "label_lines": [
+        "DOCUMENT",
+        "---",
+        "string path PK",
+        "int revision"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "IMAGE",
+      "shape": "RoundRect",
+      "x": 8.0,
+      "y": 251.23,
+      "width": 179.56401,
+      "height": 112.35,
+      "label_width": 125.44,
+      "label_height": 84.0,
+      "label_lines": [
+        "IMAGE",
+        "---",
+        "string source PK",
+        "int width"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "WORKSPACE",
+      "shape": "RoundRect",
+      "x": 28.99791,
+      "y": 8.0,
+      "width": 137.56819,
+      "height": 46.199997,
+      "label_width": 87.262,
+      "label_height": 21.0,
+      "label_lines": [
+        "WORKSPACE"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "WORKSPACE",
+      "to": "DOCUMENT",
+      "directed": false,
+      "arrow_start": false,
+      "arrow_end": false,
+      "points": [
+        [
+          97.782005,
+          54.199997
+        ],
+        [
+          97.782005,
+          96.53999
+        ]
+      ],
+      "label_anchor": [
+        86.742004,
+        75.369995
+      ],
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "contains"
+      ]
+    },
+    {
+      "from": "DOCUMENT",
+      "to": "IMAGE",
+      "directed": false,
+      "arrow_start": false,
+      "arrow_end": false,
+      "points": [
+        [
+          97.782005,
+          208.88998
+        ],
+        [
+          97.782005,
+          251.23
+        ]
+      ],
+      "label_anchor": [
+        86.742004,
+        230.06
+      ],
+      "label_width": 89.6,
+      "label_height": 24.0,
+      "label_lines": [
+        "references"
+      ]
+    }
+  ],
+  "subgraphs": []
+}

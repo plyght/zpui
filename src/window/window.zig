@@ -49,6 +49,7 @@ pub const dispatch_mod = @import("dispatch.zig");
 pub const view = @import("view.zig");
 pub const input_handler = @import("input_handler.zig");
 pub const image = @import("image.zig");
+pub const liquid_glass_mod = @import("liquid_glass.zig"); // [liquid-glass]
 
 const Captures = callback.Captures;
 const ElementArena = arena_mod.ElementArena;
@@ -256,6 +257,14 @@ pub const PaintIndex = struct {
     tab_stops: usize = 0,
     accessed_element_states: usize = 0,
     line_layout: text_mod.LineLayoutIndex = .{},
+    native_views: usize = 0,
+    overlay_ranges: usize = 0,
+};
+
+/// One native child view painted this frame (`Window.paintNativeView`).
+pub const NativeViewPaint = struct {
+    id: platform.NativeViewId,
+    placement: platform.NativeViewPlacement,
 };
 
 const StateKey = struct { gid: u64, tid: u64 };
@@ -292,6 +301,12 @@ pub const Frame = struct {
     tooltip_requests: std.ArrayList(?TooltipRequest) = .empty,
     cursor_styles: std.ArrayList(CursorStyleRequest) = .empty,
     tab_stops: TabStopMap = .{},
+    /// Native child views to place when this frame is presented.
+    native_views: std.ArrayList(NativeViewPaint) = .empty,
+    /// Scene ranges drawn on the overlay plane above native views (may overlap; merged at present).
+    overlay_ranges: std.ArrayList(platform.OverlayRange) = .empty,
+    /// The overlay holds interactive content (menus, drags): it takes the mouse.
+    overlay_capture_input: bool = false,
 
     fn init(gpa: Allocator, keymap: *const @import("../app/keymap.zig").Keymap) Frame {
         return .{ .gpa = gpa, .dispatch_tree = .init(gpa, keymap) };
@@ -310,6 +325,8 @@ pub const Frame = struct {
         self.tooltip_requests.deinit(self.gpa);
         self.cursor_styles.deinit(self.gpa);
         self.tab_stops.deinit(self.gpa);
+        self.native_views.deinit(self.gpa);
+        self.overlay_ranges.deinit(self.gpa);
     }
 
     /// Reset for reuse. Element states still here were not carried into the newer frame,
@@ -328,6 +345,9 @@ pub const Frame = struct {
         self.tooltip_requests.clearRetainingCapacity();
         self.cursor_styles.clearRetainingCapacity();
         self.tab_stops.clear();
+        self.native_views.clearRetainingCapacity();
+        self.overlay_ranges.clearRetainingCapacity();
+        self.overlay_capture_input = false;
         self.focus = null;
         self.window_active = false;
     }
@@ -385,6 +405,13 @@ pub const FocusListener = struct {
     func: *const fn (entity: EntityId, window: *Window, app: *App) bool,
 };
 
+fn WindowListener(comptime Ret: type) type {
+    return struct {
+        func: *const fn (cap: *const Captures, window: *Window, app: *App) Ret,
+        cap: Captures,
+    };
+}
+
 const FrameCallback = struct {
     func: *const fn (cap: *const Captures, window: *Window, app: *App) void,
     cap: Captures,
@@ -437,6 +464,18 @@ pub const Window = struct {
     refreshing: bool = false,
     phase: DrawPhase = .none,
     needs_present: bool = false,
+    /// `pushOverlayPlane` nesting and where the open overlay range starts.
+    overlay_depth: u32 = 0,
+    overlay_open_start: usize = 0,
+    /// [liquid-glass] `pushTopPlane` nesting / open top range start.
+    top_depth: u32 = 0,
+    top_open_start: usize = 0,
+    /// [liquid-glass] Native glass views of this window (liquid_glass.zig).
+    liquid_glass: liquid_glass_mod.Pool = .{},
+    /// Native views placed by the last present (hidden when a frame omits them).
+    presented_native_views: std.ArrayList(platform.NativeViewId) = .empty,
+    /// Merged overlay ranges handed to `drawLayered` (reused buffer).
+    present_overlay: std.ArrayList(platform.OverlayRange) = .empty,
     removed: bool = false,
     /// The platform window is gone (closed by the OS); never touch it again.
     platform_closed: bool = false,
@@ -476,6 +515,9 @@ pub const Window = struct {
     /// Pending autoscroll request from an element (gpui `requested_autoscroll`), consumed by
     /// scroll containers such as `list` during prepaint.
     requested_autoscroll: ?Bounds = null,
+    /// `onShouldClose` vetoes and `observeBounds` observers (window lifecycle).
+    should_close_listeners: std.ArrayList(WindowListener(bool)) = .empty,
+    bounds_observers: std.ArrayList(WindowListener(void)) = .empty,
 
     // ---- lifecycle ------------------------------------------------------------------
 
@@ -509,7 +551,7 @@ pub const Window = struct {
             .active_status_change = cbActive,
             .hover_status_change = cbHover,
             .resize = cbResize,
-            .moved = null,
+            .moved = cbMoved,
             .should_close = cbShouldClose,
             .close = cbClose,
             .appearance_changed = cbAppearance,
@@ -528,6 +570,8 @@ pub const Window = struct {
             self.platform_closed = true;
         }
         self.pending_input.deinit(gpa);
+        self.should_close_listeners.deinit(gpa);
+        self.bounds_observers.deinit(gpa);
         if (self.root) |r| r.entity.release(app);
         self.root = null;
         self.rendered_frame.deinit(app);
@@ -541,6 +585,9 @@ pub const Window = struct {
         self.rendered_entity_stack.deinit(gpa);
         self.element_offset_stack.deinit(gpa);
         self.content_mask_stack.deinit(gpa);
+        self.presented_native_views.deinit(gpa);
+        self.present_overlay.deinit(gpa);
+        self.liquid_glass.deinit(gpa); // [liquid-glass] (views went with the platform window)
         self.dirty_views.deinit(gpa);
         self.pending_dirty_views.deinit(gpa);
         self.mouse_hit_test.ids.deinit(gpa);
@@ -618,10 +665,68 @@ pub const Window = struct {
         self.viewport_size = size;
         self.scale_factor = scale;
         self.refresh();
+        self.notifyBoundsObservers();
     }
 
-    fn cbShouldClose(_: ?*anyopaque) bool {
-        return true;
+    fn cbMoved(ctx: ?*anyopaque) void {
+        const self = fromCtx(ctx);
+        if (self.removed) return;
+        const app = self.app;
+        app.startUpdate();
+        defer app.finishUpdate();
+        self.notifyBoundsObservers();
+    }
+
+    fn notifyBoundsObservers(self: *Window) void {
+        if (self.bounds_observers.items.len == 0) return;
+        const items = self.gpa.dupe(WindowListener(void), self.bounds_observers.items) catch return;
+        defer self.gpa.free(items);
+        for (items) |*l| l.func(&l.cap, self, self.app);
+    }
+
+    /// The OS close button / `performClose:`: every `onShouldClose` listener must agree.
+    fn cbShouldClose(ctx: ?*anyopaque) bool {
+        const self = fromCtx(ctx);
+        if (self.removed or self.should_close_listeners.items.len == 0) return true;
+        const app = self.app;
+        app.startUpdate();
+        defer app.finishUpdate();
+        const items = self.gpa.dupe(WindowListener(bool), self.should_close_listeners.items) catch return true;
+        defer self.gpa.free(items);
+        var ok = true;
+        for (items) |*l| ok = l.func(&l.cap, self, app) and ok;
+        return ok;
+    }
+
+    /// `f(ctx, window, app) bool` when the user asks to close the window from its frame
+    /// (close button, Alt+F4, the compositor); return false to keep it open (gpui
+    /// `on_window_should_close`). `removeWindow` is never vetoed.
+    pub fn onShouldClose(self: *Window, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        const C = @TypeOf(ctx);
+        const Gen = struct {
+            fn call(cap: *const Captures, w: *Window, a: *App) bool {
+                return f(cap.get(C).*, w, a);
+            }
+        };
+        try self.should_close_listeners.append(self.gpa, .{ .func = Gen.call, .cap = .init(ctx) });
+    }
+
+    /// `f(ctx, window, app)` after the window moved or resized (gpui `observe_window_bounds`).
+    pub fn observeBounds(self: *Window, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        const C = @TypeOf(ctx);
+        const Gen = struct {
+            fn call(cap: *const Captures, w: *Window, a: *App) void {
+                f(cap.get(C).*, w, a);
+            }
+        };
+        try self.bounds_observers.append(self.gpa, .{ .func = Gen.call, .cap = .init(ctx) });
+    }
+
+    /// The display the window is on (`platform.Display.id`), when the backend knows.
+    pub fn displayId(self: *const Window) ?u32 {
+        if (self.platform_closed) return null;
+        const f = self.platform_window.vtable.displayId orelse return null;
+        return f(self.platform_window.ptr);
     }
 
     fn cbClose(ctx: ?*anyopaque) void {
@@ -908,6 +1013,7 @@ pub const Window = struct {
         const gpa = self.gpa;
         const prev_arena = arena_mod.enter(&self.element_arena);
         defer arena_mod.exit(prev_arena);
+        self.liquid_glass.frame_keys.clearRetainingCapacity(); // [liquid-glass]
 
         // Dirty views → mark their ancestor views dirty too.
         {
@@ -1017,8 +1123,15 @@ pub const Window = struct {
 
         self.phase = .paint;
         root.paint(self, app);
+        // Root paint is beneath native views; deferred menus, drags and tooltips use the
+        // overlay plane (zui `overlay_scene_start`). Passive tooltips do not take input.
+        self.next_frame.overlay_capture_input = self.next_frame.deferred_draws.items.len > 0 or drag_element != null;
+        self.pushOverlayPlane();
+        self.liquid_glass.floating_depth += 1; // [liquid-glass] glass here floats
         self.paintDeferredDraws();
         if (drag_element) |el| el.paint(self, app) else if (tooltip_element) |el| el.paint(self, app);
+        self.liquid_glass.floating_depth -= 1;
+        self.popOverlayPlane();
         self.phase = .none;
     }
 
@@ -1132,7 +1245,13 @@ pub const Window = struct {
     /// Submit the rendered frame's scene to the platform window, then release this frame's
     /// elements (gpui `present` + `ArenaClearNeeded::clear`).
     pub fn present(self: *Window) void {
-        self.platform_window.draw(&self.rendered_frame.scene) catch |err| {
+        self.applyNativeViews();
+        liquid_glass_mod.sweep(self); // [liquid-glass]
+        const drawn = if (self.platform_window.vtable.drawLayered) |draw_layered| blk: {
+            self.mergeOverlayRanges();
+            break :blk draw_layered(self.platform_window.ptr, &self.rendered_frame.scene, self.present_overlay.items, self.rendered_frame.overlay_capture_input);
+        } else self.platform_window.draw(&self.rendered_frame.scene);
+        drawn catch |err| {
             std.log.err("window present failed: {t}", .{err});
         };
         self.needs_present = false;
@@ -1623,6 +1742,8 @@ pub const Window = struct {
             .tab_stops = self.next_frame.tab_stops.paintIndex(),
             .accessed_element_states = self.next_frame.accessed_element_states.items.len,
             .line_layout = self.text_system.layoutIndex(),
+            .native_views = self.next_frame.native_views.items.len,
+            .overlay_ranges = self.next_frame.overlay_ranges.items.len,
         };
     }
 
@@ -1693,7 +1814,14 @@ pub const Window = struct {
         const gpa = self.gpa;
         const r = &self.rendered_frame;
         const n = &self.next_frame;
+        const scene_base = n.scene.len();
         n.scene.replay(gpa, range[0].scene, range[1].scene, &r.scene) catch @panic("OOM");
+        n.native_views.appendSlice(gpa, r.native_views.items[range[0].native_views..range[1].native_views]) catch @panic("OOM");
+        for (r.overlay_ranges.items[range[0].overlay_ranges..range[1].overlay_ranges]) |o| {
+            const start = @max(o.start, range[0].scene) - range[0].scene + scene_base;
+            const end = @min(o.end, range[1].scene) - range[0].scene + scene_base;
+            if (end > start) n.overlay_ranges.append(gpa, .{ .start = start, .end = end, .plane = o.plane }) catch @panic("OOM");
+        }
         for (r.mouse_listeners.items[range[0].mouse_listeners..range[1].mouse_listeners]) |*l| {
             n.mouse_listeners.append(gpa, l.*) catch @panic("OOM");
             l.* = null;
@@ -1706,6 +1834,183 @@ pub const Window = struct {
         n.tab_stops.replay(gpa, r.tab_stops.insertion_history.items[range[0].tab_stops..range[1].tab_stops]);
         self.reuseElementStates(range[0].accessed_element_states, range[1].accessed_element_states);
         self.text_system.reuseLayouts(range[0].line_layout, range[1].line_layout) catch @panic("OOM");
+    }
+
+    // ---- native child views + overlay plane (platform.NativeViewId) ----------------------
+
+    /// Place native view `id` at `bounds` for this frame (paint phase), clipped to the
+    /// current content mask. Views not painted in a presented frame are hidden.
+    pub fn paintNativeView(self: *Window, id: platform.NativeViewId, view_bounds: Bounds, corner_radius: Pixels) void {
+        std.debug.assert(self.phase == .paint);
+        const clip = view_bounds.intersect(self.contentMask().bounds);
+        self.next_frame.native_views.append(self.gpa, .{ .id = id, .placement = .{
+            .bounds = view_bounds,
+            .clip = clip,
+            .corner_radius = corner_radius,
+        } }) catch @panic("OOM");
+    }
+
+    /// Paint everything until the matching `popOverlayPlane` on the overlay plane above
+    /// native child views (no-op on backends without native views). Nests.
+    pub fn pushOverlayPlane(self: *Window) void {
+        if (self.overlay_depth == 0) self.overlay_open_start = self.next_frame.scene.len();
+        self.overlay_depth += 1;
+    }
+
+    pub fn popOverlayPlane(self: *Window) void {
+        std.debug.assert(self.overlay_depth > 0);
+        self.overlay_depth -= 1;
+        if (self.overlay_depth != 0) return;
+        const end = self.next_frame.scene.len();
+        if (end > self.overlay_open_start)
+            self.next_frame.overlay_ranges.append(self.gpa, .{ .start = self.overlay_open_start, .end = end }) catch @panic("OOM");
+    }
+
+    /// [liquid-glass] Paint until `popTopPlane` on the top plane: above `.above_overlay`
+    /// native children (floating glass) and the overlay plane. Nests; it also counts as
+    /// overlay content (`overlay_depth`), so glass painted inside stays floating.
+    pub fn pushTopPlane(self: *Window) void {
+        if (self.top_depth == 0) self.top_open_start = self.next_frame.scene.len();
+        self.top_depth += 1;
+        self.pushOverlayPlane();
+    }
+
+    pub fn popTopPlane(self: *Window) void {
+        std.debug.assert(self.top_depth > 0);
+        self.popOverlayPlane();
+        self.top_depth -= 1;
+        if (self.top_depth != 0) return;
+        const end = self.next_frame.scene.len();
+        if (end > self.top_open_start)
+            self.next_frame.overlay_ranges.append(self.gpa, .{ .start = self.top_open_start, .end = end, .plane = .top }) catch @panic("OOM");
+    }
+
+    /// [liquid-glass] Place native glass for element `gid` this frame (paint phase);
+    /// null when the platform has no native Liquid Glass (paint a fallback instead).
+    /// The caller paints the glass's foreground between `pushOverlayPlane` (tier
+    /// `.base`) or `pushTopPlane` (tier `.floating`) and the matching pop.
+    pub fn paintLiquidGlass(self: *Window, gid: GlobalElementId, kind: platform.LiquidGlassKind, view_bounds: Bounds, config: platform.LiquidGlassConfig) ?liquid_glass_mod.Tier {
+        return liquid_glass_mod.paint(self, gid.toKey(), kind, view_bounds, config);
+    }
+
+    /// [liquid-glass] Whether `paintLiquidGlass` can place native glass in this window.
+    pub fn supportsLiquidGlass(self: *Window) bool {
+        return liquid_glass_mod.supported(self);
+    }
+
+    /// Hide native views the rendered frame omits, then place the painted ones.
+    fn applyNativeViews(self: *Window) void {
+        const pw = self.platform_window;
+        if (pw.vtable.placeNativeView == null) return;
+        const views = self.rendered_frame.native_views.items;
+        for (self.presented_native_views.items) |old| {
+            const still = for (views) |v| {
+                if (v.id == old) break true;
+            } else false;
+            if (!still) pw.placeNativeView(old, null);
+        }
+        self.presented_native_views.clearRetainingCapacity();
+        for (views) |v| {
+            pw.placeNativeView(v.id, v.placement);
+            self.presented_native_views.append(self.gpa, v.id) catch {};
+        }
+    }
+
+    /// Attach a caller-created platform view (macOS `NSView*`) to this window.
+    pub fn attachNativeView(self: *Window, native: *anyopaque, options: platform.NativeViewOptions) !platform.NativeViewId {
+        return self.platform_window.attachNativeView(native, options);
+    }
+
+    /// Detach (and release) a native view attached with `attachNativeView`.
+    pub fn detachNativeView(self: *Window, id: platform.NativeViewId) void {
+        self.forgetNativeView(id);
+        self.platform_window.detachNativeView(id);
+    }
+
+    /// Give keyboard focus to a native view, or back to zpui content with `null`.
+    pub fn focusNativeView(self: *Window, id: ?platform.NativeViewId) void {
+        self.platform_window.focusNativeView(id);
+    }
+
+    /// Forget a detached native view (it must not be placed again).
+    fn forgetNativeView(self: *Window, id: platform.NativeViewId) void {
+        for (self.presented_native_views.items, 0..) |v, i| if (v == id) {
+            _ = self.presented_native_views.swapRemove(i);
+            break;
+        };
+        var i: usize = 0;
+        const list = &self.rendered_frame.native_views;
+        while (i < list.items.len) {
+            if (list.items[i].id == id) _ = list.orderedRemove(i) else i += 1;
+        }
+    }
+
+    /// Sorted, disjoint ranges for `drawLayered`; [liquid-glass] top-plane ranges win
+    /// over the overlay ranges they nest in.
+    fn mergeOverlayRanges(self: *Window) void {
+        const out = &self.present_overlay;
+        out.clearRetainingCapacity();
+        const all = self.rendered_frame.overlay_ranges.items;
+        var has_top = false;
+        for (all) |r| if (r.plane == .top) {
+            has_top = true;
+            break;
+        };
+        if (!has_top) {
+            out.appendSlice(self.gpa, all) catch return;
+            sortRanges(out.items);
+            var w: usize = 0;
+            for (out.items) |r| {
+                if (w > 0 and r.start <= out.items[w - 1].end) {
+                    out.items[w - 1].end = @max(out.items[w - 1].end, r.end);
+                } else {
+                    out.items[w] = r;
+                    w += 1;
+                }
+            }
+            out.shrinkRetainingCapacity(w);
+            return;
+        }
+        // Sweep the boundaries: each elementary segment takes the strongest plane
+        // covering it (top > overlay); equal neighbours merge.
+        var cuts: std.ArrayList(usize) = .empty;
+        defer cuts.deinit(self.gpa);
+        for (all) |r| {
+            cuts.append(self.gpa, r.start) catch return;
+            cuts.append(self.gpa, r.end) catch return;
+        }
+        std.mem.sort(usize, cuts.items, {}, std.sort.asc(usize));
+        var k: usize = 0;
+        while (k + 1 < cuts.items.len) : (k += 1) {
+            const a = cuts.items[k];
+            const b = cuts.items[k + 1];
+            if (b <= a) continue;
+            var plane: ?platform.OverlayPlane = null;
+            for (all) |r| if (r.start <= a and r.end >= b) {
+                if (r.plane == .top) {
+                    plane = .top;
+                    break;
+                }
+                plane = .overlay;
+            };
+            const p = plane orelse continue;
+            if (out.items.len > 0) {
+                const last = &out.items[out.items.len - 1];
+                if (last.end == a and last.plane == p) {
+                    last.end = b;
+                    continue;
+                }
+            }
+            out.append(self.gpa, .{ .start = a, .end = b, .plane = p }) catch return;
+        }
+    }
+
+    fn sortRanges(items: []platform.OverlayRange) void {
+        std.mem.sort(platform.OverlayRange, items, {}, struct {
+            fn lt(_: void, a: platform.OverlayRange, b: platform.OverlayRange) bool {
+                return a.start < b.start;
+            }
+        }.lt);
     }
 
     // ---- paint API (paint.zig) ------------------------------------------------------------

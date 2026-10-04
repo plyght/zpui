@@ -37,6 +37,9 @@ pub fn build(b: *std.Build) void {
     addZeronRightPane(b, target, optimize, zpui, test_step);
     addZeronPackaging(b, target);
     addZeronFiles(b, target, optimize, zpui, test_step);
+    addZeronBrowserHelper(b, target);
+    addZeronMedia(b, target, optimize, zpui, test_step);
+    addZeronLifecycle(b);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -916,4 +919,150 @@ fn addZeronFiles(
     run.setCwd(b.path("."));
     run.addPassthruArgs();
     b.step("files-demo", "Render the zeron Files explorer and file editor from fixtures").dependOn(&run.step);
+}
+
+/// zeron's Linux browser helper (apps/zeron/native/linux-browser/helper.c, zeron's
+/// WebKitGTK offscreen renderer, copied verbatim): compiled with `zig cc` into
+/// zig-out/bin/zeron-webkit, next to `zeron`, and installed by `zig build zeron` /
+/// `run-zeron` / `install`. Optional: skipped (with a note) when pkg-config cannot find
+/// webkit2gtk-4.1 + json-glib-1.0, or when cross-compiling; zeron then reports the
+/// missing helper in the Browser tab. `zig build zeron-webkit` builds only the helper.
+fn addZeronBrowserHelper(b: *std.Build, target: std.Build.ResolvedTarget) void {
+    if (target.result.os.tag != .linux or !target.query.isNative()) return;
+    const libs = [_][]const u8{ "webkit2gtk-4.1", "json-glib-1.0" };
+    const found = switch (b.runFallible(&.{ "pkg-config", "--exists", libs[0], libs[1] }, .{ .stderr_behavior = .ignore })) {
+        .success => true,
+        else => false,
+    };
+    const step = b.step("zeron-webkit", "Build the Linux browser helper (needs webkit2gtk-4.1 + json-glib-1.0 dev files)");
+    if (!found) {
+        const note = b.addFail("zeron-webkit: pkg-config cannot find webkit2gtk-4.1 and json-glib-1.0 (install libwebkit2gtk-4.1-dev libjson-glib-dev)");
+        step.dependOn(&note.step);
+        return;
+    }
+    const helper = b.addExecutable(.{
+        .name = "zeron-webkit",
+        .root_module = b.createModule(.{ .target = target, .optimize = .ReleaseFast, .link_libc = true }),
+    });
+    helper.root_module.addCSourceFile(.{
+        .file = b.path("apps/zeron/native/linux-browser/helper.c"),
+        .flags = &.{ "-std=c11", "-Wall", "-Wextra", "-Wno-unused-parameter" },
+    });
+    // Zig's own pkg-config handling rejects webkit2gtk's `-Wl,--export-dynamic`;
+    // translate the flags here (-I, -L, -l; linker-only flags are not needed).
+    const flags = switch (b.runFallible(&.{ "pkg-config", "--cflags", "--libs", libs[0], libs[1] }, .{})) {
+        .success => |out| out,
+        else => return,
+    };
+    var it = std.mem.tokenizeAny(u8, flags, " \t\r\n");
+    while (it.next()) |f| {
+        if (std.mem.startsWith(u8, f, "-I")) {
+            helper.root_module.addSystemIncludePath(.{ .cwd_relative = f[2..] });
+        } else if (std.mem.startsWith(u8, f, "-L")) {
+            helper.root_module.addLibraryPath(.{ .cwd_relative = f[2..] });
+        } else if (std.mem.startsWith(u8, f, "-l")) {
+            helper.root_module.linkSystemLibrary(f[2..], .{ .use_pkg_config = .no });
+        } else if (std.mem.startsWith(u8, f, "-D")) {
+            const eq = std.mem.indexOfScalar(u8, f, '=');
+            helper.root_module.addCMacro(f[2 .. eq orelse f.len], if (eq) |e| f[e + 1 ..] else "1");
+        }
+    }
+    const install = b.addInstallArtifact(helper, .{});
+    step.dependOn(&install.step);
+    b.getInstallStep().dependOn(&install.step);
+    if (b.top_level_steps.get("zeron")) |tl| tl.step.dependOn(&install.step);
+    // `run-zeron` runs the binary: the helper must be installed before it starts.
+    if (b.top_level_steps.get("run-zeron")) |tl| for (tl.step.dependencies.items) |dep| dep.dependOn(&install.step);
+}
+
+/// zeron media: `zeron_mermaid` (apps/zeron/src/mermaid, a Zig port of
+/// mermaid-rs-renderer 0.3.1: parser, layout, SVG emission + zeron's palette
+/// and restyle) and `zeron_media` (apps/zeron/src/ui/media: the image
+/// lightbox and attachment widgets). Both are wired into the composer,
+/// transcript and markdown modules created earlier. `zig build mermaid-test`
+/// runs the renderer's parity tests; `zig build media-test` the UI ones.
+fn addZeronMedia(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
+) void {
+    const theme = b.modules.get("zeron_theme") orelse return;
+    const model = b.modules.get("zeron_model") orelse return;
+    const assets = b.modules.get("zeron_assets") orelse return;
+    const mermaid = b.addModule("zeron_mermaid", .{
+        .root_source_file = b.path("apps/zeron/src/mermaid/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const media = b.addModule("zeron_media", .{
+        .root_source_file = b.path("apps/zeron/src/ui/media/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zpui", .module = zpui },
+            .{ .name = "zeron_theme", .module = theme },
+            .{ .name = "zeron_model", .module = model },
+            .{ .name = "zeron_assets", .module = assets },
+            .{ .name = "zeron_mermaid", .module = mermaid },
+        },
+    });
+    for ([_][]const u8{ "zeron_composer", "zeron_ui_transcript", "zeron_ui_markdown" }) |name| {
+        const m = b.modules.get(name) orelse continue;
+        m.addImport("zeron_media", media);
+        m.addImport("zeron_mermaid", mermaid);
+    }
+    const mermaid_tests = b.addRunArtifact(b.addTest(.{ .name = "zeron_mermaid", .root_module = mermaid }));
+    mermaid_tests.setCwd(b.path("."));
+    b.step("mermaid-test", "Run the zeron Mermaid renderer tests (parity with mermaid-rs-renderer)").dependOn(&mermaid_tests.step);
+    const media_tests = b.addRunArtifact(b.addTest(.{ .name = "zeron_media", .root_module = media }));
+    b.step("media-test", "Run the zeron media UI tests (lightbox geometry, widgets)").dependOn(&media_tests.step);
+    test_step.dependOn(&mermaid_tests.step);
+    test_step.dependOn(&media_tests.step);
+}
+
+/// zeron app lifecycle support (apps/zeron/src/lifecycle): adds two imports to the app's
+/// root module (apps/zeron/src/main.zig, shared by `zeron`, `run-zeron`, the macOS check
+/// object and `zeron-app-test`):
+///   `zeron_build`  — `version` (the `-Dzeron-version=` packaging option, default
+///                    0.2.102; `zeron --version` and the self-updater use it) and
+///                    `releases_url` (`-Dzeron-releases-url=`, the default update feed;
+///                    empty = updates off unless `ZERON_RELEASES_URL` is set);
+///   `zeron_sounds` — the embedded chimes from apps/zeron/assets/sounds.
+fn addZeronLifecycle(b: *std.Build) void {
+    const zeron_step = b.top_level_steps.get("zeron") orelse return;
+    const root = findRootModule(&zeron_step.step, "apps/zeron/src/main.zig") orelse return;
+    const version = if (b.user_input_options.get("zeron-version")) |opt| switch (opt) {
+        .scalar => |s| s,
+        else => "0.2.102",
+    } else "0.2.102";
+    const options = b.addOptions();
+    options.addOption([]const u8, "version", version);
+    options.addOption([]const u8, "releases_url", b.option([]const u8, "zeron-releases-url", "Default self-update feed of the zeron app (empty: off unless ZERON_RELEASES_URL is set)") orelse "");
+    root.addImport("zeron_build", options.createModule());
+
+    const files = b.addWriteFiles();
+    _ = files.addCopyDirectory(b.path("apps/zeron/assets/sounds"), "sounds", .{ .include_extensions = &.{".wav"} });
+    const sounds = b.createModule(.{ .root_source_file = files.add("sounds.zig",
+        \\//! zeron's session chimes (apps/zeron/assets/sounds, MIT — zeron's own cues).
+        \\pub const done = @embedFile("sounds/done.wav");
+        \\pub const request = @embedFile("sounds/request.wav");
+        \\pub const attention = @embedFile("sounds/attention.wav");
+        \\
+    ) });
+    root.addImport("zeron_sounds", sounds);
+}
+
+/// The root module of the first compile step (depth-first under `step`) whose root
+/// source file is `path`.
+fn findRootModule(step: *std.Build.Step, path: []const u8) ?*std.Build.Module {
+    if (step.cast(std.Build.Step.Compile)) |compile| {
+        if (compile.root_module.root_source_file) |src| switch (src) {
+            .src_path => |sp| if (std.mem.eql(u8, sp.sub_path, path)) return compile.root_module,
+            else => {},
+        };
+    }
+    for (step.dependencies.items) |dep| if (findRootModule(dep, path)) |m| return m;
+    return null;
 }

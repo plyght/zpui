@@ -40,6 +40,8 @@ pub const Prefs = struct {
     update_label: ?[]const u8 = null,
     /// Frozen clock for reproducible screenshots.
     now_override: ?model.time.Timestamp = null,
+    /// [lifecycle] A write-back to the settings store is queued (`mut`).
+    persist_pending: bool = false,
 
     pub fn deinit(self: *Prefs) void {
         if (self.space_filter) |s| self.gpa.free(s);
@@ -94,6 +96,40 @@ pub const Prefs = struct {
         self.show_pull_request = s.sidebarShowPullRequest;
         self.right_pane_width = s.rightPaneWidth;
         self.transcript_width = s.transcriptWidthOr();
+        // [lifecycle] the sidebar view-menu choices (Rust `sidebar_organization` / `sidebar_sort`).
+        self.organization = switch (s.sidebarOrganization) {
+            .inOneList => .in_one_list,
+            .byProject => .by_project,
+            .byDevice => .by_device,
+        };
+        self.sort = switch (s.sidebarSort) {
+            .lastUpdated => .last_updated,
+            .created => .created,
+        };
+    }
+
+    /// [lifecycle] The inverse of `applySettings` for what Rust writes back from the shell
+    /// (pane sizes, collapse flag, sidebar view-menu choices); `transcriptWidth` is owned
+    /// by the settings page.
+    pub fn writeSettings(self: *const Prefs, s: *model.UiSettings) void {
+        s.sidebarWidth = self.sidebar_width;
+        s.sidebarCollapsed = self.sidebar_collapsed;
+        s.sidebarCompact = self.sidebar_compact;
+        s.sidebarShowProjectLabel = self.show_project_label;
+        s.sidebarShowProjectIcon = self.show_project_icon;
+        s.sidebarShowHarness = self.show_harness;
+        s.sidebarShowBranch = self.show_branch;
+        s.sidebarShowPullRequest = self.show_pull_request;
+        s.rightPaneWidth = self.right_pane_width;
+        s.sidebarOrganization = switch (self.organization) {
+            .in_one_list => .inOneList,
+            .by_project => .byProject,
+            .by_device => .byDevice,
+        };
+        s.sidebarSort = switch (self.sort) {
+            .last_updated => .lastUpdated,
+            .created => .created,
+        };
     }
 };
 
@@ -110,9 +146,27 @@ pub fn get(cx: anytype) *const Prefs {
     return appOf(cx).global(Prefs);
 }
 
-/// Mutate in place and redraw.
+/// Mutate in place and redraw. [lifecycle] The change is written back to
+/// `ui-settings.json` (debounced) once the current update finishes, like Rust's
+/// `settings::update(SavePolicy::Debounced, ...)` calls in the shell.
 pub fn mut(cx: anytype) *Prefs {
     const app = appOf(cx);
     app.refreshWindows();
-    return app.globalMut(Prefs);
+    const p = app.globalMut(Prefs);
+    if (!p.persist_pending) {
+        p.persist_pending = true;
+        app.deferFn(app, persist);
+    }
+    return p;
+}
+
+fn persist(app: *zpui.App, _: *zpui.App) void {
+    const p = @constCast(app.tryGlobal(Prefs) orelse return);
+    p.persist_pending = false;
+    const Write = struct {
+        fn f(prefs: *const Prefs, s: *model.UiSettings, _: std.mem.Allocator) void {
+            prefs.writeSettings(s);
+        }
+    };
+    _ = model.settings_store.update(app, .debounced, p, Write.f);
 }

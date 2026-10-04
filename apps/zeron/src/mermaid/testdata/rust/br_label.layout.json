@@ -1,0 +1,59 @@
+{
+  "kind": "Flowchart",
+  "direction": "TopDown",
+  "width": 105.08,
+  "height": 157.45,
+  "nodes": [
+    {
+      "id": "A",
+      "shape": "Rectangle",
+      "x": 8.0,
+      "y": 8.0,
+      "width": 81.08,
+      "height": 62.0,
+      "label_width": 45.079998,
+      "label_height": 42.0,
+      "label_lines": [
+        "Hola",
+        "mundo"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "B",
+      "shape": "Rectangle",
+      "x": 18.53745,
+      "y": 100.45,
+      "width": 59.52,
+      "height": 41.0,
+      "label_width": 23.52,
+      "label_height": 21.0,
+      "label_lines": [
+        "Fin"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "A",
+      "to": "B",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          48.412533,
+          70.0
+        ],
+        [
+          48.412533,
+          100.45
+        ]
+      ]
+    }
+  ],
+  "subgraphs": []
+}

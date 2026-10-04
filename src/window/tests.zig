@@ -1234,3 +1234,79 @@ test "API coverage render" {
     w.focusPrev();
     w.removeWindow();
 }
+
+// ---- native child views + overlay plane ------------------------------------------------
+
+const NativeHost = struct {
+    id: ?@import("../platform/platform.zig").NativeViewId = null,
+    show: bool = true,
+    menu: bool = false,
+    cached_child: ?Entity(NativeLeaf) = null,
+
+    fn init(window: *Window, cx: *Context(NativeHost)) NativeHost {
+        var dummy: u8 = 0;
+        const id = window.attachNativeView(@ptrCast(&dummy), .{}) catch null;
+        return .{ .id = id, .cached_child = cx.app.new(NativeLeaf, .{ .id = id.? }) catch null };
+    }
+
+    pub fn deinit(self: *NativeHost, app: *App) void {
+        if (self.cached_child) |c| c.release(app);
+    }
+
+    pub fn render(self: *NativeHost, _: *Window, _: *Context(NativeHost)) elements.Div {
+        var root = div().size(px(400)).bg(color.white).child(div().h(px(20)));
+        if (self.show) root = root.child(div().w(px(200)).h(px(100)).overflowHidden()
+            .child(self.cached_child.?.cached(sb.w(px(300)).h(px(100)).refinement)));
+        if (self.menu) root = root.child(elements.deferred(div().size(px(30)).bg(color.blue)));
+        return root;
+    }
+};
+
+const NativeLeaf = struct {
+    id: @import("../platform/platform.zig").NativeViewId,
+    pub fn render(self: *NativeLeaf, _: *Window, _: *Context(NativeLeaf)) elements.Canvas {
+        return elements.nativeViewWith(self.id, .{ .corner_radius = 6 }).w(px(300)).h(px(100));
+    }
+};
+
+test "native views are placed at their bounds, clipped, hidden when not painted; overlay holds deferred draws" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, NativeHost, NativeHost.init, .{});
+    const w = handle.window(app).?;
+    const tw = testWindow(w);
+    const id = handle.rootView(app).?.read(app).id.?;
+    const i = @intFromEnum(id);
+    const p = tw.native_placement[i].?;
+    try testing.expectEqual(@as(f32, 20), p.bounds.origin.y);
+    try testing.expectEqual(@as(f32, 300), p.bounds.size.width);
+    try testing.expectEqual(@as(f32, 200), p.clip.size.width); // clipped by overflowHidden
+    try testing.expectEqual(@as(f32, 6), p.corner_radius);
+    try testing.expectEqual(@as(usize, 0), tw.last_overlay_len);
+
+    // A deferred menu goes to the overlay plane and captures input; the cached leaf keeps its placement.
+    {
+        var l = handle.rootView(app).?.lease(app);
+        l.value.menu = true;
+        l.cx.notify();
+        l.end();
+    }
+    try testing.expect(tw.native_placement[i] != null);
+    try testing.expectEqual(@as(usize, 1), tw.last_overlay_len);
+    try testing.expect(tw.last_capture_input);
+    const scene_len = w.rendered_frame.scene.len();
+    try testing.expectEqual(scene_len, tw.last_overlay[0].end);
+    try testing.expect(tw.last_overlay[0].start < scene_len);
+
+    // Not painted → hidden.
+    {
+        var l = handle.rootView(app).?.lease(app);
+        l.value.show = false;
+        l.cx.notify();
+        l.end();
+    }
+    try testing.expect(tw.native_placement[i] == null);
+    try testing.expect(tw.native_attached[i]);
+    w.detachNativeView(id);
+    try testing.expect(!tw.native_attached[i]);
+}

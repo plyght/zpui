@@ -48,6 +48,10 @@ pub const Frosted = struct {
 
     pub fn paint(self: *Frosted, _: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
         if (!self.force and !theme_mod.get(cx).isFrost()) return self.child.paint(window, cx);
+        // [liquid-glass] Native glass replaces the in-scene blur (falls through to frost
+        // when the window cannot host it).
+        if (theme_mod.get(cx).isLiquid() and
+            zpui.liquid_glass.paintGlass(window, cx, "frosted-glass", bounds, .{ .shape = .{ .rounded = self.radius } }, self.child)) return;
         const layer = window.pushLayer(bounds);
         defer window.popLayer(layer);
         window.paintBackdropBlur(bounds, zpui.Corners(f32).all(self.radius), self.blur);

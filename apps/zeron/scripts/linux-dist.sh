@@ -2,6 +2,7 @@
 # Linux tarball, mirroring the Rust app's scripts/package-linux.sh layout:
 #   <prefix>/zeron-<version>-linux-<arch>.tar.gz
 #     zeron-<version>-linux-<arch>/zeron           the client binary
+#     zeron-<version>-linux-<arch>/zeron-webkit    the browser helper (when built)
 #     zeron-<version>-linux-<arch>/zeron.desktop   XDG desktop entry (Exec=zeron, Icon=zeron)
 #     zeron-<version>-linux-<arch>/zeron.png       512x512 app icon
 #     zeron-<version>-linux-<arch>/licenses/       font + third-party notices
@@ -15,6 +16,8 @@ stage=$prefix/$name
 rm -rf "$stage" "$stage.tar.gz"
 mkdir -p "$stage/licenses/fonts"
 install -m 755 "$bin" "$stage/zeron"
+# The WebKitGTK browser helper (built when webkit2gtk-4.1 dev files were found).
+[[ -x $prefix/bin/zeron-webkit ]] && install -m 755 "$prefix/bin/zeron-webkit" "$stage/zeron-webkit"
 install -m 644 "$root/apps/zeron/dist/zeron.desktop" "$stage/zeron.desktop"
 install -m 644 "$root/apps/zeron/dist/zeron.png" "$stage/zeron.png"
 cp "$root"/apps/zeron/assets/fonts/licenses/* "$stage/licenses/fonts/"

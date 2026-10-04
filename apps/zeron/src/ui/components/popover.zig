@@ -32,7 +32,7 @@ pub const palette_item_radius: f32 = 14 - card_inset;
 /// `popover::surface_bg`.
 pub fn surfaceBg(theme: *const Theme) zpui.Hsla {
     if (theme.isFrost()) {
-        return if (theme.appearance.isDark()) theme.composerSidebarTint() else theme.glassOverlay();
+        return theme.onGlass(if (theme.appearance.isDark()) theme.composerSidebarTint() else theme.glassOverlay()); // [liquid-glass] onGlass
     }
     return theme.inputGlassBg();
 }
@@ -41,7 +41,7 @@ pub fn surfaceBg(theme: *const Theme) zpui.Hsla {
 /// for the text hierarchy of floating surfaces.
 pub fn card(theme: *const Theme) zpui.Div {
     var d = div()
-        .border1().borderColor(theme.border)
+        .border1().borderColor(theme.onGlassBorder(theme.border)) // [liquid-glass] onGlassBorder
         .rounded(px(card_radius))
         .bg(surfaceBg(theme))
         .p(px(card_inset)).gap(px(menu_gap))

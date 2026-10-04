@@ -66,13 +66,17 @@ pub const MainPanel = struct {
         cx.notify();
     }
 
-    pub fn render(self: *MainPanel, window: *Window, cx: *Context(MainPanel)) zpui.Div {
+    pub fn render(self: *MainPanel, window: *Window, cx: *Context(MainPanel)) zpui.StatefulDiv {
         const theme = ui.theme.get(cx);
         const ws = self.state.read(cx).workspace.read(cx);
         const has_chat = ws.selected_chat != null;
         const has_spaces = ws.spaces().len > 0 or ws.no_project;
 
-        var col = div().relative().sizeFull().flex().flexCol().overflowHidden();
+        // The whole conversation receives dropped files in its composer
+        // (`chat_dropzone`), with the "Drop to attach" overlay while a file
+        // drag hovers it.
+        var col = div().id("chat-dropzone").relative().sizeFull().flex().flexCol().overflowHidden()
+            .onDrop(zpui.ExternalPaths, cx.listener(MainPanel.onDropPaths));
         const width = self.width;
         if (has_chat) {
             const stack = self.slots.composer_view.read(cx).last_rendered_height;
@@ -95,6 +99,7 @@ pub const MainPanel = struct {
                 .child(div().mb(px(12)).child(self.slots.composer(width, cx)))
                 .child(div().flex1().minH0());
         }
+        col = col.child(attachmentDropOverlay(theme));
         if (prefs_mod.get(cx).terminal_open) {
             if (self.terminal == null) {
                 const chat = ws.selectedChatRow();
@@ -114,11 +119,27 @@ pub const MainPanel = struct {
         return col;
     }
 
+    fn onDropPaths(self: *MainPanel, paths: *const zpui.ExternalPaths, _: *Window, cx: *Context(MainPanel)) void {
+        const ComposerView = @TypeOf(self.slots.composer_view).Type;
+        self.slots.composer_view.update(cx, ComposerView.addPaths, .{paths.paths});
+        cx.notify();
+    }
+
     fn onTerminalHide(_: *MainPanel, _: Entity(terminal_dock.TerminalDock), _: *const terminal_dock.Hide, cx: *Context(MainPanel)) void {
         prefs_mod.mut(cx).terminal_open = false;
         cx.notify();
     }
 };
+
+/// `attachment_drop_overlay`: a scrim with "Drop to attach", shown only
+/// while an external file drag hovers the conversation (typed drag style).
+fn attachmentDropOverlay(theme: *const Theme) zpui.StatefulDiv {
+    return div().id("attachment-drop-overlay").absolute().inset0().opacity(0)
+        .bg(theme.scrim().opacity(0.4 / 0.6)).flex().itemsCenter().justifyCenter()
+        .textSize(ui.rems(13)).textColor(theme.text)
+        .dragOver(zpui.ExternalPaths, sb.opacity(1))
+        .child("Drop to attach");
+}
 
 /// First boot: no folders to work in yet.
 fn onboarding(theme: *const Theme) zpui.Div {

@@ -129,8 +129,10 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
         var target = base_row_height;
         if (opens[ix]) {
             if (t.invocation) |inv| target += detailHeight(inv);
-            if (t.body) |b| target += detailHeight(b);
-            if (affordanceLabel(t) != null) target += blob_affordance_height;
+            // [wiring] a fetched sidecar blob upgrades the body in place.
+            if (self.blobs.effective(t)) |b| target += detailHeight(b);
+            var abuf: [96]u8 = undefined;
+            if (self.blobs.affordance(t, &abuf) != null) target += blob_affordance_height;
         }
         const p = eased(detail_fold, df.toggled_at, now, reduced);
         if (p < 1) animating = true;
@@ -243,13 +245,17 @@ fn chipRow(self: *TranscriptView, row: *const rows.Row, t: ToolItem, ix: usize, 
             if (!collapses) sep = sep.bg(theme.hairline(0.06));
             panel = panel.child(sep).child(detailBody(inv, theme));
         }
-        if (t.body) |b| {
+        if (self.blobs.effective(t)) |b| {
             var sep = div().h(px(rows.detail_separator)).flexNone();
             if (!collapses) sep = sep.bg(theme.hairline(0.06));
             panel = panel.child(sep).child(detailBody(b, theme));
         }
-        if (affordanceLabel(t)) |label| panel = panel.child(div().h(px(blob_affordance_height)).flexNone().flex().itemsCenter()
-            .textSize(px(tool_text_size)).textColor(theme.text_faint).cursorPointer().hover(sb.textColor(theme.text_muted)).child(label));
+        // [wiring] "Show full output" fetches the sidecar blob (FetchToolBlob).
+        var abuf: [96]u8 = undefined;
+        if (self.blobs.affordance(t, &abuf)) |aff| panel = panel.child(div().id(.{ "blob-affordance", dkey }).h(px(blob_affordance_height)).flexNone().flex().itemsCenter()
+            .textSize(px(tool_text_size)).textColor(theme.text_faint).cursorPointer().hover(sb.textColor(theme.text_muted))
+            .onClick(cx.listenerWith(view_mod.BlobClick{ .row_key = row.key, .tool_ix = ix }, TranscriptView.onBlobClick))
+            .child(zpui.window.arena_mod.dupe(aff.label)));
         card = card.child(panel);
     }
     card = card.h(px(height - base_row_height + chip_card_height));
@@ -308,11 +314,11 @@ fn fileBadgeName(path: []const u8) []const u8 {
 
 /// A spawn chip: whole-card link to the subagent (open-arrow tile).
 fn subagentChip(t: ToolItem, row_key: u64, ix: usize, rail: bool, theme: *const Theme, cx: *Context(TranscriptView)) AnyElement {
-    _ = cx;
     var r = div().h(px(chip_height)).wFull().flexNone().flex().flexRow().itemsCenter();
     if (rail) r = r.child(div().ml(px(12)).hFull().w(px(1)).flexNone().bg(theme.ink(0.08)));
     var card = div().id(.{ "spawn", mixKey(row_key, ix) }).h(px(chip_card_height)).minW0().flex1().flex().itemsCenter().overflowHidden()
-        .rounded(px(9)).border1().borderColor(theme.hairline(0.07)).bg(theme.ink(0.03)).cursorPointer().hover(sb.bg(theme.ink(0.05)));
+        .rounded(px(9)).border1().borderColor(theme.hairline(0.07)).bg(theme.ink(0.03)).cursorPointer().hover(sb.bg(theme.ink(0.05)))
+        .onClick(cx.listenerWith([2]u64{ row_key, ix }, TranscriptView.onSpawnClick)); // [wiring]
     if (rail) card = card.ml(px(12));
     var header = chipHeaderRow(t, null, false, theme);
     header = header.child(div().size(px(18)).flexNone().rounded(px(5)).bg(theme.ink(0.06)).flex().itemsCenter().justifyCenter()

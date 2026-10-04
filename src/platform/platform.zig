@@ -114,6 +114,9 @@ pub const WindowParams = struct {
     background: WindowBackgroundAppearance = .opaque_,
     decorations: WindowDecorations = .server,
     app_id: ?[]const u8 = null,
+    /// Place the window on this display (`Display.id`); `bounds.origin` is then relative
+    /// to that display's top-left. Null = the main display.
+    display_id: ?u32 = null,
 };
 
 pub const CursorStyle = enum {
@@ -220,7 +223,66 @@ pub const Window = struct {
         spriteAtlas: *const fn (ptr: *anyopaque) *atlas_mod.Atlas,
         updateImePosition: *const fn (ptr: *anyopaque, bounds: Bounds) void,
         close: *const fn (ptr: *anyopaque) void,
+        /// The display (`Display.id`) the window is mostly on; null when unknown. Optional.
+        displayId: ?*const fn (ptr: *anyopaque) ?u32 = null,
+
+        // -- native child views (optional; see `NativeViewId`) ------------------------------
+        /// Host a platform view created by the caller (macOS: any `NSView*`; retained)
+        /// inside the window's content view, ordered by `options.z`. Starts hidden.
+        attachNativeView: ?*const fn (ptr: *anyopaque, native: *anyopaque, options: NativeViewOptions) anyerror!NativeViewId = null,
+        /// Place (or with `null`, hide) an attached view. Applied right before the
+        /// matching frame is presented, so native geometry and pixels land together.
+        placeNativeView: ?*const fn (ptr: *anyopaque, view: NativeViewId, placement: ?NativeViewPlacement) void = null,
+        /// Remove an attached view from the window and release it.
+        detachNativeView: ?*const fn (ptr: *anyopaque, view: NativeViewId) void = null,
+        /// Give keyboard focus to an attached view, or back to zpui content (`null`).
+        focusNativeView: ?*const fn (ptr: *anyopaque, view: ?NativeViewId) void = null,
+        /// zui `draw_layered`, generalized: paint operations inside `overlay` ranges
+        /// (`scene.paint_operations` indices, sorted, disjoint) go to a transparent plane
+        /// above every native view, everything else to the main surface. The window puts
+        /// deferred draws, drag previews and tooltips there, plus any element painted
+        /// between `Window.pushOverlayPlane`/`popOverlayPlane`.
+        /// `capture_input`: the overlay holds interactive content and takes the mouse.
+        /// Backends without native views leave it null; the window then calls `draw`.
+        drawLayered: ?*const fn (ptr: *anyopaque, scene: *const scene_mod.Scene, overlay: []const OverlayRange, capture_input: bool) anyerror!void = null,
+
+        // -- [liquid-glass] native glass children (optional; see `LiquidGlassAttach`) -------
+        /// Create a backend glass view (macOS 26: `NSGlassEffectView`, or for `.container`
+        /// an `NSGlassEffectContainerView`) and attach it like `attachNativeView`
+        /// (pass-through mouse, hidden until placed). Errors when the OS lacks it.
+        attachLiquidGlass: ?*const fn (ptr: *anyopaque, options: LiquidGlassAttach) anyerror!NativeViewId = null,
+        /// Apply style / tint / corner radius / interactivity / container spacing.
+        configureLiquidGlass: ?*const fn (ptr: *anyopaque, view: NativeViewId, config: LiquidGlassConfig) void = null,
     };
+
+    /// Whether this backend can host native child views (`attachNativeView`).
+    pub fn supportsNativeViews(w: Window) bool {
+        return w.vtable.attachNativeView != null and w.vtable.placeNativeView != null and w.vtable.detachNativeView != null;
+    }
+    pub fn attachNativeView(w: Window, native: *anyopaque, options: NativeViewOptions) !NativeViewId {
+        const f = w.vtable.attachNativeView orelse return error.NativeViewsUnsupported;
+        return f(w.ptr, native, options);
+    }
+    pub fn placeNativeView(w: Window, view: NativeViewId, placement: ?NativeViewPlacement) void {
+        if (w.vtable.placeNativeView) |f| f(w.ptr, view, placement);
+    }
+    pub fn detachNativeView(w: Window, view: NativeViewId) void {
+        if (w.vtable.detachNativeView) |f| f(w.ptr, view);
+    }
+    pub fn focusNativeView(w: Window, view: ?NativeViewId) void {
+        if (w.vtable.focusNativeView) |f| f(w.ptr, view);
+    }
+    /// [liquid-glass] Whether this window can host native glass (`attachLiquidGlass`).
+    pub fn hasLiquidGlass(w: Window) bool {
+        return w.vtable.attachLiquidGlass != null and w.vtable.configureLiquidGlass != null and w.supportsNativeViews();
+    }
+    pub fn attachLiquidGlass(w: Window, options: LiquidGlassAttach) !NativeViewId {
+        const f = w.vtable.attachLiquidGlass orelse return error.LiquidGlassUnsupported;
+        return f(w.ptr, options);
+    }
+    pub fn configureLiquidGlass(w: Window, view: NativeViewId, config: LiquidGlassConfig) void {
+        if (w.vtable.configureLiquidGlass) |f| f(w.ptr, view, config);
+    }
 
     pub fn setCallbacks(w: Window, cbs: WindowCallbacks) void {
         w.vtable.setCallbacks(w.ptr, cbs);
@@ -265,11 +327,104 @@ pub const Window = struct {
 
 pub const ResizeEdge = enum { top, top_right, right, bottom_right, bottom, bottom_left, left, top_left };
 
+/// Native child views (zui fork's native-child compositing, generalized).
+///
+/// Any platform view the caller creates (macOS: an `NSView*` — a WKWebView for zeron's
+/// browser, an NSGlassEffectView for Liquid Glass, ...) can be attached to a window and
+/// becomes one of its subviews. Several children per window; each picks its z-order:
+///
+///     .below_content:  [ child ] < [ zpui surface ] < [ overlay plane ]   (needs a transparent window/scene)
+///     .above_content:  [ zpui surface ] < [ child ] < [ overlay plane ]   (default)
+///
+/// Per frame, the element `zpui.nativeView(id)` (or `Window.paintNativeView`) records the
+/// child's bounds, corner radius and the current content mask during paint; the window
+/// applies the placements right before presenting (children not painted this frame are
+/// hidden) and draws with `drawLayered`: paint operations in overlay ranges land on a
+/// transparent Metal layer above every child. Deferred draws (menus, popovers), drag
+/// previews and tooltips are overlay content automatically; any other element can paint
+/// there with `Window.pushOverlayPlane()` / `popOverlayPlane()` (e.g. text above glass).
+/// `pass_through_mouse` children never take hit tests, so zpui keeps input over them.
+/// Coordinates are window-relative logical pixels, top-left origin. Only macOS implements
+/// this; elsewhere `supportsNativeViews()` is false and nothing is attached.
+pub const NativeViewId = enum(u32) { _ };
+
+pub const NativeViewZ = enum {
+    above_content,
+    below_content,
+    /// [liquid-glass] Above the overlay plane, below the top plane: floating glass
+    /// (menus, popovers, tooltips) whose own foreground paints on the top plane.
+    above_overlay,
+};
+
+pub const NativeViewOptions = struct {
+    z: NativeViewZ = .above_content,
+    /// Never hit-test (mouse events fall through to zpui content).
+    pass_through_mouse: bool = false,
+};
+
+/// Half-open range of `Scene.paint_operations` indices drawn on the overlay plane
+/// (or, with `plane = .top`, on the top plane above `.above_overlay` children).
+pub const OverlayRange = struct { start: usize, end: usize, plane: OverlayPlane = .overlay };
+
+/// [liquid-glass] The two transparent planes above native children, back to front:
+///
+///     [main surface] < [.above_content children] < [overlay plane]
+///                    < [.above_overlay children] < [top plane]
+pub const OverlayPlane = enum(u8) { overlay, top };
+
+// ---- [liquid-glass] native Liquid Glass (macOS 26 NSGlassEffectView) --------------------
+
+/// `NSGlassEffectView.Style` (raw values match AppKit: regular = 0, clear = 1).
+pub const LiquidGlassStyle = enum(u8) { regular = 0, clear = 1 };
+
+pub const LiquidGlassKind = enum {
+    /// `NSGlassEffectView` (no content view: zpui paints the foreground on a plane above).
+    glass,
+    /// `NSGlassEffectContainerView`: glass views attached with `parent` = this view
+    /// become descendants of its content view and merge/morph within `spacing`.
+    container,
+};
+
+pub const LiquidGlassAttach = struct {
+    kind: LiquidGlassKind = .glass,
+    z: NativeViewZ = .above_content,
+    /// A `.container` view: the new glass is added inside it (frames relative to it)
+    /// instead of directly in the window's content view.
+    parent: ?NativeViewId = null,
+};
+
+pub const LiquidGlassConfig = struct {
+    style: LiquidGlassStyle = .regular,
+    /// Straight-alpha sRGB tint (`NSGlassEffectView.tintColor`), null = none.
+    tint: ?[4]f32 = null,
+    /// `effectIsInteractive` (AppKit, macOS 27+; ignored where unavailable).
+    interactive: bool = false,
+    /// Glass `cornerRadius` in logical pixels.
+    corner_radius: Pixels = 0,
+    /// Container merge distance (`NSGlassEffectContainerView.spacing`).
+    spacing: Pixels = 0,
+};
+
+pub const NativeViewPlacement = struct {
+    /// Where the native view's frame goes (its full layout bounds).
+    bounds: Bounds,
+    /// The visible region (bounds ∩ content mask); native pixels and hit testing are
+    /// clipped to it.
+    clip: Bounds,
+    /// Uniform corner radius applied to the child's layer (glass shapes).
+    corner_radius: Pixels = 0,
+};
+
 pub const Display = struct {
     id: u32,
     bounds: Bounds,
     visible_bounds: Bounds,
     scale_factor: f32,
+    /// Stable identity across launches (macOS `CGDisplayCreateUUIDFromDisplayID`), raw
+    /// RFC 4122 bytes; null when the backend has none.
+    uuid: ?[16]u8 = null,
+    /// The main display (menu bar / primary output).
+    primary: bool = false,
 };
 
 // ---------------------------------------------------------------------------------------
@@ -283,6 +438,20 @@ pub const PlatformCallbacks = struct {
     open_urls: ?*const fn (ctx: ?*anyopaque, urls: []const []const u8) void = null,
     keyboard_layout_change: ?*const fn (ctx: ?*anyopaque) void = null,
     system_wake: ?*const fn (ctx: ?*anyopaque) void = null,
+    // -- app lifecycle (see `App.onShouldQuit`, `App.setMenus`) ---------------------------
+    /// The OS asks to terminate (Dock "Quit", logout, the native app menu's Quit). Return
+    /// false to cancel; the app then quits later through `Platform.quit`, which is never
+    /// vetoed. Null = always allow.
+    should_quit: ?*const fn (ctx: ?*anyopaque) bool = null,
+    /// A menu item from `setMenus` was chosen (its `MenuItem.action.tag`).
+    menu_action: ?*const fn (ctx: ?*anyopaque, tag: usize) void = null,
+    /// Whether menu item `tag` is enabled right now (AppKit `validateMenuItem:`).
+    validate_menu: ?*const fn (ctx: ?*anyopaque, tag: usize) bool = null,
+    /// A menu is about to open (refresh state the validation reads).
+    will_open_menu: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// A notification posted with `postNotification` was clicked; `tag` as posted
+    /// (borrowed for the call).
+    notification_activated: ?*const fn (ctx: ?*anyopaque, tag: []const u8) void = null,
 };
 
 /// gpui `Platform`.
@@ -311,6 +480,30 @@ pub const Platform = struct {
         /// Whether the OS asked for reduced motion.
         prefersReducedMotion: *const fn (ptr: *anyopaque) bool,
         deinit: *const fn (ptr: *anyopaque) void,
+        /// Image data on the clipboard (gpui `ClipboardEntry::Image`), bytes allocated
+        /// with `gpa` (caller frees). Null when the clipboard holds no image. Optional.
+        readClipboardImage: ?*const fn (ptr: *anyopaque, gpa: std.mem.Allocator) ?ClipboardImage = null,
+        /// Native "open file" dialog (gpui `prompt_for_paths`). Never blocks: `done`
+        /// runs later on the main thread exactly once (null paths = canceled or no
+        /// dialog available). Optional.
+        promptForPaths: ?*const fn (ptr: *anyopaque, options: PathPromptOptions, done: PathsCallback) void = null,
+        // -- app lifecycle (optional) ----------------------------------------------------
+        /// Install the application menu bar (macOS); strings are copied. Items report
+        /// back through `PlatformCallbacks.menu_action` / `validate_menu`.
+        setMenus: ?*const fn (ptr: *anyopaque, menus: []const Menu) void = null,
+        /// Hide this app / the other apps / show all (macOS NSApp verbs).
+        appCommand: ?*const fn (ptr: *anyopaque, command: AppCommand) void = null,
+        /// The standard About panel (macOS `orderFrontStandardAboutPanelWithOptions:`).
+        showAboutPanel: ?*const fn (ptr: *anyopaque, options: AboutPanelOptions) void = null,
+        /// Post a desktop banner (macOS NSUserNotification, Linux
+        /// org.freedesktop.Notifications). Never blocks; failures are swallowed.
+        postNotification: ?*const fn (ptr: *anyopaque, notification: Notification) void = null,
+        /// Play an in-memory sound (WAV) without blocking (macOS NSSound, Linux
+        /// paplay / pw-play / aplay / ffplay / mpv). Failures are swallowed.
+        playSound: ?*const fn (ptr: *anyopaque, bytes: []const u8) void = null,
+        // [liquid-glass] Native Liquid Glass (macOS 26+ NSGlassEffectView) is available
+        // on this machine. Null = never (every non-macOS backend, older macOS).
+        supportsLiquidGlass: ?*const fn (ptr: *anyopaque) bool = null,
     };
 
     pub fn dispatcher(p: Platform) Dispatcher {
@@ -334,6 +527,153 @@ pub const Platform = struct {
     pub fn deinit(p: Platform) void {
         p.vtable.deinit(p.ptr);
     }
+    /// The clipboard's image, if any (caller frees `bytes` with `gpa`).
+    pub fn readClipboardImage(p: Platform, gpa: std.mem.Allocator) ?ClipboardImage {
+        const f = p.vtable.readClipboardImage orelse return null;
+        return f(p.ptr, gpa);
+    }
+    pub fn setMenus(p: Platform, menus: []const Menu) void {
+        if (p.vtable.setMenus) |f| f(p.ptr, menus);
+    }
+    pub fn appCommand(p: Platform, command: AppCommand) void {
+        if (p.vtable.appCommand) |f| f(p.ptr, command);
+    }
+    pub fn showAboutPanel(p: Platform, options: AboutPanelOptions) void {
+        if (p.vtable.showAboutPanel) |f| f(p.ptr, options);
+    }
+    pub fn postNotification(p: Platform, n: Notification) void {
+        if (p.vtable.postNotification) |f| f(p.ptr, n);
+    }
+    pub fn playSound(p: Platform, bytes: []const u8) void {
+        if (p.vtable.playSound) |f| f(p.ptr, bytes);
+    }
+    /// [liquid-glass] Whether native Liquid Glass (`zpui.liquidGlass`) can be shown.
+    pub fn supportsLiquidGlass(p: Platform) bool {
+        const f = p.vtable.supportsLiquidGlass orelse return false;
+        return f(p.ptr);
+    }
+    /// Open the native file picker; `done` runs on the main thread (null = canceled).
+    pub fn promptForPaths(p: Platform, options: PathPromptOptions, done: PathsCallback) void {
+        const f = p.vtable.promptForPaths orelse return done.func(done.ctx, null);
+        f(p.ptr, options, done);
+    }
+};
+
+// ---------------------------------------------------------------------------------------
+// Menus, app commands, notifications (gpui `Menu` / `MenuItem` / `OsAction`)
+// ---------------------------------------------------------------------------------------
+
+/// Native editing verbs a menu item maps to (macOS selectors `cut:`, `copy:`, ...), so
+/// the OS routes them to native text fields (save panels) as well.
+pub const OsAction = enum { cut, copy, paste, select_all, undo, redo };
+
+pub const SystemMenuType = enum { services };
+
+/// A menu item's displayed shortcut (single keystroke; gpui spelling of `key`).
+pub const KeyEquivalent = struct {
+    key: []const u8,
+    modifiers: input.Modifiers = .{},
+};
+
+pub const MenuItem = union(enum) {
+    separator,
+    action: struct {
+        name: []const u8,
+        /// Reported back through `PlatformCallbacks.menu_action` / `validate_menu`.
+        tag: usize,
+        key_equivalent: ?KeyEquivalent = null,
+        os_action: ?OsAction = null,
+        checked: bool = false,
+        disabled: bool = false,
+    },
+    submenu: Menu,
+    system_menu: struct { name: []const u8, kind: SystemMenuType },
+};
+
+/// A top-level menu (or a submenu). A menu named "Window" becomes the OS window menu.
+pub const Menu = struct {
+    name: []const u8,
+    items: []const MenuItem,
+    disabled: bool = false,
+};
+
+pub const AppCommand = enum { hide, hide_other_apps, unhide_other_apps };
+
+pub const AboutPanelOptions = struct {
+    application_name: []const u8,
+    version: []const u8,
+};
+
+/// A desktop banner. `tag` (e.g. a chat id) comes back in
+/// `PlatformCallbacks.notification_activated` when the user clicks it.
+pub const Notification = struct {
+    title: []const u8,
+    body: []const u8 = "",
+    tag: ?[]const u8 = null,
+    /// Linux `app_name` (macOS attributes banners to the bundle).
+    app_name: []const u8 = "",
+    /// macOS: an unbundled process (dev run) borrows this installed app's identity so
+    /// the banner shows its name and icon (zeron `notify.rs`); else `osascript`.
+    bundle_id: ?[]const u8 = null,
+};
+
+/// gpui `ImageFormat` subset carried by clipboard images.
+pub const ClipboardImageFormat = enum {
+    png,
+    jpeg,
+    gif,
+    webp,
+    bmp,
+    tiff,
+    svg,
+
+    pub fn mimeType(f: ClipboardImageFormat) []const u8 {
+        return switch (f) {
+            .png => "image/png",
+            .jpeg => "image/jpeg",
+            .gif => "image/gif",
+            .webp => "image/webp",
+            .bmp => "image/bmp",
+            .tiff => "image/tiff",
+            .svg => "image/svg+xml",
+        };
+    }
+
+    pub fn fromMime(mime: []const u8) ?ClipboardImageFormat {
+        inline for (std.meta.fields(ClipboardImageFormat)) |f| {
+            const v: ClipboardImageFormat = @enumFromInt(f.value);
+            if (std.ascii.eqlIgnoreCase(mime, v.mimeType())) return v;
+        }
+        if (std.ascii.eqlIgnoreCase(mime, "image/jpg")) return .jpeg;
+        return null;
+    }
+
+    /// Preference order when a clipboard offers several image types (lossless first).
+    pub const preference = [_]ClipboardImageFormat{ .png, .tiff, .bmp, .webp, .jpeg, .gif, .svg };
+};
+
+/// Encoded image bytes read from the clipboard.
+pub const ClipboardImage = struct {
+    format: ClipboardImageFormat,
+    bytes: []u8,
+};
+
+/// gpui `PathPromptOptions`.
+pub const PathPromptOptions = struct {
+    files: bool = true,
+    directories: bool = false,
+    multiple: bool = false,
+    /// The accept button's label ("Attach"); null = the platform default.
+    prompt: ?[]const u8 = null,
+    /// Dialog title; null = the platform default.
+    title: ?[]const u8 = null,
+};
+
+/// Completion of `promptForPaths`. `paths` (and its strings) are borrowed for the
+/// duration of the call; copy what you keep.
+pub const PathsCallback = struct {
+    ctx: ?*anyopaque = null,
+    func: *const fn (ctx: ?*anyopaque, paths: ?[]const []const u8) void,
 };
 
 // ---------------------------------------------------------------------------------------

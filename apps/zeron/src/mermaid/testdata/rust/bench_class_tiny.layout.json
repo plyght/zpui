@@ -1,0 +1,27 @@
+{
+  "kind": "Class",
+  "direction": "TopDown",
+  "width": 109.48,
+  "height": 115.0,
+  "nodes": [
+    {
+      "id": "Foo",
+      "shape": "Rectangle",
+      "x": 8.0,
+      "y": 8.0,
+      "width": 85.48,
+      "height": 91.0,
+      "label_width": 54.88,
+      "label_height": 53.550003,
+      "label_lines": [
+        "Foo",
+        "---",
+        "+id int"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [],
+  "subgraphs": []
+}

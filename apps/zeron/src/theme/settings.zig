@@ -150,6 +150,7 @@ fn surfaceName(s: model.SurfacePreference) []const u8 {
         .theme_default => "themeDefault",
         .frosted => "frosted",
         .opaque_ => "opaque",
+        .liquid => "liquid", // [liquid-glass]
     };
 }
 
@@ -257,4 +258,19 @@ test "write fields round trips" {
     try testing.expectEqual(model.SurfacePreference.frosted, back.surface);
     try testing.expect(back.wallpaper_color.?.eql(.rgb(1, 2, 3)));
     try testing.expectEqualStrings("Fira Code", back.code_font_family.installed);
+}
+
+// [liquid-glass]
+test "liquid surface preference round trips" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const s: ThemeSettings = .{ .surface = .liquid };
+    var buf: [1024]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try w.writeByte('{');
+    try s.writeFields(&w);
+    try w.writeByte('}');
+    try testing.expect(std.mem.indexOf(u8, w.buffered(), "\"surface\":\"liquid\"") != null);
+    const back = try ThemeSettings.parse(arena.allocator(), w.buffered());
+    try testing.expectEqual(model.SurfacePreference.liquid, back.surface);
 }

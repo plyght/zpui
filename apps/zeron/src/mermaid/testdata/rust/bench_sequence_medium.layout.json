@@ -1,0 +1,606 @@
+{
+  "kind": "Sequence",
+  "direction": "LeftRight",
+  "width": 950.0,
+  "height": 1072.0,
+  "nodes": [
+    {
+      "id": "Alice",
+      "shape": "ActorBox",
+      "x": 0.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "Alice"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Bob",
+      "shape": "ActorBox",
+      "x": 200.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 29.2,
+      "label_height": 24.0,
+      "label_lines": [
+        "Bob"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Carol",
+      "shape": "ActorBox",
+      "x": 400.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "Carol"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Dave",
+      "shape": "ActorBox",
+      "x": 600.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 38.208,
+      "label_height": 24.0,
+      "label_lines": [
+        "Dave"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    },
+    {
+      "id": "Eve",
+      "shape": "ActorBox",
+      "x": 800.0,
+      "y": 0.0,
+      "width": 150.0,
+      "height": 65.0,
+      "label_width": 27.343998,
+      "label_height": 24.0,
+      "label_lines": [
+        "Eve"
+      ],
+      "anchor_subgraph": null,
+      "hidden": false
+    }
+  ],
+  "edges": [
+    {
+      "from": "Alice",
+      "to": "Bob",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          75.0,
+          111.0
+        ],
+        [
+          275.0,
+          111.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        94.2
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "Hello 0"
+      ]
+    },
+    {
+      "from": "Bob",
+      "to": "Carol",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          157.0
+        ],
+        [
+          475.0,
+          157.0
+        ]
+      ],
+      "label_anchor": [
+        375.0,
+        140.2
+      ],
+      "label_width": 80.64,
+      "label_height": 24.0,
+      "label_lines": [
+        "Forward 1"
+      ]
+    },
+    {
+      "from": "Carol",
+      "to": "Dave",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          475.0,
+          203.0
+        ],
+        [
+          675.0,
+          203.0
+        ]
+      ],
+      "label_anchor": [
+        575.0,
+        186.2
+      ],
+      "label_width": 80.64,
+      "label_height": 24.0,
+      "label_lines": [
+        "Process 2"
+      ]
+    },
+    {
+      "from": "Dave",
+      "to": "Eve",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          675.0,
+          249.0
+        ],
+        [
+          875.0,
+          249.0
+        ]
+      ],
+      "label_anchor": [
+        775.0,
+        232.2
+      ],
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "Notify 3"
+      ]
+    },
+    {
+      "from": "Eve",
+      "to": "Alice",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          875.0,
+          295.0
+        ],
+        [
+          75.0,
+          295.0
+        ]
+      ],
+      "label_anchor": [
+        509.5912,
+        278.2
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "Ack 4"
+      ]
+    },
+    {
+      "from": "Alice",
+      "to": "Bob",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          75.0,
+          341.0
+        ],
+        [
+          275.0,
+          341.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        324.2
+      ],
+      "label_width": 62.72,
+      "label_height": 24.0,
+      "label_lines": [
+        "Hello 5"
+      ]
+    },
+    {
+      "from": "Bob",
+      "to": "Carol",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          387.0
+        ],
+        [
+          475.0,
+          387.0
+        ]
+      ],
+      "label_anchor": [
+        375.0,
+        370.2
+      ],
+      "label_width": 80.64,
+      "label_height": 24.0,
+      "label_lines": [
+        "Forward 6"
+      ]
+    },
+    {
+      "from": "Carol",
+      "to": "Dave",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          475.0,
+          433.0
+        ],
+        [
+          675.0,
+          433.0
+        ]
+      ],
+      "label_anchor": [
+        575.0,
+        416.2
+      ],
+      "label_width": 80.64,
+      "label_height": 24.0,
+      "label_lines": [
+        "Process 7"
+      ]
+    },
+    {
+      "from": "Dave",
+      "to": "Eve",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          675.0,
+          479.0
+        ],
+        [
+          875.0,
+          479.0
+        ]
+      ],
+      "label_anchor": [
+        775.0,
+        462.2
+      ],
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "Notify 8"
+      ]
+    },
+    {
+      "from": "Eve",
+      "to": "Alice",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          875.0,
+          525.0
+        ],
+        [
+          75.0,
+          525.0
+        ]
+      ],
+      "label_anchor": [
+        509.5912,
+        508.2
+      ],
+      "label_width": 44.8,
+      "label_height": 24.0,
+      "label_lines": [
+        "Ack 9"
+      ]
+    },
+    {
+      "from": "Alice",
+      "to": "Bob",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          75.0,
+          571.0
+        ],
+        [
+          275.0,
+          571.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        554.2
+      ],
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "Hello 10"
+      ]
+    },
+    {
+      "from": "Bob",
+      "to": "Carol",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          617.0
+        ],
+        [
+          475.0,
+          617.0
+        ]
+      ],
+      "label_anchor": [
+        375.0,
+        600.2
+      ],
+      "label_width": 89.6,
+      "label_height": 24.0,
+      "label_lines": [
+        "Forward 11"
+      ]
+    },
+    {
+      "from": "Carol",
+      "to": "Dave",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          475.0,
+          663.0
+        ],
+        [
+          675.0,
+          663.0
+        ]
+      ],
+      "label_anchor": [
+        575.0,
+        646.2
+      ],
+      "label_width": 89.6,
+      "label_height": 24.0,
+      "label_lines": [
+        "Process 12"
+      ]
+    },
+    {
+      "from": "Dave",
+      "to": "Eve",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          675.0,
+          709.0
+        ],
+        [
+          875.0,
+          709.0
+        ]
+      ],
+      "label_anchor": [
+        775.0,
+        692.2
+      ],
+      "label_width": 80.64,
+      "label_height": 24.0,
+      "label_lines": [
+        "Notify 13"
+      ]
+    },
+    {
+      "from": "Eve",
+      "to": "Alice",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          875.0,
+          755.0
+        ],
+        [
+          75.0,
+          755.0
+        ]
+      ],
+      "label_anchor": [
+        434.17264,
+        738.2
+      ],
+      "label_width": 53.760002,
+      "label_height": 24.0,
+      "label_lines": [
+        "Ack 14"
+      ]
+    },
+    {
+      "from": "Alice",
+      "to": "Bob",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          75.0,
+          801.0
+        ],
+        [
+          275.0,
+          801.0
+        ]
+      ],
+      "label_anchor": [
+        175.0,
+        784.2
+      ],
+      "label_width": 71.68,
+      "label_height": 24.0,
+      "label_lines": [
+        "Hello 15"
+      ]
+    },
+    {
+      "from": "Bob",
+      "to": "Carol",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          275.0,
+          847.0
+        ],
+        [
+          475.0,
+          847.0
+        ]
+      ],
+      "label_anchor": [
+        375.0,
+        830.2
+      ],
+      "label_width": 89.6,
+      "label_height": 24.0,
+      "label_lines": [
+        "Forward 16"
+      ]
+    },
+    {
+      "from": "Carol",
+      "to": "Dave",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          475.0,
+          893.0
+        ],
+        [
+          675.0,
+          893.0
+        ]
+      ],
+      "label_anchor": [
+        575.0,
+        876.2
+      ],
+      "label_width": 89.6,
+      "label_height": 24.0,
+      "label_lines": [
+        "Process 17"
+      ]
+    },
+    {
+      "from": "Dave",
+      "to": "Eve",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          675.0,
+          939.0
+        ],
+        [
+          875.0,
+          939.0
+        ]
+      ],
+      "label_anchor": [
+        775.0,
+        922.2
+      ],
+      "label_width": 80.64,
+      "label_height": 24.0,
+      "label_lines": [
+        "Notify 18"
+      ]
+    },
+    {
+      "from": "Eve",
+      "to": "Alice",
+      "directed": true,
+      "arrow_start": false,
+      "arrow_end": true,
+      "points": [
+        [
+          875.0,
+          985.0
+        ],
+        [
+          75.0,
+          985.0
+        ]
+      ],
+      "label_anchor": [
+        434.17264,
+        968.2
+      ],
+      "label_width": 53.760002,
+      "label_height": 24.0,
+      "label_lines": [
+        "Ack 19"
+      ]
+    }
+  ],
+  "subgraphs": []
+}

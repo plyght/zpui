@@ -240,6 +240,9 @@ pub const Theme = struct {
     surface_preference: SurfacePreference,
     /// Effective treatment after applying the preference to the variant's recommendation.
     surface_treatment: SurfaceTreatment,
+    /// [liquid-glass] Native Liquid Glass is on: the preference is `.liquid` (or forced)
+    /// AND the platform supports it (set by the settings store, never by the token math).
+    liquid_glass: bool = false,
     /// The accent family used to build the fallback tokens.
     accent_color: AccentColor,
 
@@ -337,6 +340,8 @@ pub const Theme = struct {
     pub const glass_alpha: f32 = if (glass_platform) 0.80 else 1.0;
     /// Light-mode frost alpha.
     pub const glass_alpha_light: f32 = if (glass_platform) 0.80 else 1.0;
+    /// [liquid-glass] Max alpha of a surface fill laid over native glass (`onGlass`).
+    pub const liquid_fill_alpha: f32 = 0.10;
 
     /// The authored dark theme (surface tones sampled from the original app).
     pub fn dark() Theme {
@@ -600,6 +605,24 @@ pub const Theme = struct {
     /// blur and translucent tints.
     pub fn isFrost(self: Theme) bool {
         return self.surface_treatment == .frosted and (os == .macos or os == .linux or os == .windows);
+    }
+
+    /// [liquid-glass] Chrome and floating surfaces use native Liquid Glass instead of
+    /// in-scene frost (implies `isFrost`, whose token math stays in effect).
+    pub fn isLiquid(self: Theme) bool {
+        return self.liquid_glass and self.isFrost();
+    }
+
+    /// [liquid-glass] A surface fill that sits on native glass: a faint wash of it,
+    /// so the glass shows through; unchanged otherwise.
+    pub fn onGlass(self: Theme, fill: Hsla) Hsla {
+        if (!self.isLiquid()) return fill;
+        return fill.opacity(@min(fill.a, liquid_fill_alpha));
+    }
+
+    /// [liquid-glass] Hairline borders of glass surfaces: the glass draws its own rim.
+    pub fn onGlassBorder(self: Theme, border: Hsla) Hsla {
+        return if (self.isLiquid()) border.opacity(0) else border;
     }
 
     pub fn glassHover(self: Theme) Hsla {

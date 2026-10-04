@@ -73,6 +73,10 @@ pub const KeyBinding = core.KeyBinding;
 pub const Keymap = core.Keymap;
 pub const Listener = core.Listener;
 pub const WindowHandle = core.app.WindowHandle;
+/// App lifecycle + menu bar (src/app/lifecycle.zig): `app.setMenus(&.{ zpui.Menu{...} })`.
+pub const lifecycle = core.lifecycle;
+pub const Menu = lifecycle.Menu;
+pub const MenuItem = lifecycle.MenuItem;
 
 /// Windows, the element protocol, views, focus, paint API (docs/elements.md).
 pub const window = @import("window/window.zig");
@@ -92,6 +96,8 @@ pub const AvailableSpace = window.element.AvailableSpace;
 pub const intoAnyElement = window.element.intoAnyElement;
 pub const empty = window.element.empty;
 pub const AnyView = window.view.AnyView;
+/// Files dragged in from other apps (`div().onDrop(ExternalPaths, l)`).
+pub const ExternalPaths = @import("window/external_paths.zig").ExternalPaths;
 pub const FocusHandle = window.focus_mod.FocusHandle;
 pub const events = @import("window/events.zig");
 pub const ClickEvent = events.ClickEvent;
@@ -119,6 +125,17 @@ pub const InteractiveText = elements.InteractiveText;
 pub const Highlight = elements.Highlight;
 pub const styledText = elements.styledText;
 pub const canvas = elements.canvas;
+/// Host a native child view at an element's bounds (`platform.NativeViewId`).
+pub const nativeView = elements.nativeView;
+pub const nativeViewWith = elements.nativeViewWith;
+pub const NativeViewId = platform.NativeViewId;
+/// [liquid-glass] Native Liquid Glass (macOS 26+; src/elements/liquid_glass.zig).
+pub const liquid_glass = elements.liquid_glass;
+pub const liquidGlass = elements.liquidGlass;
+pub const liquidGlassGroup = elements.liquidGlassGroup;
+pub const overlayPlane = elements.overlayPlane;
+pub const platformSupportsLiquidGlass = elements.platformSupportsLiquidGlass;
+pub const LiquidGlassStyle = platform.LiquidGlassStyle;
 pub const deferred = elements.deferred;
 pub const anchored = elements.anchored;
 pub const img = elements.img;
@@ -163,4 +180,5 @@ pub const frameAllocator = window.arena_mod.frameAllocator;
 test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("window/tests.zig");
+    _ = @import("window/external_paths.zig");
 }
