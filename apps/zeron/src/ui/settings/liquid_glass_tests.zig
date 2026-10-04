@@ -216,6 +216,7 @@ test "Liquid Glass sidebar sees the desktop: tint around it, a backdrop hole, ca
     defer store.force_liquid = false;
     const prev_mode = shell_mod.sidebar_glass_mode;
     defer shell_mod.sidebar_glass_mode = prev_mode;
+    shell_mod.sidebar_glass_mode = .glass;
     store.applyTheme(h.app);
     h.app.runUntilParked();
     h.window().drawAndPresent();

@@ -78,16 +78,16 @@ What zeron does now:
 
   | `ZERON_SIDEBAR_GLASS=` | What sits under the pane | On top |
   |---|---|---|
-  | `glass` (default) | nothing: a hole through zpui's surface **and** the window blur | `NSGlassEffectView`, `.regular` |
-  | `vev` | AppKit's behind-window `NSVisualEffectView` (`.sidebar`, follows the window's active state) under zpui's transparent region | `NSGlassEffectView`, `.clear` (rim and refraction only) |
+  | `glass` | nothing: a hole through zpui's surface **and** the window blur | `NSGlassEffectView`, `.regular` |
+  | `vev` (default) | AppKit's behind-window `NSVisualEffectView` (`.sidebar`, follows the window's active state) under zpui's transparent region | `NSGlassEffectView`, `.clear` (rim and refraction only) |
 
-  `vev` is the robust pre-Tahoe recipe. AppKit always punches behind-window vibrancy
-  through, so use it if pure glass shows nothing (black or grey) on your Mac.
+  `vev` is the default: the desktop reads as frosted, translucent glass. `glass` shows
+  the desktop through unblurred (see-through), which looked wrong on a real Mac.
 * **Layout.** `floating` puts the pane 8 px from the window edges with radius 12, as
   on Tahoe. `flush` follows the WWDC26 sidebar: it runs to the top, left and bottom
   window edges with a square inner edge and a hairline seam, and the window's own
-  corner mask rounds its outer corners. The default is `floating` on macOS 26 and
-  `flush` on macOS 27 (`zpui.liquidGlassRevision`).
+  corner mask rounds its outer corners. The default is `flush` (zeron's original
+  straight column); `ZERON_SIDEBAR_LAYOUT=floating` opts into the inset pane.
   `ZERON_SIDEBAR_LAYOUT=floating|flush` overrides it.
 * **Titlebar: capsules, not a strip** (Option B in the research notes). zeron keeps its
   Metal-drawn titlebar, and each item group sits in its own capsule of native glass
