@@ -36,7 +36,7 @@ pub const Scene = scene.Scene;
 pub const input = @import("input.zig");
 pub const platform = @import("platform/platform.zig");
 pub const renderer = @import("renderer/renderer.zig");
-pub const text = @import("text/types.zig");
+pub const text = @import("text/text.zig");
 
 pub const style = @import("style.zig");
 pub const Style = style.Style;

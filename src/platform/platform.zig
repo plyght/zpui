@@ -355,7 +355,8 @@ pub const TextSystem = struct {
         glyphForChar: *const fn (ptr: *anyopaque, id: text.FontId, ch: u21) ?text.GlyphId,
         advance: *const fn (ptr: *anyopaque, id: text.FontId, glyph: text.GlyphId) geometry.Size(f32),
         glyphRasterBounds: *const fn (ptr: *anyopaque, params: text.RenderGlyphParams) anyerror!geometry.Bounds(DevicePixels),
-        /// Rasterize into `out` (allocated with gpa, caller frees). Mono = 1 byte/px, emoji = 4 (BGRA premultiplied).
+        /// Rasterize into `out` (allocated with gpa, caller frees). Mono = 1 byte/px; emoji = 4 (BGRA, straight
+        /// alpha, as the polychrome atlas expects); subpixel = 4 (BGRA per-channel LCD coverage, A = max).
         rasterizeGlyph: *const fn (ptr: *anyopaque, gpa: std.mem.Allocator, params: text.RenderGlyphParams, bounds: geometry.Bounds(DevicePixels)) anyerror![]u8,
         /// Shape one line of text with per-run fonts; result allocated in `arena`.
         layoutLine: *const fn (ptr: *anyopaque, arena: std.mem.Allocator, str: []const u8, font_size: Pixels, runs: []const text.FontRun) anyerror!text.LineLayout,

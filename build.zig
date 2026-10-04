@@ -19,6 +19,7 @@ pub fn build(b: *std.Build) void {
     addZeronDesign(b, target, optimize, zpui, test_step);
     addVulkanRenderer(b, target, optimize, zpui);
     addMetalRenderer(b, target, optimize, zpui);
+    addLinuxText(b, target, optimize, zpui);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -202,5 +203,43 @@ fn addMetalRenderer(
     run.setCwd(b.path("."));
     run.addPassthruArgs();
     const step = b.step("render-test", "Render the showcase scene offscreen with Metal to zig-out/render-test.png");
+    step.dependOn(&run.step);
+}
+
+/// Linux text backend (src/text/freetype.zig): FreeType, HarfBuzz and fontconfig
+/// via the `freetype_c` translate-c module, plus the `text-dump` CPU raster check
+/// (`zig build text-dump` writes zig-out/text-dump.png).
+fn addLinuxText(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    if (target.result.os.tag != .linux) return;
+    const c = b.addTranslateC(.{
+        .root_source_file = b.path("src/text/freetype_c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    c.addSystemIncludePath(.{ .cwd_relative = "/usr/include/freetype2" });
+    c.addSystemIncludePath(.{ .cwd_relative = "/usr/include/harfbuzz" });
+    zpui.addImport("freetype_c", c.createModule());
+    zpui.link_libc = true;
+    for ([_][]const u8{ "freetype2", "harfbuzz", "fontconfig" }) |lib| zpui.linkSystemLibrary(lib, .{});
+
+    const dump = b.addExecutable(.{
+        .name = "text-dump",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/text_dump.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    b.installArtifact(dump);
+    const run = b.addRunArtifact(dump);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    const step = b.step("text-dump", "Rasterize a sample paragraph on the CPU to zig-out/text-dump.png");
     step.dependOn(&run.step);
 }
