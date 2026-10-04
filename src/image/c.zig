@@ -14,3 +14,6 @@ pub extern fn zpui_stbi_load_gif(data: [*]const u8, len: c_int, delays: *?[*]c_i
 pub extern fn zpui_stbi_failure_reason() [*:0]const u8;
 pub extern fn zpui_webp_load_rgba(data: [*]const u8, len: usize, width: *c_int, height: *c_int) ?[*]u8;
 pub extern fn zpui_decode_free(ptr: ?*anyopaque) void;
+
+/// lunasvg's process-wide font registry (vendor/lunasvg/include/lunasvg.h).
+pub extern fn lunasvg_add_font_face_from_data(family: [*:0]const u8, bold: bool, italic: bool, data: *const anyopaque, length: usize, destroy_func: ?*const fn (?*anyopaque) callconv(.c) void, closure: ?*anyopaque) bool;

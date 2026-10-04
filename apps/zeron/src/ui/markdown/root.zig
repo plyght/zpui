@@ -21,6 +21,7 @@ const assets = @import("zeron_assets");
 
 pub const rich_text = @import("rich_text.zig");
 pub const file_icons = @import("file_icons.zig");
+pub const diagrams = @import("diagrams.zig");
 pub const RichText = rich_text.RichText;
 pub const registry = rich_text.registry;
 
@@ -99,6 +100,17 @@ pub const Options = struct {
     /// Resolved `file://` links get the trailing open glyph, and a paragraph
     /// that is a single file link gets the file-icon tile (transcript).
     file_links: bool = false,
+    /// Mermaid fences become diagrams once rendered (`MediaUi::diagram`);
+    /// off keeps them as source (e.g. a streaming tail fence).
+    diagrams: bool = false,
+    /// Enlarges a rendered diagram (the owner's lightbox).
+    diagram_open: ?DiagramOpen = null,
+};
+
+/// The owner's "enlarge diagram" hook: `f(owner, diagram_key, window, app)`.
+pub const DiagramOpen = struct {
+    owner: u64,
+    f: *const fn (owner: u64, diagram_key: u64, window: ?*Window, app: *App) void,
 };
 
 // ---------------------------------------------------------------------------
@@ -549,6 +561,15 @@ fn codeKey(opts: Options, ix: usize) u64 {
 /// A fenced/indented code block (`render_code_block_source_with_actions`).
 /// Mermaid fences render as their source (zeron's pending-diagram state).
 pub fn codeBlock(language: ?[]const u8, code: []const u8, ix: usize, opts: Options) AnyElement {
+    if (opts.diagrams and language != null and std.ascii.eqlIgnoreCase(language.?, "mermaid")) {
+        if (now_source) |app| return mermaidBlock(app, language, code, ix, opts);
+    }
+    return codeBlockSource(language, code, ix, opts, null);
+}
+
+/// `render_code_block_source_with_actions`: the source fence with an extra
+/// header action (between the fit toggle and copy).
+fn codeBlockSource(language: ?[]const u8, code: []const u8, ix: usize, opts: Options, extra: ?AnyElement) AnyElement {
     const theme = opts.theme;
     const key = codeKey(opts, ix);
     const fit = opts.fit_toggle and code_state.isFit(key);
@@ -600,6 +621,7 @@ pub fn codeBlock(language: ?[]const u8, code: []const u8, ix: usize, opts: Optio
             .onClick(fitListener(key))
             .child(icon(.wrap_text, 13, theme.text_muted)));
     }
+    if (extra) |e| actions = actions.child(e);
     if (opts.copy) {
         code_state.putCode(key, body_code);
         const app_now = currentNow();
@@ -612,7 +634,7 @@ pub fn codeBlock(language: ?[]const u8, code: []const u8, ix: usize, opts: Optio
             .child(icon(if (copied) .check else .copy, 12, theme.text_muted))
             .child(if (copied) @as(?[]const u8, "Copied") else null));
     }
-    const has_header = language != null or opts.copy or opts.fit_toggle;
+    const has_header = language != null or opts.copy or opts.fit_toggle or extra != null;
     const header: ?Div = if (has_header) div().h(px(code_header_height)).flexNone().pl(px(code_padding_x)).pr(px(5))
         .borderB1().borderColor(theme.border).bg(theme.ink(0.02))
         .flex().flexRow().itemsCenter().justifyBetween()
@@ -638,6 +660,124 @@ pub fn setClock(app: *App) void {
 fn currentNow() u64 {
     const app = now_source orelse return 0;
     return app.executor.now();
+}
+
+// ---------------------------------------------------------------------------
+// Mermaid diagrams (render.rs `render_code_block` + transcript `diagram_media`)
+// ---------------------------------------------------------------------------
+
+/// Last theme a diagram header was drawn with (tooltips outlive the frame).
+var tooltip_theme: ?Theme = null;
+
+const CodeTooltip = struct {
+    buf: [480]u8 = undefined,
+    len: usize = 0,
+
+    pub fn render(self: *CodeTooltip, _: *Window, _: *zpui.Context(CodeTooltip)) AnyElement {
+        const theme = &(tooltip_theme orelse return zpui.empty());
+        return zpui.intoAnyElement(div().maxW(px(320)).px(px(9)).py(px(6)).rounded(px(6))
+            .border1().borderColor(theme.border).bg(theme.bg)
+            .fontFamily(theme.font_sans).textSize(px(11)).lineHeight(px(17.8)).textColor(theme.text_muted)
+            .child(@as([]const u8, self.buf[0..self.len])));
+    }
+
+    fn build(text: []const u8, _: *Window, app: *App) zpui.Entity(CodeTooltip) {
+        var t: CodeTooltip = .{};
+        t.len = @min(text.len, t.buf.len);
+        @memcpy(t.buf[0..t.len], text[0..t.len]);
+        return app.new(CodeTooltip, t) catch @panic("OOM");
+    }
+};
+
+const ToggleData = struct { frame_key: u64 };
+
+fn diagramToggleListener(frame_key: u64) zpui.Listener(zpui.ClickEvent) {
+    var l: zpui.Listener(zpui.ClickEvent) = .{ .func = struct {
+        fn f(data: *const zpui.core.context.ListenerData, _: *const zpui.ClickEvent, window: ?*Window, app: *App) void {
+            app.propagate_event = false;
+            diagrams.toggleSource(data.get(u64));
+            if (window) |w| w.refresh();
+        }
+    }.f };
+    l.data.set(frame_key);
+    return l;
+}
+
+const OpenData = struct { owner: u64, key: u64, f: usize };
+
+fn diagramOpenListener(open: DiagramOpen, key: u64) zpui.Listener(zpui.ClickEvent) {
+    var l: zpui.Listener(zpui.ClickEvent) = .{ .func = struct {
+        fn f(data: *const zpui.core.context.ListenerData, _: *const zpui.ClickEvent, window: ?*Window, app: *App) void {
+            app.propagate_event = false;
+            const d = data.get(OpenData);
+            const func: *const fn (u64, u64, ?*Window, *App) void = @ptrFromInt(d.f);
+            func(d.owner, d.key, window, app);
+        }
+    }.f };
+    l.data.set(OpenData{ .owner = open.owner, .key = key, .f = @intFromPtr(open.f) });
+    return l;
+}
+
+fn codeIconAction(id_key: u64, comptime name: []const u8, label: []const u8, which: assets.Icon, theme: *const Theme, on_click: zpui.Listener(zpui.ClickEvent)) AnyElement {
+    return zpui.intoAnyElement(div().id(.{ name, id_key }).size(px(code_action_size)).rounded(px(6))
+        .flex().itemsCenter().justifyCenter().cursorPointer()
+        .hover(sb.bg(theme.ink(0.08)))
+        .onClick(on_click)
+        .tooltipWith(label, CodeTooltip.build)
+        .child(icon(which, 13, theme.text_muted)));
+}
+
+/// A Mermaid fence: its source until the diagram is ready (flagged when it
+/// cannot be drawn), then the diagram card with source toggle and copy.
+fn mermaidBlock(app: *App, language: ?[]const u8, code: []const u8, ix: usize, opts: Options) AnyElement {
+    const theme = opts.theme;
+    tooltip_theme = theme.*;
+    const frame_key = mix(opts.key ^ 0x3E43, ix);
+    const lookup = diagrams.request(app, code, theme.appearance == .dark);
+    const ready = switch (lookup) {
+        .pending => return codeBlockSource(language, code, ix, opts, null),
+        .failed => |reason| {
+            const notice = zpui.intoAnyElement(div().id(.{ "mermaid-failure", frame_key }).size(px(code_action_size))
+                .flex().itemsCenter().justifyCenter()
+                .tooltipWith(reason, CodeTooltip.build)
+                .child(icon(.danger_triangle, 13, theme.warning_muted)));
+            return codeBlockSource(language, code, ix, opts, notice);
+        },
+        .ready => |r| r,
+    };
+    const show_source = diagrams.sourceVisible(frame_key);
+    const toggle = codeIconAction(frame_key, "mermaid-source-toggle", if (show_source) "Show diagram" else "Show source", if (show_source) .eye else .file_code, theme, diagramToggleListener(frame_key));
+    if (show_source) return codeBlockSource(language, code, ix, opts, toggle);
+
+    const key = codeKey(opts, ix);
+    var actions = div().flexNone().flex().flexRow().itemsCenter().gap(px(2)).child(toggle);
+    if (opts.copy) {
+        const body_code = if (std.mem.endsWith(u8, code, "\n")) code[0 .. code.len - 1] else code;
+        code_state.putCode(key, body_code);
+        const copied = code_state.isCopied(key, currentNow());
+        actions = actions.child(div().id(.{ "code-copy", key }).h(px(code_action_size)).px(px(6)).rounded(px(5))
+            .flex().flexRow().itemsCenter().gap(px(4)).cursorPointer()
+            .hover(sb.bg(theme.ink(0.08)))
+            .textSize(px(10.5)).textColor(theme.text_muted)
+            .onClick(copyListener(key))
+            .child(icon(if (copied) .check else .copy, 12, theme.text_muted))
+            .child(if (copied) @as(?[]const u8, "Copied") else null));
+    }
+    const header = div().h(px(code_header_height)).flexNone().pl(px(code_padding_x)).pr(px(5))
+        .borderB1().borderColor(theme.border).bg(theme.ink(0.02))
+        .flex().flexRow().itemsCenter().justifyBetween()
+        .child(div().minW0().textSize(px(11)).textColor(theme.text_muted)
+            .child(if (language) |l| @as(?[]const u8, l) else null))
+        .child(actions);
+    // `preview_element`: centered at natural size, capped at 480px tall.
+    var preview = div().id(.{ "mermaid-image", frame_key }).wFull().maxW(px(ready.natural.width)).mxAuto()
+        .maxH(px(480)).aspectRatio(ready.natural.width / ready.natural.height)
+        .child(zpui.img(ready.image).sizeFull().objectFit(.contain));
+    if (opts.diagram_open) |open| preview = preview.cursorPointer().onClick(diagramOpenListener(open, ready.key));
+    return zpui.intoAnyElement(div().id(.{ "mermaid", frame_key }).wFull().minW0().flex().flexCol().rounded(px(10)).bg(theme.ink(0.035))
+        .border1().borderColor(theme.border).overflowHidden().relative()
+        .child(header)
+        .child(preview));
 }
 
 // ---------------------------------------------------------------------------

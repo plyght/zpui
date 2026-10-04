@@ -164,6 +164,14 @@ pub fn rasterizeBgra(gpa: Allocator, bytes: []const u8, size: SvgSize, current_c
     return doc.renderBgra(gpa, size, current_color);
 }
 
+/// Register a font face for SVG `<text>` (lunasvg's process-wide registry;
+/// `data` must stay alive for the process, e.g. an `@embedFile`). Weights
+/// 600+ select the `bold` face. Call before rendering text from any thread.
+pub fn addFontFace(family: [:0]const u8, bold: bool, italic: bool, data: []const u8) bool {
+    if (data.len == 0) return false;
+    return c.lunasvg_add_font_face_from_data(family.ptr, bold, italic, data.ptr, data.len, null, null);
+}
+
 /// gpui `render_single_frame`: a one-frame image at `scale_factor *
 /// SMOOTH_SVG_SCALE_FACTOR` times the intrinsic size, tagged with
 /// `scale_factor = SMOOTH_SVG_SCALE_FACTOR` so it lays out at intrinsic size.

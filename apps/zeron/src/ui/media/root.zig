@@ -5,6 +5,7 @@
 
 pub const viewer = @import("viewer.zig");
 pub const widgets = @import("widgets.zig");
+pub const diagram = @import("diagram.zig");
 pub const Lightbox = viewer.Lightbox;
 pub const LightboxOptions = viewer.Options;
 pub const LightboxClosed = viewer.Closed;
@@ -13,4 +14,5 @@ test {
     @import("std").testing.refAllDecls(@This());
     _ = viewer;
     _ = widgets;
+    _ = diagram;
 }

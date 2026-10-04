@@ -1020,6 +1020,26 @@ fn addZeronMedia(
     b.step("media-test", "Run the zeron media UI tests (lightbox geometry, widgets)").dependOn(&media_tests.step);
     test_step.dependOn(&mermaid_tests.step);
     test_step.dependOn(&media_tests.step);
+
+    // `zig build mermaid-visual -- <ref_png_dir> <out_dir>`: raster parity
+    // against resvg renders of the Rust pipeline's SVG (pixel diff report).
+    const visual = b.addExecutable(.{
+        .name = "mermaid-visual",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("apps/zeron/scripts/mermaid_visual.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zpui", .module = zpui },
+                .{ .name = "zeron_media", .module = media },
+                .{ .name = "zeron_mermaid", .module = mermaid },
+            },
+        }),
+    });
+    const run_visual = b.addRunArtifact(visual);
+    run_visual.setCwd(b.path("."));
+    run_visual.addPassthruArgs();
+    b.step("mermaid-visual", "Pixel-diff zeron Mermaid rasters against reference PNGs").dependOn(&run_visual.step);
 }
 
 /// zeron app lifecycle support (apps/zeron/src/lifecycle): adds two imports to the app's

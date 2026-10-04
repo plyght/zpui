@@ -469,6 +469,8 @@ pub const Window = struct {
     overlay_open_start: usize = 0,
     /// [liquid-glass] `pushTopPlane` nesting / open top range start.
     top_depth: u32 = 0,
+    /// Light/dark material for Liquid Glass views (the app theme); null = system.
+    glass_dark: ?bool = null,
     top_open_start: usize = 0,
     /// [liquid-glass] Native glass views of this window (liquid_glass.zig).
     liquid_glass: liquid_glass_mod.Pool = .{},

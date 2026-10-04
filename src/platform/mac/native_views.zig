@@ -514,6 +514,13 @@ pub fn configureGlass(w: *MacWindow, ident: platform.NativeViewId, cfg: platform
     const i = find(w, ident) orelse return;
     const c = w.natives.children.items[i];
     const v = c.view;
+    // Glass picks its material from the view's effective appearance; pin it to the app theme
+    // so a dark zeron on a light-mode Mac doesn't get light glass.
+    if (cfg.dark) |dark| if (responds(v, "setAppearance:")) {
+        const name = objc.nsString(if (dark) "NSAppearanceNameDarkAqua" else "NSAppearanceNameAqua");
+        const appearance: ?id = ak.class("NSAppearance").msg(?id, "appearanceNamed:", .{name});
+        v.msg(void, "setAppearance:", .{appearance});
+    };
     switch (c.glass orelse return) {
         .glass => {
             if (responds(v, "setStyle:")) v.msg(void, "setStyle:", .{@as(objc.NSInteger, @intFromEnum(cfg.style))});

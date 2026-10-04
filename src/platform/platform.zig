@@ -403,6 +403,8 @@ pub const LiquidGlassConfig = struct {
     corner_radius: Pixels = 0,
     /// Container merge distance (`NSGlassEffectContainerView.spacing`).
     spacing: Pixels = 0,
+    /// Force a light/dark glass material (the app's theme), null = follow the system.
+    dark: ?bool = null,
 };
 
 pub const NativeViewPlacement = struct {

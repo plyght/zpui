@@ -664,6 +664,8 @@ pub const Shell = struct {
     }
 
     pub fn render(self: *Shell, window: *Window, cx: *Context(Shell)) zpui.Div {
+        // [liquid-glass] Glass material follows zeron's theme, not the OS appearance.
+        window.glass_dark = ui.theme.get(cx).appearance == .dark;
         // The OS flipped light/dark (Linux settings portal, macOS effective
         // appearance): re-resolve a `system` theme on the next tick.
         const sys = window.windowAppearance();

@@ -29,8 +29,9 @@ pub const Out = struct {
 
 pub fn print(a: Allocator, comptime tpl: []const u8, args: anytype) Allocator.Error![]u8 {
     var list: std.ArrayList(u8) = .empty;
+    errdefer list.deinit(a);
     try write(a, &list, tpl, args);
-    return list.items;
+    return list.toOwnedSlice(a);
 }
 
 pub fn write(a: Allocator, list: *std.ArrayList(u8), comptime tpl: []const u8, args: anytype) Allocator.Error!void {

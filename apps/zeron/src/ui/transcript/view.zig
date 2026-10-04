@@ -221,6 +221,41 @@ pub const TranscriptView = struct {
         cx.notify();
     }
 
+    /// `open_diagram_preview`: the diagram enlarged for the viewport, on the
+    /// fence plate, in the shared lightbox.
+    fn openDiagram(owner: u64, key: u64, window: ?*Window, app: *App) void {
+        const win = window orelse return;
+        const weak: zpui.WeakEntity(TranscriptView) = .{ .id = @enumFromInt(owner) };
+        const ent = weak.upgrade(app) orelse return;
+        defer ent.release(app);
+        const vp = win.viewportSize();
+        const e = md.diagrams.get(key) orelse return;
+        const img = md.diagrams.enlarged(key, .{ .width = vp.width * 0.9, .height = vp.height * 0.85 }, win.scaleFactor()) orelse return;
+        const natural: media.viewer.Size = .{ .width = e.natural.width, .height = e.natural.height };
+        const theme = themeOf(app);
+        var l = ent.lease(app);
+        defer l.end();
+        const self = l.value;
+        const cx = &l.cx;
+        self.closeLightbox(app);
+        const lb = cx.newWith(media.Lightbox, media.Lightbox.init, .{ media.LightboxOptions{
+            .image = img,
+            .name = "Mermaid diagram",
+            .natural = natural,
+            .plate = theme.bg.blend(theme.ink(0.035)),
+            .release = md.diagrams.releaseImage,
+            .appearance = theme.appearance,
+        }, win }) catch {
+            md.diagrams.releaseImage(app, img);
+            return;
+        };
+        // The lightbox retained its own reference.
+        img.release();
+        self.lightbox = lb;
+        self.lightbox_sub = cx.subscribe(lb, onLightboxClosedNoWindow) catch null;
+        cx.notify();
+    }
+
     /// Devices that may own a user message's attachment files: the chat's
     /// host device plus this device (`attachment_device_ids`).
     fn attachmentDevices(self: *const TranscriptView, cx: *Context(TranscriptView), out: [][]const u8) [][]const u8 {
@@ -651,6 +686,11 @@ pub const TranscriptView = struct {
     pub fn render(self: *TranscriptView, window: *Window, cx: *Context(TranscriptView)) AnyElement {
         self.sync(cx);
         md.setClock(cx.app);
+        {
+            const list_width = self.list.viewportBounds().size.width;
+            const column = if (list_width > 0) @min(self.content_width, list_width) else self.content_width;
+            md.diagrams.beginFrame(column, window.scaleFactor());
+        }
         const theme = themeOf(cx.app);
         var root = div().id("transcript").trackFocus(self.focus).relative().sizeFull().minH0()
             .textColor(theme.text).fontFamily(theme.font_sans)
@@ -787,6 +827,10 @@ pub const TranscriptView = struct {
                 // Live rows highlight too: the cache is keyed by content.
                 .highlight = true,
                 .file_links = self.workspace_root != null,
+                // A streaming reply's tail fence keeps its source until the
+                // reply moves past it.
+                .diagrams = !m.live or m.block_ix + 1 < m.tree.blocks.len,
+                .diagram_open = .{ .owner = @intFromEnum(cx.entityId()), .f = openDiagram },
             }, window),
             .tool_group => tools.renderGroup(self, row, theme, window, cx),
             .input_chip => |c| inputChip(c.header, c.resolved, theme),

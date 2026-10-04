@@ -278,6 +278,9 @@ pub const App = struct {
             w.destroy();
         };
         app.windows.deinit(gpa);
+        // Entity/global teardown below may still ask for a window (e.g. a view detaching a
+        // native child); keep the list valid and empty so `windowById` returns null.
+        app.windows = .empty;
         app.cancelDrag();
         @import("../window/image.zig").destroyServices(app);
 

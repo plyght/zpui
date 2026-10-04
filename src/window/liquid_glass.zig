@@ -78,7 +78,9 @@ fn configEql(a: platform.LiquidGlassConfig, b: platform.LiquidGlassConfig) bool 
 
 /// Paint phase: place glass `key` at `bounds`. Returns its tier, or null when glass is
 /// unavailable (the caller then paints its fallback).
-pub fn paint(w: *Window, element_key: u64, kind: platform.LiquidGlassKind, bounds: Bounds, config: platform.LiquidGlassConfig) ?Tier {
+pub fn paint(w: *Window, element_key: u64, kind: platform.LiquidGlassKind, bounds: Bounds, config_in: platform.LiquidGlassConfig) ?Tier {
+    var config = config_in;
+    if (config.dark == null) config.dark = w.glass_dark;
     std.debug.assert(w.phase == .paint);
     if (!supported(w)) return null;
     const pool = &w.liquid_glass;

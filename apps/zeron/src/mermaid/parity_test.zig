@@ -112,3 +112,99 @@ test "layout parity with mermaid-rs-renderer" {
     }
     std.debug.print("layout parity failures: {d}/{d}\n", .{ failures, names.items.len });
 }
+
+fn firstDiff(x: []const u8, y: []const u8) usize {
+    const n = @min(x.len, y.len);
+    for (0..n) |i| if (x[i] != y[i]) return i;
+    return n;
+}
+
+test "svg parity with mermaid-rs-renderer" {
+    const zeron = @import("zeron.zig");
+    const render = @import("render.zig");
+    const gpa = std.testing.allocator;
+    var io_threaded: std.Io.Threaded = .init_single_threaded;
+    const io = io_threaded.io();
+    var d = std.Io.Dir.cwd().openDir(io, dir, .{ .iterate = true }) catch return error.SkipZigTest;
+    defer d.close(io);
+    var names: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (names.items) |n| gpa.free(n);
+        names.deinit(gpa);
+    }
+    var it = d.iterate();
+    while (try it.next(io)) |e| if (std.mem.endsWith(u8, e.name, ".mmd")) try names.append(gpa, try gpa.dupe(u8, e.name));
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lt(_: void, x: []const u8, y: []const u8) bool {
+            return std.mem.order(u8, x, y) == .lt;
+        }
+    }.lt);
+    var failures: usize = 0;
+    var total: usize = 0;
+    for (names.items) |name| {
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const src = try d.readFileAlloc(io, name, a, .limited(1 << 20));
+        const stem = name[0 .. name.len - 4];
+        // raw engine output with zeron's light options
+        if (d.readFileAlloc(io, try std.fmt.allocPrint(a, "rust/{s}.raw.svg", .{stem}), a, .limited(8 << 20))) |want| {
+            total += 1;
+            var p = try parser.Parser.init(a);
+            const graph = try p.parse(src);
+            var theme = try theme_mod.Theme.modern(a);
+            const pal = zeron.Palette.light_palette;
+            theme.font_family = pal.font;
+            theme.font_size = 14.0;
+            theme.background = pal.canvas;
+            theme.primary_color = pal.node;
+            theme.primary_text_color = pal.text;
+            theme.primary_border_color = if (graph.kind == .gantt) pal.accent_line else pal.border;
+            theme.text_color = pal.label;
+            theme.line_color = pal.line;
+            theme.secondary_color = pal.node;
+            theme.tertiary_color = pal.group;
+            theme.edge_label_background = pal.canvas;
+            theme.cluster_background = pal.group;
+            theme.cluster_border = pal.border;
+            theme.sequence_actor_fill = pal.node;
+            theme.sequence_actor_border = pal.border;
+            theme.sequence_actor_line = pal.border;
+            theme.sequence_note_fill = pal.accent_wash;
+            theme.sequence_note_border = pal.accent_line;
+            theme.sequence_activation_fill = pal.accent_wash;
+            theme.sequence_activation_border = pal.accent_line;
+            const config = zeronLayoutOptions();
+            const lay = try layout_mod.computeLayout(a, &graph, &theme, &config);
+            const got = try render.renderSvg(a, &lay, &theme, &config);
+            if (!std.mem.eql(u8, got, want)) {
+                failures += 1;
+                const i = firstDiff(got, want);
+                const lo = if (i > 80) i - 80 else 0;
+                std.debug.print("{s}.raw: DIFF at {d}\n  got:  {s}\n  want: {s}\n", .{ stem, i, got[lo..@min(got.len, i + 120)], want[lo..@min(want.len, i + 120)] });
+            } else std.debug.print("{s}.raw: OK\n", .{stem});
+        } else |_| {}
+        for ([_]bool{ false, true }) |dark| {
+            const mode = if (dark) "dark" else "light";
+            const pal = zeron.Palette.forDark(dark);
+            const res = try zeron.render(a, src, pal);
+            if (d.readFileAlloc(io, try std.fmt.allocPrint(a, "rust/{s}.{s}.svg", .{ stem, mode }), a, .limited(8 << 20))) |want| {
+                total += 1;
+                switch (res) {
+                    .err => |e| {
+                        failures += 1;
+                        std.debug.print("{s}.{s}: error {s}\n", .{ stem, mode, e });
+                    },
+                    .svg => |got| if (!std.mem.eql(u8, got, want)) {
+                        failures += 1;
+                        const i = firstDiff(got, want);
+                        const lo = if (i > 80) i - 80 else 0;
+                        std.debug.print("{s}.{s}: DIFF at {d}\n  got:  {s}\n  want: {s}\n", .{ stem, mode, i, got[lo..@min(got.len, i + 120)], want[lo..@min(want.len, i + 120)] });
+                    } else std.debug.print("{s}.{s}: OK\n", .{ stem, mode }),
+                }
+            } else |_| {}
+        }
+    }
+    std.debug.print("svg parity failures: {d}/{d}\n", .{ failures, total });
+    try std.testing.expectEqual(@as(usize, 0), failures);
+}

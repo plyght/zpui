@@ -23,7 +23,11 @@ test {
 }
 
 pub const layout = @import("layout/layout.zig");
+pub const render = @import("render.zig");
+pub const zeron = @import("zeron.zig");
 test {
     _ = layout;
     _ = @import("parity_test.zig");
+    _ = @import("zeron.zig");
+    _ = @import("render.zig");
 }
