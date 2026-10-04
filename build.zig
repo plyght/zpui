@@ -28,6 +28,7 @@ pub fn build(b: *std.Build) void {
     addZeronModel(b, target, optimize, zpui, test_step);
     addHelloExample(b, target, optimize, zpui);
     addListDemo(b, target, optimize, zpui);
+    addZeronTranscriptUi(b, target, optimize, zpui, test_step);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -544,4 +545,81 @@ fn addListDemo(
     run.addPassthruArgs();
     const step = b.step("list-demo", "Run the virtualized list demo (examples/list_demo.zig)");
     step.dependOn(&run.step);
+}
+
+/// zeron transcript + markdown UI: `zeron_ui_markdown` (apps/zeron/src/ui/markdown,
+/// the reusable BlockTree → elements renderer) and `zeron_ui_transcript`
+/// (apps/zeron/src/ui/transcript, `TranscriptView`), their tests, and the
+/// `transcript-demo` harness (`zig build transcript-demo -- --help`).
+fn addZeronTranscriptUi(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
+) void {
+    const theme = b.modules.get("zeron_theme") orelse return;
+    const assets = b.modules.get("zeron_assets") orelse return;
+    const markdown = b.modules.get("zeron_markdown") orelse return;
+    const syntax = b.modules.get("zeron_syntax") orelse return;
+    const diff = b.modules.get("zeron_diff") orelse return;
+    const model = b.modules.get("zeron_model") orelse return;
+    const engine = b.modules.get("zeron_engine") orelse return;
+    const ui_md = b.addModule("zeron_ui_markdown", .{
+        .root_source_file = b.path("apps/zeron/src/ui/markdown/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zpui", .module = zpui },
+            .{ .name = "zeron_theme", .module = theme },
+            .{ .name = "zeron_assets", .module = assets },
+            .{ .name = "zeron_markdown", .module = markdown },
+            .{ .name = "zeron_syntax", .module = syntax },
+        },
+    });
+    const ui_tr = b.addModule("zeron_ui_transcript", .{
+        .root_source_file = b.path("apps/zeron/src/ui/transcript/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zpui", .module = zpui },
+            .{ .name = "zeron_theme", .module = theme },
+            .{ .name = "zeron_assets", .module = assets },
+            .{ .name = "zeron_markdown", .module = markdown },
+            .{ .name = "zeron_syntax", .module = syntax },
+            .{ .name = "zeron_diff", .module = diff },
+            .{ .name = "zeron_model", .module = model },
+            .{ .name = "zeron_engine", .module = engine },
+            .{ .name = "zeron_ui_markdown", .module = ui_md },
+        },
+    });
+    const md_tests = b.addRunArtifact(b.addTest(.{ .name = "zeron_ui_markdown", .root_module = ui_md }));
+    const tr_tests = b.addRunArtifact(b.addTest(.{ .name = "zeron_ui_transcript", .root_module = ui_tr }));
+    const ui_step = b.step("transcript-test", "Run the zeron transcript + markdown UI tests");
+    ui_step.dependOn(&md_tests.step);
+    ui_step.dependOn(&tr_tests.step);
+    test_step.dependOn(ui_step);
+
+    if (target.result.os.tag != .linux) return;
+    const demo = b.addExecutable(.{
+        .name = "transcript-demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("apps/zeron/src/ui/transcript/demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zpui", .module = zpui },
+                .{ .name = "zeron_theme", .module = theme },
+                .{ .name = "zeron_assets", .module = assets },
+                .{ .name = "zeron_model", .module = model },
+                .{ .name = "zeron_engine", .module = engine },
+                .{ .name = "zeron_ui_transcript", .module = ui_tr },
+            },
+        }),
+    });
+    b.installArtifact(demo);
+    const run = b.addRunArtifact(demo);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    b.step("transcript-demo", "Render transcript fixtures in a window (apps/zeron/fixtures/transcript-*.json)").dependOn(&run.step);
 }
