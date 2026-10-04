@@ -16,6 +16,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_tests.step);
 
     addZeronEngine(b, target, optimize, test_step);
+    addZeronDesign(b, target, optimize, zpui, test_step);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -48,4 +49,29 @@ fn addZeronEngine(
     run_probe.addPassthruArgs();
     const probe_step = b.step("probe", "Run zeron-probe against a local engine");
     probe_step.dependOn(&run_probe.step);
+}
+
+fn addZeronDesign(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
+) void {
+    const theme = b.addModule("zeron_theme", .{
+        .root_source_file = b.path("apps/zeron/src/theme/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zpui", .module = zpui }},
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = theme })).step);
+
+    const files = b.addWriteFiles();
+    _ = files.addCopyDirectory(b.path("apps/zeron/assets"), "assets", .{});
+    const assets = b.addModule("zeron_assets", .{
+        .root_source_file = files.addCopyFile(b.path("apps/zeron/src/assets.zig"), "assets.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = assets })).step);
 }
