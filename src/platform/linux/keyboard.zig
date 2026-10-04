@@ -303,26 +303,48 @@ pub const Keyboard = struct {
 
     pub fn deinit(k: *Keyboard) void {
         k.clearKeymap();
+        if (k.compose) |s| c.xkb_compose_state_unref(s);
+        if (k.compose_table) |t| c.xkb_compose_table_unref(t);
+        k.compose = null;
+        k.compose_table = null;
         c.xkb_context_unref(k.context);
     }
 
     fn clearKeymap(k: *Keyboard) void {
-        if (k.compose) |s| c.xkb_compose_state_unref(s);
-        if (k.compose_table) |t| c.xkb_compose_table_unref(t);
         if (k.state) |s| c.xkb_state_unref(s);
         if (k.keymap) |m| c.xkb_keymap_unref(m);
-        k.compose = null;
-        k.compose_table = null;
         k.state = null;
         k.keymap = null;
     }
 
-    /// Installs a keymap and fresh state (takes ownership of both).
+    /// Installs a keymap and fresh state (takes ownership of both). The compose table
+    /// depends only on the locale, so it is built once and kept across keymap changes
+    /// (X11 keymap updates can arrive per keystroke, e.g. from `xdotool type`).
     pub fn setKeymap(k: *Keyboard, keymap: *c.struct_xkb_keymap, state: ?*c.struct_xkb_state) !void {
         k.clearKeymap();
         k.keymap = keymap;
         k.state = state orelse c.xkb_state_new(keymap) orelse return error.XkbState;
-        k.initCompose();
+        if (k.compose_table == null) k.initCompose();
+    }
+
+    /// Keystroke for an explicit keysym instead of the keymap's (X11: a keycode whose
+    /// mapping changed after the key event was generated).
+    pub fn keystrokeForKeysym(k: *const Keyboard, mods: input.Modifiers, sym: Keysym, keycode: u32) OwnedKeystroke {
+        _ = k;
+        var out: OwnedKeystroke = .{};
+        var utf8_buf: [64]u8 = undefined;
+        const n = c.xkb_keysym_to_utf8(sym, &utf8_buf, utf8_buf.len);
+        // xkb_keysym_to_utf8 counts the terminating NUL.
+        const utf8 = utf8_buf[0..@intCast(@max(0, @min(n - 1, @as(c_int, utf8_buf.len - 1))))];
+        const utf32 = c.xkb_keysym_to_utf32(sym);
+        var name_buf: [64]u8 = undefined;
+        const name = keysymName(sym, &name_buf);
+        var key_buf: [64]u8 = undefined;
+        const kname = keyName(&key_buf, .{ .keysym = sym, .keysym_name = name, .utf8 = utf8, .utf32 = utf32, .keycode = keycode, .shift = mods.shift });
+        out.setKey(kname);
+        out.modifiers = adjustShift(mods, kname);
+        out.setChar(if (utf32 >= 32 and utf32 != 127 and utf8.len > 0) utf8 else null);
+        return out;
     }
 
     /// Keymap from a text buffer (Wayland `wl_keyboard.keymap`).

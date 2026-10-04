@@ -30,6 +30,9 @@ pub const SettingsStore = struct {
     /// Advances only when `codeFencesFitContent` flips.
     code_fences_generation: u64 = 0,
     save_task: Task(void) = .none,
+    /// False for an in-memory store (fixture mode): mutations apply and
+    /// notify as usual but nothing is written to disk.
+    persist: bool = true,
 
     pub fn current(self: *const SettingsStore) *const settings.UiSettings {
         return &self.loaded.value;
@@ -44,6 +47,10 @@ pub const SettingsStore = struct {
     /// Write the current revision if it isn't on disk yet.
     pub fn writeLatest(store: *SettingsStore) void {
         if (store.saved_revision == store.revision) return;
+        if (!store.persist) {
+            store.saved_revision = store.revision;
+            return;
+        }
         settings.save(&store.loaded.value, store.gpa, store.io, store.data_dir) catch |err| {
             log.warn("failed to persist ui settings (revision {d}): {t}", .{ store.revision, err });
             return;
@@ -70,6 +77,16 @@ pub fn init(app: *App, io: std.Io, data_dir: []const u8) !void {
     const dir = try app.gpa.dupe(u8, data_dir);
     errdefer app.gpa.free(dir);
     try app.setGlobal(SettingsStore{ .gpa = app.gpa, .io = io, .loaded = loaded, .data_dir = dir });
+}
+
+/// Install an in-memory store seeded with defaults (fixture mode / no data
+/// dir): settings pages stay live but never touch `ui-settings.json`.
+pub fn initMemory(app: *App, io: std.Io) !void {
+    const loaded = try settings.defaults(app.gpa);
+    errdefer loaded.deinit();
+    const dir = try app.gpa.dupe(u8, "");
+    errdefer app.gpa.free(dir);
+    try app.setGlobal(SettingsStore{ .gpa = app.gpa, .io = io, .loaded = loaded, .data_dir = dir, .persist = false });
 }
 
 /// Latest settings (including mutations still inside the debounce window).

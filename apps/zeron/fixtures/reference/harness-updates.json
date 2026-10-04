@@ -1,0 +1,90 @@
+[
+ {
+  "harness": "claude-code",
+  "installedVersion": "2.1.228",
+  "source": "vendor",
+  "policy": "off",
+  "phase": "manual-action-required",
+  "checkedAt": 1791098726509,
+  "canApply": true,
+  "manualCommand": "claude update"
+ },
+ {
+  "harness": "codex",
+  "channel": "stable",
+  "source": "unknown",
+  "policy": "notify",
+  "phase": "dormant",
+  "canApply": false,
+  "manualCommand": "Update Codex with its original installer or package manager"
+ },
+ {
+  "harness": "cursor",
+  "channel": "stable",
+  "source": "unknown",
+  "policy": "notify",
+  "phase": "dormant",
+  "canApply": true,
+  "manualCommand": "cursor-agent update"
+ },
+ {
+  "harness": "devin",
+  "channel": "stable",
+  "source": "unknown",
+  "policy": "notify",
+  "phase": "dormant",
+  "canApply": false,
+  "manualCommand": "devin --version"
+ },
+ {
+  "harness": "grok",
+  "channel": "stable",
+  "source": "unknown",
+  "policy": "notify",
+  "phase": "dormant",
+  "canApply": true,
+  "manualCommand": "grok update"
+ },
+ {
+  "harness": "hermes",
+  "channel": "stable",
+  "source": "unknown",
+  "policy": "notify",
+  "phase": "dormant",
+  "canApply": true,
+  "manualCommand": "hermes update"
+ },
+ {
+  "harness": "pi",
+  "installedVersion": "0.85.1",
+  "channel": "stable",
+  "source": "vendor",
+  "policy": "off",
+  "phase": "failed",
+  "checkedAt": 1791098726523,
+  "canApply": true,
+  "manualCommand": "pi update --self",
+  "error": {
+   "message": "latest-version check failed: error sending request for url (https://registry.npmjs.org/@earendil-works%2fpi-coding-agent/latest)",
+   "retryable": true
+  }
+ },
+ {
+  "harness": "opencode",
+  "channel": "stable",
+  "source": "unknown",
+  "policy": "notify",
+  "phase": "dormant",
+  "canApply": true,
+  "manualCommand": "opencode upgrade"
+ },
+ {
+  "harness": "antigravity",
+  "channel": "stable",
+  "source": "unknown",
+  "policy": "notify",
+  "phase": "dormant",
+  "canApply": false,
+  "manualCommand": "Update the configured Antigravity ACP server"
+ }
+]

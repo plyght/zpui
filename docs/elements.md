@@ -266,6 +266,11 @@ zpui.img("avatars/me.png")   // asset path via zpui.images.setAssetSource(app, s
 // Monochrome icons tinted with the text color:
 zpui.svg().source("close", @embedFile("close.svg")).size4().textColor(theme.muted)
 zpui.svg().path("icons/close.svg")
+// Interactive like div (gpui `Svg` is `InteractiveElement`): hover/groupHover/focus/drag
+// styles and mouse listeners; `.id(..)` gives a `StatefulSvg` (onClick, tooltip, active).
+zpui.svg().path("icons/chevron.svg").groupHover("row", sb.textColor(theme.fg))
+// Render-only transform about the bounds center (gpui `Transformation`):
+zpui.svg().path("icons/chevron.svg").withTransformation(.rotate(std.math.pi / 2.0))
 ```
 
 ## 5a. Lists, animation, scrollbars, effects
@@ -293,7 +298,7 @@ above it. Tell the state about data changes:
 
 | call | when |
 |---|---|
-| `splice(.{ .start, .end }, new_count)` / `spliceFocusable(range, handles)` | items replaced/inserted/removed |
+| `splice(.{ .start, .end }, new_count)` / `spliceFocusable(range, handles)` | items replaced/inserted/removed (into an empty, non-following list the scroll top stays at the start; gpui would move it past the new items) |
 | `remeasureItems(range)` | an item's height changed (streaming text); keeps the pixel offset into the top item |
 | `remeasure()` | everything changed height (font size); keeps the proportional offset |
 | `reset(n)` / `resetWithUniformHeight(n, h)` / `withUniformItemHeight(h)` | new data; height hints size the scrollbar before measurement |
@@ -467,6 +472,12 @@ w.rendered_frame.scene.quads.items                     // inspect what was paint
 
 The fake text system lays every character out 10px wide at 16px. See
 `src/window/tests.zig` for examples of every feature.
+
+Runnables execute on the test thread, so a job that blocks (socket, lock, child process)
+would hang the binary: a watchdog aborts with a message once one runnable has run for
+120 s (`ZPUI_TEST_WATCHDOG_S`, 0 disables), and `runUntilParked` panics after a million
+runnables without parking (livelock). Engine-backed zeron harnesses pass
+`.autoconnect = false` so tests never touch the network.
 
 ## 11. Differences from gpui
 

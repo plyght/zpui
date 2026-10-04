@@ -32,6 +32,7 @@ const ui = @import("ui/components/root.zig");
 const prefs_mod = @import("ui/shell/prefs.zig");
 const fixtures_mod = @import("ui/shell/fixtures.zig");
 const shell_mod = @import("ui/shell/shell.zig");
+const settings_ui = @import("ui/settings/root.zig");
 
 const App = zpui.App;
 const log = std.log.scoped(.zeron);
@@ -133,6 +134,8 @@ fn onLaunch(l: *Launch, app: *App) void {
         .surface = .frosted,
     });
     ui.theme.install(app, theme) catch @panic("theme");
+    // Settings: theme from ui-settings.json (or an in-memory store in fixture mode).
+    settings_ui.store.boot(app, l.io, if (l.fixtures != null) appearance else l.appearance);
     prefs_mod.install(app, prefs) catch @panic("prefs");
 
     // Model.
@@ -255,4 +258,5 @@ pub fn main(init: std.process.Init) !void {
 
 test {
     _ = @import("ui/shell/shell_test.zig");
+    _ = @import("ui/settings/root.zig");
 }

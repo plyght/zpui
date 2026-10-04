@@ -583,3 +583,23 @@ test "list: scroll_by from the pinned end of a bottom-aligned list moves immedia
     try testing.expect(!t.state.isFollowingTail());
     try testing.expectApproxEqAbs(@as(f32, -770), t.state.scrollPxOffsetForScrollbar().y, 0.01);
 }
+
+test "list: splicing into an empty list keeps a top scroll position at the start" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const t = try open(app, .{ .count = 0, .viewport = 100 });
+    t.state.scrollTo(.{});
+    t.state.splice(.{ .start = 0, .end = 0 }, 10);
+    try expectOffset(t.state, 0, 0);
+    redraw(app, t.w);
+    try expectOffset(t.state, 0, 0);
+    try testing.expect(t.state.isScrolledToEnd() != true);
+    // A list that follows the tail still pins to the end.
+    const f = try open(app, .{ .count = 0, .viewport = 100 });
+    f.state.setFollowMode(.tail);
+    f.state.splice(.{ .start = 0, .end = 0 }, 10);
+    try expectOffset(f.state, 10, 0);
+    // Non-empty lists keep gpui's anchor semantics: inserting at the top item shifts it.
+    t.state.splice(.{ .start = 0, .end = 0 }, 2);
+    try expectOffset(t.state, 2, 0);
+}

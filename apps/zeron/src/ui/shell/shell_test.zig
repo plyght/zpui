@@ -33,7 +33,7 @@ const Harness = struct {
         fixtures_mod.applyPrefs(f, &prefs);
         try ui.theme.install(app, zt.Theme.dark());
         try prefs_mod.install(app, prefs);
-        const state = try app.newWith(model.AppState, model.AppState.init, .{ io, model.engine_state.Config{ .port = 1, .zeron_path = null, .reconnect = false, .wake_mode = .poll } });
+        const state = try app.newWith(model.AppState, model.AppState.init, .{ io, model.engine_state.Config{ .port = 1, .zeron_path = null, .reconnect = false, .autoconnect = false, .wake_mode = .poll } });
         fixtures_mod.applyToState(f, io, app, state);
         const handle = try app.openWindow(.{
             .bounds = .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 1600, .height = 1000 } },
@@ -95,4 +95,43 @@ test "clicking a sidebar row selects its chat" {
     const ws = h.state.read(h.app).workspace.read(h.app);
     const first = ws.selectedChatRow().?;
     try testing.expectEqualStrings("Retry backoff helper", first.title.?);
+}
+
+const FadeProbe = struct {
+    width: f32,
+    fn init(width: f32, _: *zpui.Window, _: *zpui.Context(FadeProbe)) FadeProbe {
+        return .{ .width = width };
+    }
+    pub fn render(self: *FadeProbe, _: *zpui.Window, _: *zpui.Context(FadeProbe)) zpui.Div {
+        // The fake text system lays every character out 10px wide: "abcdefghij" is 100px.
+        return zpui.div().flex().w(zpui.px(self.width)).child(ui.effects.fadedText("abcdefghij", .{}));
+    }
+};
+
+fn fadeOf(width: f32) !zpui.scene.EdgeFadeParams {
+    const app = try zpui.App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(.{ .bounds = .{ .origin = .zero, .size = .{ .width = 400, .height = 100 } } }, FadeProbe, FadeProbe.init, .{width});
+    const w = handle.window(app).?;
+    const sprites = w.rendered_frame.scene.monochrome_sprites.items;
+    try testing.expect(sprites.len > 0);
+    var f = sprites[sprites.len - 1].fade;
+    const s = w.scaleFactor();
+    f.right_x /= s;
+    f.band_right /= s;
+    return f;
+}
+
+test "faded label eases its right-edge fade in with the overflow (zeron label_fade_outset)" {
+    // Fits: no fade at all.
+    try testing.expect((try fadeOf(120)).isNone());
+    // Barely clipped (2px over a 20px band): the ramp ends almost a band past the clip,
+    // so the last glyphs stay nearly opaque (Rust `fade_label_overflow`).
+    const barely = try fadeOf(98);
+    try testing.expectApproxEqAbs(@as(f32, 20), barely.band_right, 0.01);
+    try testing.expectApproxEqAbs(98 + zpui.effects.labelFadeOutset(2, 20), barely.right_x, 0.01);
+    try testing.expect(barely.right_x > 98 + 19);
+    // Clipped by more than a band: the ramp reaches zero exactly at the clip edge.
+    const deep = try fadeOf(60);
+    try testing.expectApproxEqAbs(@as(f32, 60), deep.right_x, 0.01);
 }

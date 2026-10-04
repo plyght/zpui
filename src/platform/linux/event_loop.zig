@@ -306,12 +306,14 @@ test "EventLoop timers and wake" {
     defer fired.deinit(testing.allocator);
     const h: Handler(TimerId) = .{ .ctx = &fired, .func = recordTimer };
 
+    // Taken before arming: the 20ms deadline is relative to `addTimer`, so a start taken
+    // afterwards can be late by scheduling delay under load (flaked in parallel runs).
+    const start = monotonicNow();
     const late = try l.addTimer(20 * std.time.ns_per_ms, h);
     const early = try l.addTimer(5 * std.time.ns_per_ms, h);
     const cancelled = try l.addTimer(1 * std.time.ns_per_ms, h);
     l.cancelTimer(cancelled);
 
-    const start = monotonicNow();
     while (fired.items.len < 2 and monotonicNow() - start < std.time.ns_per_s) l.poll(100);
     try testing.expectEqualSlices(TimerId, &.{ early, late }, fired.items);
     try testing.expect(monotonicNow() - start >= 20 * std.time.ns_per_ms);

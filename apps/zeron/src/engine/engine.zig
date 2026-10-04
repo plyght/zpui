@@ -75,7 +75,9 @@ pub const Engine = struct {
     /// `zeron headless` we spawned, if any.
     child: ?std.process.Child = null,
 
-    pub const Error = error{ EngineUnavailable, NotAnEngine } || Allocator.Error;
+    /// `EngineBinaryNotFound`: nothing answered and the `zeron` binary to spawn does
+    /// not exist (or is not executable).
+    pub const Error = error{ EngineUnavailable, EngineBinaryNotFound, NotAnEngine } || Allocator.Error;
 
     /// Probe 127.0.0.1:`port`; if no engine answers, spawn `zeron headless`
     /// (when configured) and retry with backoff. Completes the bootstrap
@@ -88,13 +90,16 @@ pub const Engine = struct {
             else => |e| return e,
         }
         const path = options.zeron_path orelse return error.EngineUnavailable;
-        var child = try std.process.spawn(io, .{
+        var child = std.process.spawn(io, .{
             .argv = &.{ path, "headless" },
             .environ_map = options.spawn_environ,
             .stdin = .ignore,
             .stdout = if (options.inherit_child_output) .inherit else .ignore,
             .stderr = if (options.inherit_child_output) .inherit else .ignore,
-        });
+        }) catch |err| return switch (err) {
+            error.FileNotFound, error.AccessDenied, error.PermissionDenied, error.NotDir, error.InvalidExe, error.IsDir => error.EngineBinaryNotFound,
+            else => |e| e,
+        };
         errdefer child.kill(io);
 
         const deadline: Io.Timeout = (Io.Timeout{ .duration = .{ .raw = options.spawn_timeout, .clock = .awake } }).toDeadline(io);
@@ -245,5 +250,10 @@ test "Engine.connect: bootstrap against a fake engine; no engine and no spawn fa
     try testing.expectError(error.EngineUnavailable, Engine.connect(testing.allocator, io, .{
         .port = 1,
         .zeron_path = null,
+    }));
+    // Nothing listens and the binary to spawn is missing.
+    try testing.expectError(error.EngineBinaryNotFound, Engine.connect(testing.allocator, io, .{
+        .port = 1,
+        .zeron_path = "/nonexistent/zeron-engine-binary",
     }));
 }

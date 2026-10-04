@@ -1,0 +1,317 @@
+{
+ "commits": [
+  {
+   "sha": "60018f2177591071fcc9a67ea59f5dcd4d69e7ec",
+   "parentShas": [
+    "f5e6c84556d2c0bed9a257e3981632b0e27095f0",
+    "619aae029dda528253a6af0ba619b45baa1df115"
+   ],
+   "subject": "Merge branch 'feat/stream-backpressure'",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-04T07:40:00+00:00",
+   "refs": [
+    {
+     "kind": "branch",
+     "label": "main"
+    },
+    {
+     "kind": "remote",
+     "label": "origin/main"
+    }
+   ]
+  },
+  {
+   "sha": "619aae029dda528253a6af0ba619b45baa1df115",
+   "parentShas": [
+    "cf1126f67238bf3e85fcc8c8737b72e80ddcfddb"
+   ],
+   "subject": "Expose high_water through Config",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-04T07:31:00+00:00",
+   "refs": [
+    {
+     "kind": "branch",
+     "label": "feat/stream-backpressure"
+    }
+   ]
+  },
+  {
+   "sha": "0f927dce74ec3475c7a39299e5bffab222ca665d",
+   "parentShas": [
+    "a473a8c1ab29e55e40e14f2c8d0fe078ad9920ad"
+   ],
+   "subject": "WIP: retry jitter",
+   "authorName": "Chen Wu",
+   "authorEmail": "chen@example.com",
+   "authoredAt": "2026-10-04T07:20:00+00:00",
+   "refs": [
+    {
+     "kind": "branch",
+     "label": "feat/retry-jitter"
+    }
+   ]
+  },
+  {
+   "sha": "f5e6c84556d2c0bed9a257e3981632b0e27095f0",
+   "parentShas": [
+    "91eb264d913b88bf37713ee4c023b95e403c1380"
+   ],
+   "subject": "Bump retry default",
+   "authorName": "Ben Ortiz",
+   "authorEmail": "ben@example.com",
+   "authoredAt": "2026-10-03T18:02:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "cf1126f67238bf3e85fcc8c8737b72e80ddcfddb",
+   "parentShas": [
+    "c09bb890b096f7306f688cc6d1dad34e7e52a223"
+   ],
+   "subject": "Yield to the runtime past the high-water mark",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-03T16:45:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "a473a8c1ab29e55e40e14f2c8d0fe078ad9920ad",
+   "parentShas": [
+    "5ad436a1dca33823a8d6bf33785511c4bf00d99a"
+   ],
+   "subject": "Add jitter knob",
+   "authorName": "Chen Wu",
+   "authorEmail": "chen@example.com",
+   "authoredAt": "2026-10-03T15:10:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "91eb264d913b88bf37713ee4c023b95e403c1380",
+   "parentShas": [
+    "5ad436a1dca33823a8d6bf33785511c4bf00d99a",
+    "077564fb04323d23b1f76da35a5c35b419711fa4"
+   ],
+   "subject": "Merge pull request #41 from ben/fix-flaky",
+   "authorName": "Ben Ortiz",
+   "authorEmail": "ben@example.com",
+   "authoredAt": "2026-10-03T12:00:00+00:00",
+   "refs": [
+    {
+     "kind": "tag",
+     "label": "v0.3.1"
+    }
+   ]
+  },
+  {
+   "sha": "077564fb04323d23b1f76da35a5c35b419711fa4",
+   "parentShas": [
+    "a46e558d11cb2400bab09c1ca969e615142ef3d6"
+   ],
+   "subject": "Fix flaky Button snapshot",
+   "authorName": "Ben Ortiz",
+   "authorEmail": "ben@example.com",
+   "authoredAt": "2026-10-03T11:20:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "c09bb890b096f7306f688cc6d1dad34e7e52a223",
+   "parentShas": [
+    "5ad436a1dca33823a8d6bf33785511c4bf00d99a"
+   ],
+   "subject": "Pipeline::new computes high_water",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-03T10:00:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "a46e558d11cb2400bab09c1ca969e615142ef3d6",
+   "parentShas": [
+    "ec4c91afbf23e886603daadfa3e7d16aa13fd0b7"
+   ],
+   "subject": "Stabilize snapshot timestamps",
+   "authorName": "Ben Ortiz",
+   "authorEmail": "ben@example.com",
+   "authoredAt": "2026-10-02T17:45:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "5ad436a1dca33823a8d6bf33785511c4bf00d99a",
+   "parentShas": [
+    "ec4c91afbf23e886603daadfa3e7d16aa13fd0b7"
+   ],
+   "subject": "Document the event stream",
+   "authorName": "Chen Wu",
+   "authorEmail": "chen@example.com",
+   "authoredAt": "2026-10-02T14:30:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "ec4c91afbf23e886603daadfa3e7d16aa13fd0b7",
+   "parentShas": [
+    "0e5bc0a684c7afe47fa66cdf21a4dfa33742f9c3"
+   ],
+   "subject": "Streaming pipeline walkthrough",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-02T09:12:00+00:00",
+   "refs": [
+    {
+     "kind": "tag",
+     "label": "v0.3.0"
+    }
+   ]
+  },
+  {
+   "sha": "0e5bc0a684c7afe47fa66cdf21a4dfa33742f9c3",
+   "parentShas": [
+    "862a51f8b6294a4b0729a7c5c929bfd67068d962"
+   ],
+   "subject": "Rename stream setting",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-01T12:00:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "862a51f8b6294a4b0729a7c5c929bfd67068d962",
+   "parentShas": [
+    "32d332da761f44df7959e5887b6b94cb4667d781"
+   ],
+   "subject": "Initial context exploration",
+   "authorName": "Chen Wu",
+   "authorEmail": "chen@example.com",
+   "authoredAt": "2026-10-01T11:00:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "32d332da761f44df7959e5887b6b94cb4667d781",
+   "parentShas": [
+    "ae23b94ccaf714337e4ce5ba99ef3dc257e300df"
+   ],
+   "subject": "Add config loader",
+   "authorName": "Ben Ortiz",
+   "authorEmail": "ben@example.com",
+   "authoredAt": "2026-10-01T10:00:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "ae23b94ccaf714337e4ce5ba99ef3dc257e300df",
+   "parentShas": [
+    "dd43186d84cb2a94322d06bb4aa6a95514dde3d7"
+   ],
+   "subject": "Scaffold workspace",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-01T09:00:00+00:00",
+   "refs": []
+  },
+  {
+   "sha": "dd43186d84cb2a94322d06bb4aa6a95514dde3d7",
+   "parentShas": [],
+   "subject": "Initial commit",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-09-30T08:00:00+00:00",
+   "refs": []
+  }
+ ],
+ "branchTips": [
+  {
+   "sha": "60018f2177591071fcc9a67ea59f5dcd4d69e7ec",
+   "parentShas": [
+    "f5e6c84556d2c0bed9a257e3981632b0e27095f0",
+    "619aae029dda528253a6af0ba619b45baa1df115"
+   ],
+   "subject": "Merge branch 'feat/stream-backpressure'",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-04T07:40:00+00:00",
+   "refs": [
+    {
+     "kind": "branch",
+     "label": "main"
+    },
+    {
+     "kind": "remote",
+     "label": "origin/main"
+    }
+   ]
+  },
+  {
+   "sha": "619aae029dda528253a6af0ba619b45baa1df115",
+   "parentShas": [
+    "cf1126f67238bf3e85fcc8c8737b72e80ddcfddb"
+   ],
+   "subject": "Expose high_water through Config",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-04T07:31:00+00:00",
+   "refs": [
+    {
+     "kind": "branch",
+     "label": "feat/stream-backpressure"
+    }
+   ]
+  },
+  {
+   "sha": "0f927dce74ec3475c7a39299e5bffab222ca665d",
+   "parentShas": [
+    "a473a8c1ab29e55e40e14f2c8d0fe078ad9920ad"
+   ],
+   "subject": "WIP: retry jitter",
+   "authorName": "Chen Wu",
+   "authorEmail": "chen@example.com",
+   "authoredAt": "2026-10-04T07:20:00+00:00",
+   "refs": [
+    {
+     "kind": "branch",
+     "label": "feat/retry-jitter"
+    }
+   ]
+  },
+  {
+   "sha": "91eb264d913b88bf37713ee4c023b95e403c1380",
+   "parentShas": [
+    "5ad436a1dca33823a8d6bf33785511c4bf00d99a",
+    "077564fb04323d23b1f76da35a5c35b419711fa4"
+   ],
+   "subject": "Merge pull request #41 from ben/fix-flaky",
+   "authorName": "Ben Ortiz",
+   "authorEmail": "ben@example.com",
+   "authoredAt": "2026-10-03T12:00:00+00:00",
+   "refs": [
+    {
+     "kind": "tag",
+     "label": "v0.3.1"
+    }
+   ]
+  },
+  {
+   "sha": "ec4c91afbf23e886603daadfa3e7d16aa13fd0b7",
+   "parentShas": [
+    "0e5bc0a684c7afe47fa66cdf21a4dfa33742f9c3"
+   ],
+   "subject": "Streaming pipeline walkthrough",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-02T09:12:00+00:00",
+   "refs": [
+    {
+     "kind": "tag",
+     "label": "v0.3.0"
+    }
+   ]
+  }
+ ],
+ "headSha": "619aae029dda528253a6af0ba619b45baa1df115",
+ "nextCursor": null,
+ "totalCount": 17,
+ "headCommitCount": 17,
+ "comparison": {
+  "base": "origin/main",
+  "ahead": 0,
+  "behind": 3
+ }
+}

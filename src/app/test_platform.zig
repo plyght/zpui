@@ -89,12 +89,22 @@ pub const TestDispatcher = struct {
     pub fn tick(self: *TestDispatcher) bool {
         const r = self.foreground.popFront() orelse self.background.popFront() orelse return false;
         self.ran += 1;
+        watchdog.enter();
+        defer watchdog.exit();
         r.run(r.ctx);
         return true;
     }
 
+    /// `runUntilParked` gives up (panics) after this many runnables without parking:
+    /// something keeps re-queuing work (a livelock), which would otherwise spin forever.
+    pub const max_ticks_per_park: usize = 1_000_000;
+
     pub fn runUntilParked(self: *TestDispatcher) void {
-        while (self.tick()) {}
+        var n: usize = 0;
+        while (self.tick()) {
+            n += 1;
+            if (n >= max_ticks_per_park) std.debug.panic("TestDispatcher.runUntilParked: still not parked after {d} runnables (a runnable keeps re-queuing work?)", .{n});
+        }
     }
 
     pub fn isParked(self: *const TestDispatcher) bool {
@@ -128,6 +138,60 @@ pub const TestDispatcher = struct {
         }
         const i = best orelse return null;
         return self.timers.orderedRemove(i);
+    }
+};
+
+/// Hang guard for runnables executed by `TestDispatcher`: everything runs on the test
+/// thread, so a job that blocks (a socket read, a lock, a child process) would hang the
+/// whole test binary silently. A lazily started watcher thread aborts the process with a
+/// message once a single runnable has been running for `limit_s` seconds (default 120,
+/// `ZPUI_TEST_WATCHDOG_S` overrides, 0 disables).
+pub const watchdog = struct {
+    var started = std.atomic.Value(bool).init(false);
+    var depth: u32 = 0; // test-thread only
+    /// Monotonic ns at which the outermost runnable started; 0 = idle.
+    var busy_since = std.atomic.Value(u64).init(0);
+    var limit_ns: u64 = 120 * std.time.ns_per_s;
+
+    fn monotonic() u64 {
+        var ts: std.c.timespec = undefined;
+        _ = std.c.clock_gettime(.MONOTONIC, &ts);
+        return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
+    }
+
+    fn start() void {
+        if (started.swap(true, .acq_rel)) return;
+        if (std.c.getenv("ZPUI_TEST_WATCHDOG_S")) |v| {
+            const secs = std.fmt.parseInt(u64, std.mem.span(v), 10) catch 120;
+            limit_ns = secs * std.time.ns_per_s;
+        }
+        if (limit_ns == 0) return;
+        const t = std.Thread.spawn(.{}, watch, .{}) catch return;
+        t.detach();
+    }
+
+    fn watch() void {
+        while (true) {
+            const ts: std.c.timespec = .{ .sec = 1, .nsec = 0 };
+            _ = std.c.nanosleep(&ts, null);
+            const since = busy_since.load(.acquire);
+            if (since != 0 and monotonic() -| since > limit_ns) {
+                std.debug.print("\nzpui TestDispatcher watchdog: a runnable has been running for over {d}s " ++
+                    "without returning (blocked on I/O, a lock or a child process?); aborting.\n", .{limit_ns / std.time.ns_per_s});
+                std.process.abort();
+            }
+        }
+    }
+
+    pub fn enter() void {
+        start();
+        depth += 1;
+        if (depth == 1) busy_since.store(@max(monotonic(), 1), .release);
+    }
+
+    pub fn exit() void {
+        depth -= 1;
+        if (depth == 0) busy_since.store(0, .release);
     }
 };
 
@@ -495,4 +559,29 @@ test "TestDispatcher runs foreground before background, FIFO" {
     try std.testing.expectEqual(@as(u64, 60), disp.now());
     d.advanceClock(40);
     try std.testing.expectEqualStrings("fb12", Log.buf[0..Log.len]);
+}
+
+test "TestDispatcher hang watchdog brackets each runnable, including nested parks" {
+    var d = TestDispatcher.init(std.testing.allocator);
+    defer d.deinit();
+    const Probe = struct {
+        var seen_busy: bool = false;
+        var inner: ?*TestDispatcher = null;
+        fn outer(_: *anyopaque) void {
+            seen_busy = watchdog.busy_since.load(.acquire) != 0;
+            // A runnable that parks again (as App.runUntilParked from a job would).
+            var y: u8 = 0;
+            inner.?.dispatcher().dispatchOnMainThread(.{ .ctx = &y, .run = nested }, .medium);
+            inner.?.runUntilParked();
+            seen_busy = seen_busy and watchdog.busy_since.load(.acquire) != 0;
+        }
+        fn nested(_: *anyopaque) void {}
+    };
+    Probe.inner = &d;
+    var x: u8 = 0;
+    d.dispatcher().dispatch(.{ .ctx = &x, .run = Probe.outer }, .medium);
+    d.runUntilParked();
+    try std.testing.expect(Probe.seen_busy);
+    try std.testing.expectEqual(@as(u64, 0), watchdog.busy_since.load(.acquire));
+    try std.testing.expectEqual(@as(u32, 0), watchdog.depth);
 }

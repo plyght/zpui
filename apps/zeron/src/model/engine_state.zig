@@ -296,6 +296,9 @@ pub const Config = struct {
     stop_spawned: bool = true,
     /// Reconnect after failures and drops.
     reconnect: bool = true,
+    /// Start connecting in `init`. False (headless tests): never touch the network; the
+    /// connection stays `.connecting` until `reconnect` is called.
+    autoconnect: bool = true,
     wake_mode: WakeMode = .dispatch,
     spawn_timeout_ms: i64 = 30_000,
     ready_timeout_ms: i64 = 60_000,
@@ -330,7 +333,7 @@ pub const EngineState = struct {
 
     pub fn init(io: Io, config: Config, cx: *Context(EngineState)) !EngineState {
         var self: EngineState = .{ .gpa = cx.gpa(), .io = io, .config = config, .self_id = cx.entityId() };
-        try self.startConnect(cx);
+        if (config.autoconnect) try self.startConnect(cx);
         return self;
     }
 
@@ -461,13 +464,21 @@ pub const EngineState = struct {
                 self.emitWakeSoon(cx);
             },
             .err => |err| {
-                const msg = std.fmt.allocPrint(self.gpa, "{t}", .{err}) catch null;
+                const msg = failureMessage(self.gpa, err, self.config.zeron_path);
                 log.warn("engine connect failed: {t}", .{err});
                 self.setFailed(msg);
                 cx.notify();
                 self.scheduleReconnect(cx);
             },
         }
+    }
+
+    /// Text for the failure gate (owned). A missing engine binary gets an actionable
+    /// line; other errors keep their name.
+    pub fn failureMessage(gpa: Allocator, err: anyerror, zeron_path: ?[]const u8) ?[]u8 {
+        if (err == error.EngineBinaryNotFound)
+            return std.fmt.allocPrint(gpa, "The zeron engine is not running and `{s} headless` could not be started (binary not found). Install zeron or set ZERON_BIN.", .{zeron_path orelse "zeron"}) catch null;
+        return std.fmt.allocPrint(gpa, "{t}", .{err}) catch null;
     }
 
     fn emitWakeSoon(self: *EngineState, cx: *Context(EngineState)) void {
@@ -735,4 +746,15 @@ pub fn Snapshot(comptime T: type, comptime method: Method) type {
             return changed;
         }
     };
+}
+
+test "failureMessage explains a missing engine binary" {
+    const gpa = std.testing.allocator;
+    const m = EngineState.failureMessage(gpa, error.EngineBinaryNotFound, "/opt/zeron/bin/zeron").?;
+    defer gpa.free(m);
+    try std.testing.expect(std.mem.indexOf(u8, m, "/opt/zeron/bin/zeron headless") != null);
+    try std.testing.expect(std.mem.indexOf(u8, m, "ZERON_BIN") != null);
+    const u = EngineState.failureMessage(gpa, error.EngineUnavailable, null).?;
+    defer gpa.free(u);
+    try std.testing.expectEqualStrings("EngineUnavailable", u);
 }

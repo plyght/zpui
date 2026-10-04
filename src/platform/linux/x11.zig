@@ -220,6 +220,166 @@ const ScrollDevice = struct {
     horizontal: common.XiScrollAxis = .{},
 };
 
+/// Records core keyboard-mapping changes as they happen, on a second X connection
+/// served by its own thread.
+///
+/// Tools like `xdotool type` bind each character missing from the layout to a spare
+/// keycode, send the key press, and unbind it a few milliseconds later. The main
+/// connection learns about the change from `XkbMapNotify`, but by the time its (busy, e.g.
+/// rendering) loop re-reads the keymap from the server the binding is often already gone,
+/// so the press translated to nothing and the character was dropped. This thread fetches
+/// the changed keysyms immediately and keeps a short, server-timestamped history; key
+/// events whose keycode appears in it are translated with the mapping that was current at
+/// the event's time. Only small changes (<= `max_tracked_keys` keycodes, i.e. scratch
+/// bindings) are tracked; a whole-layout change clears the history so XKB's own
+/// level/group logic applies again.
+const MappingWatcher = struct {
+    gpa: Allocator,
+    conn: *c.xcb_connection_t,
+    xkb_base_event: u8,
+    thread: std.Thread = undefined,
+    lock: std.atomic.Value(bool) = .init(false),
+    records: [64]Record = undefined,
+    next: usize = 0,
+    len: usize = 0,
+
+    const max_tracked_keys = 8;
+    const Record = struct { time: u32, keycode: u32, syms: [2]keyboard.Keysym };
+
+    fn start(gpa: Allocator) ?*MappingWatcher {
+        var screen: c_int = 0;
+        const conn = c.xcb_connect(null, &screen) orelse return null;
+        if (c.xcb_connection_has_error(conn) != 0) {
+            c.xcb_disconnect(conn);
+            return null;
+        }
+        var major: u16 = 0;
+        var minor: u16 = 0;
+        var base_event: u8 = 0;
+        var base_error: u8 = 0;
+        if (c.xkb_x11_setup_xkb_extension(conn, 1, 0, c.XKB_X11_SETUP_XKB_EXTENSION_NO_FLAGS, &major, &minor, &base_event, &base_error) == 0) {
+            c.xcb_disconnect(conn);
+            return null;
+        }
+        const device = c.xkb_x11_get_core_keyboard_device_id(conn);
+        const events: u16 = c.XCB_XKB_EVENT_TYPE_MAP_NOTIFY;
+        const parts: u16 = c.XCB_XKB_MAP_PART_KEY_SYMS;
+        _ = c.xcb_xkb_select_events(conn, @intCast(device), events, 0, events, parts, parts, null);
+        _ = c.xcb_flush(conn);
+        const self = gpa.create(MappingWatcher) catch {
+            c.xcb_disconnect(conn);
+            return null;
+        };
+        self.* = .{ .gpa = gpa, .conn = conn, .xkb_base_event = base_event };
+        self.thread = std.Thread.spawn(.{}, run, .{self}) catch {
+            c.xcb_disconnect(conn);
+            gpa.destroy(self);
+            return null;
+        };
+        return self;
+    }
+
+    fn stop(self: *MappingWatcher) void {
+        // Wake the blocked xcb_wait_for_event: a shut-down socket reads EOF.
+        _ = linux.shutdown(c.xcb_get_file_descriptor(self.conn), linux.SHUT.RDWR);
+        self.thread.join();
+        c.xcb_disconnect(self.conn);
+        self.gpa.destroy(self);
+    }
+
+    fn run(self: *MappingWatcher) void {
+        while (true) {
+            const ev = c.xcb_wait_for_event(self.conn) orelse return;
+            defer std.c.free(ev);
+            const bytes: [*]const u8 = @ptrCast(ev);
+            if ((bytes[0] & 0x7f) != self.xkb_base_event or bytes[1] != XKB_MAP_NOTIFY) continue;
+            const e: *const c.xcb_xkb_map_notify_event_t = @ptrCast(@alignCast(ev));
+            if (e.changed & c.XCB_XKB_MAP_PART_KEY_SYMS == 0 or e.nKeySyms == 0) continue;
+            if (e.nKeySyms > max_tracked_keys) {
+                self.acquire();
+                self.len = 0;
+                self.release();
+                continue;
+            }
+            const reply = c.xcb_get_keyboard_mapping_reply(self.conn, c.xcb_get_keyboard_mapping(self.conn, e.firstKeySym, e.nKeySyms), null) orelse continue;
+            defer std.c.free(reply);
+            const per: usize = reply.*.keysyms_per_keycode;
+            const syms: [*]const u32 = @ptrCast(c.xcb_get_keyboard_mapping_keysyms(reply));
+            const have: usize = @intCast(c.xcb_get_keyboard_mapping_keysyms_length(reply));
+            self.acquire();
+            defer self.release();
+            for (0..e.nKeySyms) |i| {
+                var r: Record = .{ .time = e.time, .keycode = @as(u32, e.firstKeySym) + @as(u32, @intCast(i)), .syms = .{ 0, 0 } };
+                for (0..@min(per, 2)) |l| {
+                    const ix = i * per + l;
+                    if (ix < have) r.syms[l] = syms[ix];
+                }
+                self.records[self.next] = r;
+                self.next = (self.next + 1) % self.records.len;
+                self.len = @min(self.len + 1, self.records.len);
+            }
+        }
+    }
+
+    fn acquire(self: *MappingWatcher) void {
+        while (self.lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) std.atomic.spinLoopHint();
+    }
+
+    fn release(self: *MappingWatcher) void {
+        self.lock.store(false, .release);
+    }
+
+    /// The keysym bound to `keycode` at server time `time`, when the history has a
+    /// mapping change for it at or before that time (null: use the keymap).
+    fn keysymAt(self: *MappingWatcher, keycode: u32, time: u32, shift: bool) ?keyboard.Keysym {
+        self.acquire();
+        defer self.release();
+        return lookup(self.records[0..], self.next, self.len, keycode, time, shift);
+    }
+
+    fn lookup(records: []const Record, next: usize, len: usize, keycode: u32, time: u32, shift: bool) ?keyboard.Keysym {
+        var i: usize = 0;
+        while (i < len) : (i += 1) {
+            const r = records[(next + records.len - 1 - i) % records.len];
+            if (r.keycode != keycode) continue;
+            // Server time wraps every ~49 days.
+            if (@as(i32, @bitCast(time -% r.time)) < 0) continue;
+            const sym = if (shift and r.syms[1] != 0) r.syms[1] else r.syms[0];
+            return if (sym != 0) sym else null;
+        }
+        return null;
+    }
+};
+
+test "MappingWatcher history picks the binding current at the key event's time" {
+    var w: MappingWatcher = undefined;
+    w.next = 0;
+    w.len = 0;
+    const put = struct {
+        fn f(m: *MappingWatcher, time: u32, kc: u32, sym: keyboard.Keysym) void {
+            m.records[m.next] = .{ .time = time, .keycode = kc, .syms = .{ sym, 0 } };
+            m.next = (m.next + 1) % m.records.len;
+            m.len = @min(m.len + 1, m.records.len);
+        }
+    }.f;
+    // xdotool: bind é at 100, press at 101, unbind at 117; bind 日 at 135 ...
+    put(&w, 100, 255, 0xe9);
+    put(&w, 117, 255, 0);
+    put(&w, 135, 255, 0x10065e5);
+    put(&w, 152, 255, 0);
+    const L = MappingWatcher.lookup;
+    try std.testing.expectEqual(@as(?keyboard.Keysym, 0xe9), L(&w.records, w.next, w.len, 255, 101, false));
+    try std.testing.expectEqual(@as(?keyboard.Keysym, 0xe9), L(&w.records, w.next, w.len, 255, 100, false));
+    try std.testing.expectEqual(@as(?keyboard.Keysym, null), L(&w.records, w.next, w.len, 255, 120, false)); // released after unbind
+    try std.testing.expectEqual(@as(?keyboard.Keysym, 0x10065e5), L(&w.records, w.next, w.len, 255, 136, false));
+    try std.testing.expectEqual(@as(?keyboard.Keysym, null), L(&w.records, w.next, w.len, 254, 136, false)); // other keys
+    try std.testing.expectEqual(@as(?keyboard.Keysym, null), L(&w.records, w.next, w.len, 255, 50, false)); // before any change
+    // Wrapping server time.
+    w.len = 0;
+    put(&w, 0xffff_fff0, 255, 0xfc);
+    try std.testing.expectEqual(@as(?keyboard.Keysym, 0xfc), L(&w.records, w.next, w.len, 255, 5, false));
+}
+
 pub const Client = struct {
     gpa: Allocator,
     plat: *LinuxPlatform,
@@ -252,6 +412,7 @@ pub const Client = struct {
     cursor_font: u32 = 0,
 
     clipboard: ?Clipboard = null,
+    mapping_watcher: ?*MappingWatcher = null,
 
     pub fn create(gpa: Allocator, plat: *LinuxPlatform) !*Client {
         const dpy = c.XOpenDisplay(null) orelse return error.X11ConnectFailed;
@@ -281,6 +442,7 @@ pub const Client = struct {
             self.refresh_ns = std.time.ns_per_s / @max(v, 1);
         }
         try self.setupXkb();
+        self.mapping_watcher = MappingWatcher.start(gpa);
         self.setupXInput();
         self.clipboard = Clipboard.init(gpa, self) catch |e| blk: {
             log.warn("clipboard unavailable: {t}", .{e});
@@ -300,6 +462,7 @@ pub const Client = struct {
         if (self.source) |s| self.plat.loop.removeFd(s);
         self.plat.loop.hooks = .{};
         self.scroll_devices.deinit(self.gpa);
+        if (self.mapping_watcher) |mw| mw.stop();
         self.keyboard.deinit();
         _ = c.XCloseDisplay(self.dpy);
         self.gpa.destroy(self);
@@ -340,8 +503,23 @@ pub const Client = struct {
 
     fn reloadKeymap(self: *Client) !void {
         const keymap = c.xkb_x11_keymap_new_from_device(self.keyboard.context, self.conn, self.xkb_device, c.XKB_KEYMAP_COMPILE_NO_FLAGS) orelse return error.XkbKeymap;
-        const state = c.xkb_x11_state_new_from_device(keymap, self.conn, self.xkb_device);
-        try self.keyboard.setKeymap(keymap, state);
+        if (self.keyboard.state) |old| {
+            // Keep the modifier/layout state we have tracked through the event stream. The
+            // server's current state is ahead of the events still queued (e.g. Shift
+            // already down for the next `xdotool type` character), and queued
+            // XkbStateNotify events bring ours up to date in order.
+            const depressed = c.xkb_state_serialize_mods(old, c.XKB_STATE_MODS_DEPRESSED);
+            const latched = c.xkb_state_serialize_mods(old, c.XKB_STATE_MODS_LATCHED);
+            const locked = c.xkb_state_serialize_mods(old, c.XKB_STATE_MODS_LOCKED);
+            const l_dep = c.xkb_state_serialize_layout(old, c.XKB_STATE_LAYOUT_DEPRESSED);
+            const l_lat = c.xkb_state_serialize_layout(old, c.XKB_STATE_LAYOUT_LATCHED);
+            const l_lock = c.xkb_state_serialize_layout(old, c.XKB_STATE_LAYOUT_LOCKED);
+            try self.keyboard.setKeymap(keymap, null);
+            self.keyboard.updateMask(depressed, latched, locked, l_dep, l_lat, l_lock);
+        } else {
+            const state = c.xkb_x11_state_new_from_device(keymap, self.conn, self.xkb_device);
+            try self.keyboard.setKeymap(keymap, state);
+        }
         self.modifiers = self.keyboard.modifiers();
     }
 
@@ -451,7 +629,7 @@ pub const Client = struct {
             KEY_PRESS, KEY_RELEASE => {
                 const e: *const c.xcb_key_press_event_t = @ptrCast(@alignCast(ev));
                 const w = self.windowFor(e.event) orelse return;
-                self.handleKey(w, e.detail, kind == KEY_PRESS);
+                self.handleKey(w, e.detail, kind == KEY_PRESS, e.time);
             },
             BUTTON_PRESS, BUTTON_RELEASE => {
                 const e: *const c.xcb_button_press_event_t = @ptrCast(@alignCast(ev));
@@ -558,20 +736,29 @@ pub const Client = struct {
         if (self.plat.callbacks.keyboard_layout_change) |f| f(self.plat.callbacks.ctx);
     }
 
-    fn handleKey(self: *Client, w: *Window, keycode: u32, pressed: bool) void {
+    fn handleKey(self: *Client, w: *Window, keycode: u32, pressed: bool, time: u32) void {
         const sym = self.keyboard.keysym(keycode);
-        if (keyboard.isModifierKey(sym)) return;
+        // The keycode was remapped around this event (`xdotool type` binds a spare keycode
+        // per character and unbinds it right after the press): translate with the
+        // mapping in effect at the event's server time, not the keymap we have now.
+        const remapped: ?keyboard.Keysym = if (self.mapping_watcher) |mw| mw.keysymAt(keycode, time, self.modifiers.shift) else null;
+        if (keyboard.isModifierKey(remapped orelse sym)) return;
         if (pressed) {
             const held = self.last_key == keycode;
             self.last_key = keycode;
             var r: keyboard.PressResult = undefined;
-            self.keyboard.press(self.modifiers, keycode, &r);
+            if (remapped != null and remapped.? != sym) {
+                r = .{ .keystroke = self.keyboard.keystrokeForKeysym(self.modifiers, remapped.?, keycode) };
+            } else self.keyboard.press(self.modifiers, keycode, &r);
             if (r.ime_insert) |t| w.common.handleIme(.{ .insert_text = t });
             if (r.ime_marked) |t| w.common.handleIme(.{ .set_marked_text = t });
             w.common.handleInput(.{ .key_down = .{ .keystroke = r.keystroke.keystroke(), .is_held = held } });
         } else {
             if (self.last_key == keycode) self.last_key = null;
-            const ks = self.keyboard.keystroke(self.modifiers, keycode);
+            const ks = if (remapped != null and remapped.? != sym)
+                self.keyboard.keystrokeForKeysym(self.modifiers, remapped.?, keycode)
+            else
+                self.keyboard.keystroke(self.modifiers, keycode);
             w.common.handleInput(.{ .key_up = .{ .keystroke = ks.keystroke() } });
         }
     }

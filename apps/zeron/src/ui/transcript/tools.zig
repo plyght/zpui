@@ -413,22 +413,8 @@ fn thoughtLineText(line: thought.Line, theme: *const Theme) ?zpui.StyledText {
     return zpui.StyledText.init(text.items).withRuns(runs.items);
 }
 
-/// An icon rotated about its own center (zpui's svg transformation is
-/// applied in window space, gpui's around the element center).
-pub fn rotatedIcon(which: assets.Icon, size: f32, angle: f32, color: Hsla) zpui.Div {
-    const Ctx = struct { icon: assets.Icon, angle: f32, color: Hsla };
-    return div().size(px(size)).child(zpui.canvas(Ctx{ .icon = which, .angle = angle, .color = color }, struct {
-        fn paint(c: Ctx, b: Bounds, w: *Window, _: *App) void {
-            const s = w.scaleFactor();
-            const cx = (b.origin.x + b.size.width / 2) * s;
-            const cy = (b.origin.y + b.size.height / 2) * s;
-            const r = zpui.scene.TransformationMatrix.unit.rotate(c.angle);
-            var m = r;
-            m.translation = .{
-                cx - (r.rotation_scale[0][0] * cx + r.rotation_scale[0][1] * cy),
-                cy - (r.rotation_scale[1][0] * cx + r.rotation_scale[1][1] * cy),
-            };
-            w.paintSvg(b, c.icon.path(), c.icon.svg(), m, c.color);
-        }
-    }.paint).sizeFull());
+/// An icon rotated about its own center (gpui `Transformation::rotate`).
+pub fn rotatedIcon(which: assets.Icon, size: f32, angle: f32, color: Hsla) zpui.Svg {
+    return zpui.svg().source(which.path(), which.svg()).size(px(size)).flexNone().textColor(color)
+        .withTransformation(.rotate(angle));
 }

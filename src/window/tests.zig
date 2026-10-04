@@ -20,6 +20,7 @@ const elements = @import("../elements/mod.zig");
 const div = elements.div;
 const StyleBuilder = @import("../styled.zig").StyleBuilder;
 const color = @import("../color.zig");
+const zpui_scene = @import("../scene.zig");
 const geometry = @import("../geometry.zig");
 const input = @import("../input.zig");
 const events = @import("events.zig");
@@ -783,6 +784,46 @@ test "tooltips show after the delay and hide when the mouse leaves" {
     try testing.expect(w.tooltip_bounds == null);
 }
 
+/// zeron's `text_tooltip_above`: a zero-height, end-justified column so the card
+/// overflows upward, lifted 20px by `relative().bottom(20)`.
+const AboveTip = struct {
+    pub fn render(_: *AboveTip, _: *Window, _: *Context(AboveTip)) elements.Div {
+        return div().h(px(0)).flex().flexCol().justifyEnd()
+            .child(div().relative().bottom(px(20)).child(div().w(px(40)).h(px(30)).bg(color.red)));
+    }
+};
+
+const AboveTipView = struct {
+    fn init(_: *Window, _: *Context(AboveTipView)) AboveTipView {
+        return .{};
+    }
+    fn tip(_: *Window, cx: *App) Entity(AboveTip) {
+        return cx.new(AboveTip, .{}) catch @panic("OOM");
+    }
+    pub fn render(_: *AboveTipView, _: *Window, _: *Context(AboveTipView)) elements.Div {
+        return div().size(px(400)).child(div().id("btn").mt(px(100)).size(px(50)).tooltip(tip));
+    }
+};
+
+test "tooltip anchored at mouse + 1; an end-justified zero-height tooltip overflows upward" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, AboveTipView, AboveTipView.init, .{});
+    const w = handle.window(app).?;
+    testWindow(w).moveMouse(10, 120);
+    app.advanceClock(501 * std.time.ns_per_ms);
+    const tb = w.tooltip_bounds.?.bounds;
+    try testing.expectEqual(@as(f32, 11), tb.origin.x);
+    try testing.expectEqual(@as(f32, 121), tb.origin.y);
+    // gpui/taffy: justify-content: flex-end is unsafe alignment, so the 30px card sits
+    // above the zero-height box (121 - 30), then 20px higher.
+    var card: ?zpui_scene.Quad = null;
+    for (w.rendered_frame.scene.quads.items) |q| if (q.background.solid.eql(color.red)) {
+        card = q;
+    };
+    try testing.expectEqual(@as(f32, 121 - 30 - 20), card.?.bounds.origin.y / w.scaleFactor());
+}
+
 const Editor = struct {
     text: [64]u8 = undefined,
     len: usize = 0,
@@ -1019,6 +1060,49 @@ test "img decodes on a worker and paints when ready; svg paints a tinted mask" {
     try testing.expectEqual(@as(f32, 4), sprite.bounds.size.height);
 }
 
+const SvgInteractView = struct {
+    fn init(_: *Window, _: *Context(SvgInteractView)) SvgInteractView {
+        return .{};
+    }
+    pub fn render(_: *SvgInteractView, _: *Window, _: *Context(SvgInteractView)) elements.Div {
+        return div().sizeFull().child(
+            div().group("row").absolute().left(px(100)).top(px(40)).w(px(100)).h(px(20)).child(
+                elements.svg().source("tiny", tiny_svg).size(px(16)).textColor(color.red)
+                    .groupHover("row", sb.textColor(color.green))
+                    .withTransformation(elements.SvgTransformation.rotate(std.math.pi / 2.0)),
+            ),
+        );
+    }
+};
+
+test "svg: transformation rotates about the bounds center; groupHover restyles it" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, SvgInteractView, SvgInteractView.init, .{});
+    const w = handle.window(app).?;
+    var sprites = w.rendered_frame.scene.monochrome_sprites.items;
+    try testing.expectEqual(@as(usize, 1), sprites.len);
+    try testing.expect(sprites[0].color.eql(color.red));
+    // The center of the svg (108, 48) must be a fixed point of the transform (gpui
+    // `Transformation::into_matrix`), so the icon spins in place.
+    const m = sprites[0].transformation;
+    const s = w.scaleFactor();
+    const cx: f32 = 108 * s;
+    const cy: f32 = 48 * s;
+    const tx = m.rotation_scale[0][0] * cx + m.rotation_scale[0][1] * cy + m.translation[0];
+    const ty = m.rotation_scale[1][0] * cx + m.rotation_scale[1][1] * cy + m.translation[1];
+    try testing.expectApproxEqAbs(cx, tx, 1e-3);
+    try testing.expectApproxEqAbs(cy, ty, 1e-3);
+    try testing.expectApproxEqAbs(@as(f32, 0), m.rotation_scale[0][0], 1e-6);
+    // Hovering the group (outside the svg's own bounds) applies the group hover style.
+    testWindow(w).moveMouse(180, 50);
+    sprites = w.rendered_frame.scene.monochrome_sprites.items;
+    try testing.expectEqual(@as(usize, 1), sprites.len);
+    try testing.expect(sprites[0].color.eql(color.green));
+    testWindow(w).moveMouse(10, 10);
+    try testing.expect(w.rendered_frame.scene.monochrome_sprites.items[0].color.eql(color.red));
+}
+
 // ---------------------------------------------------------------------------------------
 // API coverage: every builder and window API used at least once (Zig compiles lazily).
 // ---------------------------------------------------------------------------------------
@@ -1123,7 +1207,7 @@ const CoverageView = struct {
                 .child(elements.deferred(anchored))
                 .child(elements.canvas(self, CoverageView.paintAll).withPrepaint(*CoverageView, CoverageView.prepaintAll).size(px(10)))
                 .child(elements.img(@as([]const u8, "missing.png")).objectFit(.cover).grayscale(true).size(px(4)))
-                .child(elements.svg().path("missing.svg").withTransformation(.unit).size(px(4)))
+                .child(elements.svg().path("missing.svg").withTransformation(.identity).size(px(4)))
                 .child(st)
                 .child(if (cx.weakEntity().id == cx.entityId()) "same" else "different"),
         );

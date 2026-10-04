@@ -23,6 +23,7 @@ const gates = @import("gates.zig");
 const main_panel = @import("main_panel.zig");
 const palette_mod = @import("palette.zig");
 const terminal_dock = @import("terminal_dock.zig");
+const settings_ui = @import("../settings/root.zig"); // settings mode (ui/settings owns it)
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -103,6 +104,9 @@ pub const Shell = struct {
     surface_active: usize = 0,
     newtab_menu_open: bool = false,
     palette_subs: zpui.Subscriptions = .{},
+    // ---- settings mode (ui/settings/view.zig) ----
+    settings_view: ?Entity(settings_ui.SettingsView) = null,
+    settings_sub: ?zpui.Subscription = null,
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, server_decorations: bool, window: *Window, cx: *Context(Shell)) !Shell {
         const focus = cx.focusHandle();
@@ -136,6 +140,8 @@ pub const Shell = struct {
         self.subs.deinit(self.gpa);
         self.palette_subs.deinit(self.gpa);
         if (self.palette) |p| p.release(app);
+        if (self.settings_sub) |*sub| sub.deinit();
+        if (self.settings_view) |v| v.release(app);
         for (self.surfaces.items) |e| e.release(app);
         self.surfaces.deinit(self.gpa);
         for (self.nav.items) |e| if (e) |s| self.gpa.free(s);
@@ -156,8 +162,45 @@ pub const Shell = struct {
         cx.notify();
     }
 
-    fn onOpenSettings(_: *Shell, _: Entity(sidebar_mod.Sidebar), _: *const sidebar_mod.OpenSettings, cx: *Context(Shell)) void {
+    fn onOpenSettings(self: *Shell, _: Entity(sidebar_mod.Sidebar), _: *const sidebar_mod.OpenSettings, cx: *Context(Shell)) void {
+        const w = cx.app.windows.items[0] orelse return;
+        self.openSettings(w, cx);
+    }
+
+    // ---- settings mode (the page itself lives in ui/settings) -------------------------
+
+    pub fn openSettings(self: *Shell, window: *Window, cx: *Context(Shell)) void {
+        if (self.settings_view != null) return;
+        if (self.palette != null) self.closePalette(window, cx);
+        const V = settings_ui.SettingsView;
+        const io = self.state.read(cx).workspace.read(cx).io;
+        const dir: ?[]const u8 = if (self.fixtures) |f| f.dir else null;
+        const v = cx.newWith(V, V.init, .{ self.state, dir, io, window }) catch return;
+        self.settings_sub = cx.subscribe(v, onSettingsClose) catch null;
+        self.settings_view = v;
         cx.notify();
+    }
+
+    pub fn closeSettings(self: *Shell, window: *Window, cx: *Context(Shell)) void {
+        if (self.settings_sub) |*sub| sub.deinit();
+        self.settings_sub = null;
+        if (self.settings_view) |v| v.release(cx);
+        self.settings_view = null;
+        window.focus(self.focus);
+        cx.notify();
+    }
+
+    fn onSettingsClose(_: *Shell, _: Entity(settings_ui.SettingsView), _: *const settings_ui.Close, cx: *Context(Shell)) void {
+        cx.deferUpdate(struct {
+            fn f(sh: *Shell, c: *Context(Shell)) void {
+                const w = c.app.windows.items[0] orelse return;
+                sh.closeSettings(w, c);
+            }
+        }.f);
+    }
+
+    fn actOpenSettings(self: *Shell, _: *const shell_actions.OpenSettings, window: *Window, cx: *Context(Shell)) void {
+        if (self.settings_view != null) self.closeSettings(window, cx) else self.openSettings(window, cx);
     }
 
     fn onNewSessionEvent(self: *Shell, _: Entity(sidebar_mod.Sidebar), _: *const sidebar_mod.NewSession, cx: *Context(Shell)) void {
@@ -527,6 +570,7 @@ pub const Shell = struct {
             .onAction(actions.terminal.ToggleTerminal, cx.listener(Shell.actToggleTerminal))
             .onAction(shell_actions.NewSession, cx.listener(Shell.actNewSession))
             .onAction(shell_actions.ToggleCommandPalette, cx.listener(Shell.actTogglePalette))
+            .onAction(shell_actions.OpenSettings, cx.listener(Shell.actOpenSettings))
             .onAction(shell_actions.NextSession, cx.listener(Shell.actNext))
             .onAction(shell_actions.PrevSession, cx.listener(Shell.actPrev))
             .onAction(shell_actions.JumpSession, cx.listener(Shell.actJump))
@@ -576,12 +620,17 @@ pub const Shell = struct {
         const right_now = self.rightNow(cx);
         const prefs = prefs_mod.get(cx);
 
+        // Settings mode takes over the window (ui/settings): tone + page, no titlebar cluster.
+        const settings_mode = self.settings_view != null;
+
         // Sidebar tone: wash 0.05 column with a hairline on its right edge.
         var tone = div().absolute().top(px(0)).bottom(px(0)).left(px(0)).w(px(sidebar_now))
             .bg(theme.wash(0.05)).borderR1().borderColor(theme.border);
         if (radius > 0) {
             if (sidebar_now >= 2 * radius) tone = tone.roundedTl(px(radius)).roundedBl(px(radius)) else tone = tone.top(px(radius)).bottom(px(radius));
         }
+
+        if (settings_mode) return div().absolute().inset0().child(tone).child(div().absolute().inset0().child(self.settings_view.?));
 
         const sidebar_col = div().hFull().flexNone().overflowHidden().w(px(sidebar_now))
             .child(div().hFull().pt(px(layout.titlebar_height))

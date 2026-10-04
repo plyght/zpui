@@ -86,8 +86,30 @@ pub const Pty = struct {
 
     pub fn resize(self: *Pty, cols: u16, rows: u16) void {
         const ws: std.posix.winsize = .{ .row = rows, .col = cols, .xpixel = 0, .ypixel = 0 };
-        _ = c.ioctl(self.master, c.T.IOCSWINSZ, @intFromPtr(&ws));
+        if (comptime builtin.os.tag.isDarwin()) {
+            // std.c has no Darwin TIOCSWINSZ, and its `ioctl` takes the request as c_int
+            // while Darwin's is `unsigned long` (the value has the top bit set).
+            _ = darwin_ioctl(self.master, darwin_TIOCSWINSZ, &ws);
+        } else {
+            _ = c.ioctl(self.master, c.T.IOCSWINSZ, @intFromPtr(&ws));
+        }
     }
+
+    /// `_IOW('t', 103, struct winsize)` (<sys/ttycom.h>).
+    const darwin_TIOCSWINSZ: c_ulong = 0x80000000 | (@as(c_ulong, @sizeOf(std.posix.winsize) & 0x1fff) << 16) | ('t' << 8) | 103;
+    const darwin_ioctl = @extern(*const fn (c_int, c_ulong, ...) callconv(.c) c_int, .{ .name = "ioctl" });
+
+    /// Current size of the terminal (rows, cols), for tests.
+    pub fn size(self: *Pty) ?struct { cols: u16, rows: u16 } {
+        var ws: std.posix.winsize = undefined;
+        const req = if (comptime builtin.os.tag.isDarwin()) darwin_TIOCGWINSZ else c.T.IOCGWINSZ;
+        const rc = if (comptime builtin.os.tag.isDarwin()) darwin_ioctl(self.master, req, &ws) else c.ioctl(self.master, req, @intFromPtr(&ws));
+        if (rc < 0) return null;
+        return .{ .cols = ws.col, .rows = ws.row };
+    }
+
+    /// `_IOR('t', 104, struct winsize)`.
+    const darwin_TIOCGWINSZ: c_ulong = 0x40000000 | (@as(c_ulong, @sizeOf(std.posix.winsize) & 0x1fff) << 16) | ('t' << 8) | 104;
 
     /// Reap the child if it has exited (non-blocking unless `block`).
     pub fn poll(self: *Pty, block: bool) ?u32 {
@@ -111,6 +133,11 @@ pub const Pty = struct {
         _ = c.close(self.master);
     }
 };
+
+comptime {
+    // Keep every platform's ioctl path compiled (the macOS app build only links `resize`).
+    _ = &Pty.size;
+}
 
 /// A scripted interaction step: wait `delay_ms` (while pumping output),
 /// then write `input` to the program.
@@ -170,4 +197,17 @@ pub fn run(gpa: Allocator, emu: *Emulator, argv: []const [:0]const u8, opts: Run
     }
     _ = p.poll(true);
     return p.exitCode() orelse 255;
+}
+
+test "resize sets the PTY window size" {
+    if (builtin.os.tag != .linux and !builtin.os.tag.isDarwin()) return error.SkipZigTest;
+    var p = try Pty.spawn(&.{ "/bin/sh", "-c", "sleep 1" }, .{ .cols = 80, .rows = 24 });
+    defer p.deinit();
+    const s0 = p.size().?;
+    try std.testing.expectEqual(@as(u16, 80), s0.cols);
+    try std.testing.expectEqual(@as(u16, 24), s0.rows);
+    p.resize(132, 40);
+    const s1 = p.size().?;
+    try std.testing.expectEqual(@as(u16, 132), s1.cols);
+    try std.testing.expectEqual(@as(u16, 40), s1.rows);
 }

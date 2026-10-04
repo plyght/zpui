@@ -1,0 +1,1060 @@
+//! `HistoryPane`: the right-pane Git History surface — port of zeron
+//! `history.rs` `GitHistory` (+ `GitHistoryCount`, `GitHistoryFetchButton`,
+//! `GitHistoryViewButton`, `GitHistorySearchControl` and the Changes
+//! toolbar's History branch title / refresh button).
+//!
+//! - toolbar: current branch (mono), "N commits" (+ ahead/behind), search
+//!   (collapsible 196px field), Fetch all, branch-tips view, refresh;
+//! - column header (Commit / Author / Date / SHA; the checklist button
+//!   toggles columns, right-click Author switches avatar ⇄ name);
+//! - virtualized 36px rows: lane graph cell (dot, HEAD ring, branch fold
+//!   knob on hover), subject, ref badges with `+N` overflow, avatar, date,
+//!   short sha (click copies, flashes "Copied");
+//! - the lane graph (indigo / pink / … lanes, cubic curves) paints on one
+//!   canvas under the rows; hovering a row focuses its lane;
+//! - click a row → `OpenCommit` (the host opens a commit diff tab).
+//!
+//! ```zig
+//! const pane = try cx.newWith(HistoryPane, HistoryPane.init, .{app_state});
+//! // events: HistoryPane.OpenCommit{ .sha, .subject }, history store FetchSucceeded
+//! ```
+
+const std = @import("std");
+const Allocator = std.mem.Allocator;
+const zpui = @import("zpui");
+const zt = @import("zeron_theme");
+const model = @import("zeron_model");
+const engine_mod = @import("zeron_engine");
+const input = @import("zeron_input");
+const ui = @import("../components/root.zig");
+const types = @import("types.zig");
+const graph = @import("graph.zig");
+const store_mod = @import("store.zig");
+
+const App = zpui.App;
+const Window = zpui.Window;
+const Context = zpui.Context;
+const Entity = zpui.Entity;
+const Task = zpui.Task;
+const AnyElement = zpui.AnyElement;
+const div = zpui.div;
+const px = zpui.px;
+const sb = zpui.StyleBuilder.init;
+const Theme = zt.Theme;
+const Hsla = zpui.Hsla;
+const Commit = types.GitHistoryCommit;
+const HistoryStore = store_mod.HistoryStore;
+const Icon = ui.icon.Icon;
+const protocol = engine_mod.protocol;
+
+const control_size: f32 = 24;
+const control_radius: f32 = 6;
+const icon_size: f32 = 14;
+const control_gap: f32 = 4;
+const edge_inset: f32 = 8;
+const header_height: f32 = 38;
+
+fn frame() Allocator {
+    return zpui.window.arena_mod.frameAllocator();
+}
+
+fn arenaTheme(t: Theme) *Theme {
+    return zpui.window.arena_mod.current().create(Theme, t);
+}
+
+/// A commit row was clicked: open its diff as its own tab.
+pub const OpenCommit = struct { sha: []const u8, subject: []const u8 };
+
+pub const ViewMode = enum { all_commits, branch_tips };
+
+const Column = enum { author, date, sha };
+
+const Focus = struct { color_id: usize, amount: f32 };
+
+/// Columns a resize handle sits between (Commit is elastic).
+const DataColumn = enum { commit, author, date, sha };
+
+const ResizeAnchor = struct {
+    start_x: f32,
+    left: DataColumn,
+    right: DataColumn,
+    left_w: f32,
+    right_w: f32,
+};
+
+/// Drag payload of a column resize handle (no preview).
+const ColumnResize = struct {};
+
+const DragGhost = struct {
+    pub fn render(_: *DragGhost, _: *Window, _: *Context(DragGhost)) zpui.Div {
+        return div();
+    }
+};
+
+fn buildResizeGhost(_: *const ColumnResize, _: zpui.Point(f32), _: *Window, app: *App) Entity(DragGhost) {
+    return app.new(DragGhost, .{}) catch @panic("OOM");
+}
+
+fn limits(c: DataColumn) [2]f32 {
+    return switch (c) {
+        .commit => .{ graph.subject_min_width, std.math.floatMax(f32) },
+        .author => .{ graph.author_min, graph.author_max },
+        .date => .{ graph.date_min, graph.date_max },
+        .sha => .{ graph.sha_min, graph.sha_max },
+    };
+}
+
+pub const HistoryPane = struct {
+    gpa: Allocator,
+    state: Entity(model.AppState),
+    store: Entity(HistoryStore),
+    subs: zpui.Subscriptions = .{},
+    focus: zpui.FocusHandle,
+    list: zpui.ListState,
+    /// Draw the 38px toolbar (false when a host renders `toolbar()`).
+    show_toolbar: bool = true,
+
+    view_mode: ViewMode = .all_commits,
+    collapsed: std.StringHashMapUnmanaged(void) = .empty,
+    view_arena: std.heap.ArenaAllocator,
+    visible: []const Commit = &.{},
+    layout: graph.Layout = .{},
+    hidden_counts: std.StringHashMapUnmanaged(usize) = .empty,
+    lane_capacity: usize = 0,
+    built_key: u64 = std.math.maxInt(u64),
+    geometry: graph.Geometry = .natural(1),
+    target_geometry: graph.Geometry = .natural(1),
+
+    hovered_color: ?usize = null,
+    copied_sha: ?[]u8 = null,
+    copy_task: Task(void) = .none,
+
+    search: ?Entity(input.TextInput) = null,
+    search_sub: ?zpui.Subscription = null,
+    show_author: bool = true,
+    show_date: bool = true,
+    show_sha: bool = true,
+    author_name_mode: bool = false,
+    column_menu_at: ?zpui.Point(f32) = null,
+    author_menu_at: ?zpui.Point(f32) = null,
+    focus_key_buf: [48]u8 = undefined,
+    author_w: f32 = graph.author_width,
+    date_w: f32 = graph.date_width,
+    sha_w: f32 = graph.sha_width,
+    resize: ?ResizeAnchor = null,
+
+    pub const Events = .{OpenCommit};
+
+    pub fn init(state: Entity(model.AppState), cx: *Context(HistoryPane)) !HistoryPane {
+        const s = state.read(cx);
+        const store = try cx.newWith(HistoryStore, HistoryStore.init, .{s.engine});
+        var self: HistoryPane = .{
+            .gpa = cx.gpa(),
+            .state = state.retain(cx),
+            .store = store,
+            .focus = cx.focusHandle(),
+            .list = zpui.ListState.init(cx.gpa(), 0, .top, px(graph.row_height * 5)),
+            .view_arena = .init(cx.gpa()),
+        };
+        if (model.settings_store.current(cx.app)) |st| {
+            self.show_author = st.gitHistoryColumns.author;
+            self.show_date = st.gitHistoryColumns.date;
+            self.show_sha = st.gitHistoryColumns.sha;
+            self.author_name_mode = st.gitHistoryAuthorDisplay == .name;
+            self.author_w = st.gitHistoryColumnWidths.author;
+            self.date_w = st.gitHistoryColumnWidths.date;
+            self.sha_w = st.gitHistoryColumnWidths.sha;
+        }
+        try self.subs.add(cx.gpa(), try cx.observe(state, onStateChanged));
+        try self.subs.add(cx.gpa(), try cx.observe(s.workspace, onWorkspaceChanged));
+        try self.subs.add(cx.gpa(), try cx.observe(store, onStoreChanged));
+        return self;
+    }
+
+    pub fn deinit(self: *HistoryPane, app: *App) void {
+        self.subs.deinit(self.gpa);
+        self.copy_task.cancel();
+        if (self.copied_sha) |s| self.gpa.free(s);
+        var it = self.collapsed.keyIterator();
+        while (it.next()) |k| self.gpa.free(k.*);
+        self.collapsed.deinit(self.gpa);
+        self.view_arena.deinit();
+        self.closeSearch(app);
+        self.list.release();
+        self.focus.release(app);
+        self.store.release(app);
+        self.state.release(app);
+    }
+
+    pub fn tabTitle(_: *const HistoryPane) []const u8 {
+        return "History";
+    }
+
+    pub fn tabIcon(_: *const HistoryPane) Icon {
+        return .git_branch;
+    }
+
+    // ---- model --------------------------------------------------------------------
+
+    fn onStateChanged(self: *HistoryPane, _: Entity(model.AppState), cx: *Context(HistoryPane)) void {
+        self.ensureLoaded(cx);
+    }
+
+    fn onWorkspaceChanged(self: *HistoryPane, _: Entity(model.WorkspaceStore), cx: *Context(HistoryPane)) void {
+        self.ensureLoaded(cx);
+    }
+
+    fn onStoreChanged(_: *HistoryPane, _: Entity(HistoryStore), cx: *Context(HistoryPane)) void {
+        cx.notify();
+    }
+
+    /// Follow the selected chat's checkout (idempotent).
+    pub fn ensureLoaded(self: *HistoryPane, cx: *Context(HistoryPane)) void {
+        const ws = self.state.read(cx).workspace.read(cx);
+        const chat = ws.selectedChatRow();
+        const cwd: ?[]const u8 = if (chat) |c| c.cwd else null;
+        if (chat == null or cwd == null) {
+            self.store.update(cx, HistoryStore.setTarget, .{ null, null, null });
+            return;
+        }
+        const local = if (ws.local_device_id) |l| std.mem.eql(u8, l, chat.?.deviceId) else true;
+        const target: ?[]const u8 = if (local) null else chat.?.deviceId;
+        var buf: [4096]u8 = undefined;
+        const key = std.fmt.bufPrint(&buf, "{s}|{s}", .{ target orelse "local", cwd.? }) catch return;
+        self.store.update(cx, HistoryStore.setTarget, .{ key, cwd, target });
+    }
+
+    fn branchLabel(self: *const HistoryPane, cx: anytype) []const u8 {
+        const chat = self.state.read(cx).workspace.read(cx).selectedChatRow() orelse return "HEAD";
+        return chat.branch orelse "HEAD";
+    }
+
+    fn optionalColumnsWidth(self: *const HistoryPane) f32 {
+        var w: f32 = 0;
+        if (self.show_author) w += self.author_w;
+        if (self.show_date) w += self.date_w;
+        if (self.show_sha) w += self.sha_w;
+        return w;
+    }
+
+    /// Recompute the visible commits + lane layout when inputs changed.
+    fn rebuild(self: *HistoryPane, cx: anytype) void {
+        const st = self.store.read(cx);
+        var h = std.hash.Wyhash.init(0);
+        h.update(std.mem.asBytes(&st.generation));
+        h.update(std.mem.asBytes(&st.search_generation));
+        h.update(st.search_query);
+        h.update(std.mem.asBytes(&self.view_mode));
+        var it = self.collapsed.keyIterator();
+        while (it.next()) |k| h.update(k.*);
+        const key = h.final();
+        if (key == self.built_key) return;
+        self.built_key = key;
+        _ = self.view_arena.reset(.retain_capacity);
+        self.hidden_counts = .empty;
+        const a = self.view_arena.allocator();
+        const head = st.head_sha;
+        if (st.searchActive()) {
+            const source = st.search_results orelse st.commits.items;
+            var visible: std.StringHashMapUnmanaged(void) = .empty;
+            for (source) |c| if (graph.matches(st.search_query, c)) visible.put(a, c.sha, {}) catch {};
+            self.visible = graph.compactToVisible(a, source, &visible) catch &.{};
+        } else switch (self.view_mode) {
+            .all_commits => {
+                var set: std.StringHashMapUnmanaged(void) = .empty;
+                var kit = self.collapsed.keyIterator();
+                while (kit.next()) |k| set.put(a, k.*, {}) catch {};
+                const r = graph.collapseBranchRuns(a, st.commits.items, &set, head) catch graph.Collapsed{ .commits = st.commits.items };
+                self.visible = r.commits;
+                self.hidden_counts = r.hidden;
+            },
+            .branch_tips => {
+                const tips: []Commit = a.alloc(Commit, st.branch_tips.len) catch &.{};
+                for (st.branch_tips, 0..) |c, i| {
+                    tips[i] = c;
+                    tips[i].parentShas = &.{};
+                }
+                self.visible = tips;
+            },
+        }
+        self.layout = graph.layoutGraph(a, self.visible, head) catch .{};
+        const loaded = graph.layoutGraph(a, st.commits.items, head) catch graph.Layout{};
+        self.lane_capacity = @max(self.lane_capacity, @max(self.layout.max_lane_count, loaded.max_lane_count));
+        const count = self.visible.len + @intFromBool(st.hasLoadMore());
+        self.list.resetWithUniformHeight(count, px(graph.row_height));
+    }
+
+    // ---- interactions -------------------------------------------------------------
+
+    fn onRowClick(self: *HistoryPane, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        if (ix >= self.visible.len) return;
+        const c = self.visible[ix];
+        cx.emit(OpenCommit{ .sha = c.sha, .subject = c.subject });
+    }
+
+    fn onRowHover(self: *HistoryPane, ix: usize, hovered: *const bool, _: *Window, cx: *Context(HistoryPane)) void {
+        const key = self.focusKey(cx);
+        if (hovered.*) {
+            if (ix < self.layout.rows.len) self.hovered_color = self.layout.rows[ix].node_color_id;
+            ui.hover.set(cx, key, true);
+        } else {
+            ui.hover.set(cx, key, false);
+        }
+        cx.notify();
+    }
+
+    fn focusKey(self: *HistoryPane, cx: *Context(HistoryPane)) []const u8 {
+        return std.fmt.bufPrint(&self.focus_key_buf, "history-graph-focus-{d}", .{@intFromEnum(cx.entityId())}) catch "history-graph-focus";
+    }
+
+    fn graphFocus(self: *HistoryPane, cx: *Context(HistoryPane)) ?Focus {
+        const color = self.hovered_color orelse return null;
+        const amount = ui.hover.value(cx, self.focusKey(cx));
+        if (amount <= 0.001) return null;
+        return .{ .color_id = color, .amount = amount };
+    }
+
+    fn onShaClick(self: *HistoryPane, ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(HistoryPane)) void {
+        cx.stopPropagation();
+        if (ix >= self.visible.len) return;
+        const sha = self.visible[ix].sha;
+        _ = window;
+        cx.app.platform.vtable.writeClipboard(cx.app.platform.ptr, sha);
+        if (self.copied_sha) |s| self.gpa.free(s);
+        self.copied_sha = self.gpa.dupe(u8, sha) catch null;
+        self.copy_task.cancel();
+        self.copy_task = cx.timer(1200 * std.time.ns_per_ms, onCopyExpired) catch .none;
+        cx.notify();
+    }
+
+    fn onCopyExpired(self: *HistoryPane, cx: *Context(HistoryPane)) void {
+        self.copy_task.detach();
+        if (self.copied_sha) |s| self.gpa.free(s);
+        self.copied_sha = null;
+        cx.notify();
+    }
+
+    fn onLoadMore(self: *HistoryPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        self.store.update(cx, HistoryStore.loadOlder, .{});
+    }
+
+    fn onRefresh(self: *HistoryPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        cx.stopPropagation();
+        self.store.update(cx, HistoryStore.refresh, .{});
+    }
+
+    fn onFetchAll(self: *HistoryPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        cx.stopPropagation();
+        self.store.update(cx, HistoryStore.fetchAll, .{});
+    }
+
+    fn onViewToggle(self: *HistoryPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        cx.stopPropagation();
+        self.view_mode = if (self.view_mode == .branch_tips) .all_commits else .branch_tips;
+        cx.notify();
+    }
+
+    fn onFoldBranch(self: *HistoryPane, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        cx.stopPropagation();
+        if (ix >= self.visible.len) return;
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        for (self.visible[ix].refs) |r| {
+            const key = graph.branchRefKey(arena.allocator(), r) orelse continue;
+            if (self.collapsed.fetchRemove(key)) |kv| {
+                self.gpa.free(kv.key);
+            } else {
+                const owned = self.gpa.dupe(u8, key) catch return;
+                self.collapsed.put(self.gpa, owned, {}) catch self.gpa.free(owned);
+            }
+            break;
+        }
+        cx.notify();
+    }
+
+    fn onSearchOpen(self: *HistoryPane, _: *const zpui.ClickEvent, window: *Window, cx: *Context(HistoryPane)) void {
+        cx.stopPropagation();
+        if (self.search != null) return;
+        const theme = ui.theme.get(cx);
+        const search = cx.newWith(input.TextInput, input.TextInput.init, .{input.Options{
+            .placeholder = "Search commits",
+            .key_context = "PaletteSearch",
+            .single_line = true,
+            .text_size = 11.5,
+            .line_height = 14,
+            .colors = .{ .text = theme.text, .placeholder = theme.text_faint, .caret = theme.caret, .selection = theme.selection, .ghost = theme.text_faint },
+        }}) catch return;
+        self.search_sub = cx.subscribe(search, onSearchEvent) catch null;
+        self.search = search;
+        window.focus(search.read(cx).focusHandle());
+        cx.notify();
+    }
+
+    fn closeSearch(self: *HistoryPane, app: *App) void {
+        if (self.search_sub) |*s| s.deinit();
+        self.search_sub = null;
+        if (self.search) |s| s.release(app);
+        self.search = null;
+    }
+
+    fn onSearchClose(self: *HistoryPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        cx.stopPropagation();
+        self.closeSearch(cx.app);
+        self.store.update(cx, HistoryStore.setSearch, .{""});
+        cx.notify();
+    }
+
+    fn onSearchEvent(self: *HistoryPane, input_entity: Entity(input.TextInput), ev: *const input.TextInputEvent, cx: *Context(HistoryPane)) void {
+        switch (ev.*) {
+            .edited => {
+                const q = input_entity.read(cx).text();
+                self.store.update(cx, HistoryStore.setSearch, .{q});
+            },
+            .escape => {
+                self.closeSearch(cx.app);
+                self.store.update(cx, HistoryStore.setSearch, .{""});
+                cx.notify();
+            },
+            else => {},
+        }
+    }
+
+    fn onColumnsButton(self: *HistoryPane, ev: *const zpui.input.MouseDownEvent, window: *Window, cx: *Context(HistoryPane)) void {
+        window.preventDefault();
+        cx.stopPropagation();
+        self.author_menu_at = null;
+        self.column_menu_at = if (self.column_menu_at == null) ev.position else null;
+        cx.notify();
+    }
+
+    fn onAuthorRightClick(self: *HistoryPane, ev: *const zpui.input.MouseDownEvent, window: *Window, cx: *Context(HistoryPane)) void {
+        window.preventDefault();
+        cx.stopPropagation();
+        self.column_menu_at = null;
+        self.author_menu_at = ev.position;
+        cx.notify();
+    }
+
+    fn onMenuOutside(self: *HistoryPane, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        self.column_menu_at = null;
+        self.author_menu_at = null;
+        cx.notify();
+    }
+
+    fn onToggleColumn(self: *HistoryPane, col: Column, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        cx.stopPropagation();
+        switch (col) {
+            .author => self.show_author = !self.show_author,
+            .date => self.show_date = !self.show_date,
+            .sha => self.show_sha = !self.show_sha,
+        }
+        const Set = struct {
+            fn set(v: [3]bool, s: *model.UiSettings, _: Allocator) void {
+                s.gitHistoryColumns.author = v[0];
+                s.gitHistoryColumns.date = v[1];
+                s.gitHistoryColumns.sha = v[2];
+            }
+        };
+        _ = model.settings_store.update(cx.app, .immediate, [3]bool{ self.show_author, self.show_date, self.show_sha }, Set.set);
+        cx.notify();
+    }
+
+    fn onToggleAuthorDisplay(self: *HistoryPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        cx.stopPropagation();
+        self.author_name_mode = !self.author_name_mode;
+        self.author_menu_at = null;
+        const Set = struct {
+            fn set(v: bool, s: *model.UiSettings, _: Allocator) void {
+                s.gitHistoryAuthorDisplay = if (v) .name else .avatar;
+            }
+        };
+        _ = model.settings_store.update(cx.app, .immediate, self.author_name_mode, Set.set);
+        cx.notify();
+    }
+
+    fn onHoverKey(_: *HistoryPane, key: []const u8, hovered: *const bool, _: *Window, cx: *Context(HistoryPane)) void {
+        ui.hover.set(cx, key, hovered.*);
+    }
+
+    fn preventDefault(_: *const zpui.input.MouseDownEvent, window: *Window, _: *App) void {
+        window.preventDefault();
+    }
+
+    fn onKey(self: *HistoryPane, ev: *const zpui.input.KeyDownEvent, _: *Window, cx: *Context(HistoryPane)) void {
+        const key = ev.keystroke.key;
+        if (std.mem.eql(u8, key, "down")) {
+            self.list.scrollBy(graph.row_height);
+        } else if (std.mem.eql(u8, key, "up")) {
+            self.list.scrollBy(-graph.row_height);
+        } else if (std.mem.eql(u8, key, "pagedown")) {
+            self.list.scrollBy(self.list.viewportBounds().size.height - graph.row_height);
+        } else if (std.mem.eql(u8, key, "pageup")) {
+            self.list.scrollBy(-(self.list.viewportBounds().size.height - graph.row_height));
+        } else if (std.mem.eql(u8, key, "home")) {
+            self.list.scrollTo(.{});
+        } else if (std.mem.eql(u8, key, "end")) {
+            self.list.scrollToEnd();
+        } else if (std.mem.eql(u8, key, "escape")) {
+            if (self.column_menu_at == null and self.author_menu_at == null) return;
+            self.column_menu_at = null;
+            self.author_menu_at = null;
+        } else return;
+        cx.stopPropagation();
+        cx.notify();
+    }
+
+    // ---- toolbar ------------------------------------------------------------------
+
+    fn headerButton(id: []const u8, i: Icon, label: []const u8, theme: *const Theme, cx: *Context(HistoryPane)) zpui.StatefulDiv {
+        return headerButtonTinted(id, i, label, theme.text_muted.opacity(0.7), theme, cx);
+    }
+
+    fn headerButtonTinted(id: []const u8, i: Icon, label: []const u8, tint: Hsla, theme: *const Theme, cx: *Context(HistoryPane)) zpui.StatefulDiv {
+        return div().id(id).size(px(control_size)).flexNone().flex().itemsCenter().justifyCenter()
+            .rounded(px(control_radius)).cursorPointer()
+            .bg(ui.hover.blend(cx, id, theme.wash(0), theme.wash(0.14)))
+            .onHover(cx.listenerWith(id, onHoverKey))
+            .occlude().onMouseDown(.left, preventDefault)
+            .tooltipWith(label, ui.tooltip.build).tooltipShowDelay(350 * std.time.ns_per_ms)
+            .child(ui.icon.of(i, icon_size, tint));
+    }
+
+    fn countLabel(self: *HistoryPane, theme: *const Theme, cx: *Context(HistoryPane)) zpui.Div {
+        const st = self.store.read(cx);
+        var row = div().hFull().minW0().flex1().flex().itemsCenter().gap(px(10)).overflowHidden();
+        const count: ?usize = if (st.searchActive()) (st.search_total orelse self.visible.len) else st.commitCount();
+        if (count) |n| row = row.child(div().flexNone().whitespaceNowrap().textSize(px(11)).lineHeight(px(14)).textColor(theme.text_muted)
+            .child(zpui.fmt("{d} commit{s}", .{ n, if (n == 1) "" else "s" })));
+        if (st.comparison) |cmp| if (cmp.ahead > 0 or cmp.behind > 0) {
+            var c = div().id("history-comparison").relative().top(px(1)).flexNone().flex().itemsCenter().gap(px(4))
+                .tooltipWith(zpui.fmt("Compared with {s}: {d} ahead, {d} behind", .{ cmp.base, cmp.ahead, cmp.behind }), ui.tooltip.build);
+            if (cmp.ahead > 0) c = c.child(div().whitespaceNowrap().textSize(px(10.5)).lineHeight(px(13)).textColor(theme.accent.opacity(0.88)).child(zpui.fmt("{d} ahead", .{cmp.ahead})));
+            if (cmp.ahead > 0 and cmp.behind > 0) c = c.child(div().textSize(px(10)).textColor(theme.text_faint).child("\u{00b7}"));
+            if (cmp.behind > 0) c = c.child(div().whitespaceNowrap().textSize(px(10.5)).lineHeight(px(13)).textColor(theme.warning.opacity(0.82)).child(zpui.fmt("{d} behind", .{cmp.behind})));
+            row = row.child(c);
+        };
+        return div().flex1().minW0().overflowHidden().h(px(control_size)).flex().itemsCenter().child(row);
+    }
+
+    fn searchControl(self: *HistoryPane, theme: *const Theme, window: *Window, cx: *Context(HistoryPane)) zpui.StatefulDiv {
+        const search = self.search orelse return headerButtonTinted("history-search-trigger", .magnifer, "Search commits", theme.text_muted, theme, cx)
+            .onClick(cx.listener(onSearchOpen));
+        const st = self.store.read(cx);
+        const status: AnyElement = if (st.search_loading) blk: {
+            window.requestAnimationFrame();
+            break :blk zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(1.5, theme.glyph.rows(), ui.loaders.phaseOf(cx, zt.motion.gradient_spin)));
+        } else zpui.intoAnyElement(ui.icon.of(.magnifer, 11, theme.text_faint));
+        return div().id("history-search-expanded").h(px(control_size)).w(px(graph.search_width)).minW(px(80)).flexShrink(1)
+            .overflowHidden().flex().itemsCenter().gap(px(6)).pl(px(edge_inset)).pr(px(2))
+            .rounded(px(control_radius)).bg(theme.ink(0.035))
+            .child(div().size(px(14)).flexNone().flex().itemsCenter().justifyCenter().child(status))
+            .child(div().h(px(14)).flex1().minW0().flex().itemsCenter().overflowHidden().child(search))
+            .child(div().id("history-search-close").size(px(16)).flexNone().flex().itemsCenter().justifyCenter()
+                .rounded(px(3.5)).cursorPointer().hover(sb.bg(theme.ink(0.08)))
+                .onMouseDown(.left, preventDefault)
+                .onClick(cx.listener(onSearchClose))
+                .tooltipWith(@as([]const u8, "Close search"), ui.tooltip.build)
+                .child(ui.icon.of(.close, 9, theme.text_faint)));
+    }
+
+    fn fetchButton(self: *HistoryPane, theme: *const Theme, window: *Window, cx: *Context(HistoryPane)) zpui.StatefulDiv {
+        const fetching = self.store.read(cx).fetching_all;
+        const key = "history-fetch-all";
+        var b = div().id(key).h(px(control_size)).px(px(8)).flexNone().flex().itemsCenter().justifyCenter().gap(px(6))
+            .rounded(px(control_radius))
+            .bg(if (fetching) theme.wash(0.05) else ui.hover.blend(cx, key, theme.wash(0), theme.wash(0.14)))
+            .occlude().onMouseDown(.left, preventDefault);
+        if (!fetching) b = b.cursorPointer().onHover(cx.listenerWith(@as([]const u8, key), onHoverKey)).onClick(cx.listener(onFetchAll));
+        const glyph: AnyElement = if (fetching) blk: {
+            window.requestAnimationFrame();
+            break :blk zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(1.75, theme.glyph.rows(), ui.loaders.phaseOf(cx, zt.motion.gradient_spin)));
+        } else zpui.intoAnyElement(ui.icon.of(.cloud, icon_size, theme.text_muted.opacity(0.75)));
+        return b.child(glyph).child(div().whitespaceNowrap().textSize(px(11)).textColor(if (fetching) theme.text_faint else theme.text_muted)
+            .child(if (fetching) "Fetching\u{2026}" else "Fetch all"));
+    }
+
+    fn viewButton(self: *HistoryPane, theme: *const Theme, cx: *Context(HistoryPane)) zpui.StatefulDiv {
+        const tips = self.view_mode == .branch_tips;
+        const key = "history-view-trigger";
+        return div().id(key).size(px(control_size)).flexNone().flex().itemsCenter().justifyCenter()
+            .rounded(px(control_radius)).cursorPointer()
+            .bg(if (tips) theme.accent.opacity(0.12) else ui.hover.blend(cx, key, theme.wash(0), theme.wash(0.14)))
+            .onHover(cx.listenerWith(@as([]const u8, key), onHoverKey))
+            .occlude().onMouseDown(.left, preventDefault)
+            .onClick(cx.listener(onViewToggle))
+            .tooltipWith(@as([]const u8, if (tips) "Show all commits" else "Show branch tips"), ui.tooltip.build).tooltipShowDelay(350 * std.time.ns_per_ms)
+            .child(ui.icon.of(.fold_vertical, icon_size, if (tips) theme.accent else theme.text_muted));
+    }
+
+    /// The pane-header controls (Rust renders them in the Changes toolbar).
+    pub fn renderHeaderControls(self: *HistoryPane, theme: *const Theme, window: *Window, cx: *Context(HistoryPane)) zpui.Div {
+        // The branch name overflows into its padding and clips there (no
+        // ellipsis), exactly like the reference.
+        const title = div().id("history-surface-title").minW0().maxW(px(160)).overflowHidden().whitespaceNowrap()
+            .h(px(control_size)).px(px(8)).flexShrink(1).flex().itemsCenter()
+            .fontFamily(theme.font_mono).textSize(px(11.5)).lineHeight(px(14)).textColor(theme.text_dim)
+            .child(self.branchLabel(cx));
+        return div().sizeFull().flex().flexRow().itemsCenter().gap(px(control_gap))
+            .child(title)
+            .child(self.countLabel(theme, cx))
+            .child(div().minW0().flexShrink(1).flex().itemsCenter().gap(px(control_gap))
+                .child(self.searchControl(theme, window, cx))
+                .child(self.fetchButton(theme, window, cx))
+                .child(self.viewButton(theme, cx))
+                .child(headerButton("history-refresh", .refresh, "Refresh", theme, cx).onClick(cx.listener(onRefresh))));
+    }
+
+    pub fn toolbar(self: *HistoryPane, theme: *const Theme, window: *Window, cx: *Context(HistoryPane)) zpui.Div {
+        return div().h(px(header_height)).wFull().flexNone().px(px(edge_inset)).flex().itemsCenter().gap(px(control_gap))
+            .borderT1().borderB1().borderColor(theme.border)
+            .bg(if (theme.isGlass()) theme.surface.opacity(0.26) else theme.surface)
+            .child(self.renderHeaderControls(theme, window, cx));
+    }
+
+    // ---- rows ---------------------------------------------------------------------
+
+    fn palette(theme: *const Theme) [6]Hsla {
+        var p = [6]Hsla{ theme.accent, theme.busy, theme.success, theme.warning, theme.danger, theme.text_muted };
+        for (&p) |*c| c.s *= graph.graph_saturation;
+        return p;
+    }
+
+    fn graphCell(self: *HistoryPane, ix: usize, focus: ?Focus, theme: *const Theme, cx: *Context(HistoryPane)) zpui.StatefulDiv {
+        const row = self.layout.rows[ix];
+        const geo = self.geometry;
+        const pal = palette(theme);
+        var color = pal[row.node_color_id % pal.len];
+        const selected = if (focus) |f| f.color_id == row.node_color_id else false;
+        if (focus) |f| if (!selected) {
+            color.a *= 1 - (1 - graph.unfocused_opacity) * f.amount;
+        };
+        const r = graph.node_radius + (if (focus) |f| (if (selected) f.amount * 0.75 else 0) else 0);
+        const x = geo.laneX(row.node_lane);
+        const h = graph.row_height;
+        var cell = div().id(.{ "history-graph-cell", ix }).relative().group("history-graph-tip")
+            .w(px(geo.width)).h(px(h)).flexNone();
+        if (row.is_head) cell = cell.child(div().absolute().left(px(x - r - graph.head_ring_padding)).top(px(h / 2 - r - graph.head_ring_padding))
+            .size(px((r + graph.head_ring_padding) * 2)).roundedFull().border1().borderColor(color).bg(theme.bg));
+        cell = cell.child(div().absolute().left(px(x - r)).top(px(h / 2 - r)).size(px(r * 2)).roundedFull().bg(color));
+        // Branch fold knob (appears on hover; held while collapsed).
+        if (self.view_mode == .all_commits and ix < self.visible.len) {
+            for (self.visible[ix].refs) |ref| {
+                const key = graph.branchRefKey(frame(), ref) orelse continue;
+                const is_collapsed = self.collapsed.contains(key);
+                const hidden = self.hidden_counts.get(key) orelse 0;
+                const tip = if (is_collapsed)
+                    (if (hidden == 0) zpui.fmt("Expand {s}", .{ref.label}) else zpui.fmt("Expand {s} ({d} hidden)", .{ ref.label, hidden }))
+                else
+                    zpui.fmt("Collapse {s}", .{ref.label});
+                var knob = div().id(.{ "history-graph-fold", ix }).absolute().left(px(x + graph.node_radius + 3)).top(px((h - 16) / 2))
+                    .size(px(16)).flex().itemsCenter().justifyCenter().roundedFull()
+                    .border1().borderColor(color.opacity(0.32)).bg(theme.bg.opacity(0.96)).cursorPointer()
+                    .onMouseDown(.left, preventDefault)
+                    .onClick(cx.listenerWith(ix, onFoldBranch))
+                    .tooltipWith(tip, ui.tooltip.build).tooltipShowDelay(250 * std.time.ns_per_ms)
+                    .child(ui.icon.of(if (is_collapsed) .expand_arrows else .fold_vertical, 9, color.opacity(0.9)));
+                knob = if (is_collapsed) knob else knob.opacity(0).groupHover("history-graph-tip", sb.opacity(1));
+                cell = cell.child(knob);
+                break;
+            }
+        }
+        return cell;
+    }
+
+    fn refColor(kind: types.GitHistoryRefKind, theme: *const Theme) Hsla {
+        return switch (kind) {
+            .branch => theme.accent,
+            .remote => theme.busy,
+            .tag => theme.warning,
+        };
+    }
+
+    fn refIcon(kind: types.GitHistoryRefKind) Icon {
+        return switch (kind) {
+            .branch => .git_branch,
+            .remote => .cloud,
+            .tag => .tag,
+        };
+    }
+
+    fn refDescription(r: types.GitHistoryRef) []const u8 {
+        const kind = switch (r.kind) {
+            .branch => "Branch",
+            .remote => "Remote branch",
+            .tag => "Tag",
+        };
+        return zpui.fmt("{s}: {s}", .{ kind, r.label });
+    }
+
+    fn refArea(refs: []const types.GitHistoryRef, ix: usize, available: f32, theme: *const Theme) zpui.Div {
+        const n = graph.visibleRefCount(refs, available);
+        var area = div().maxW(px(available)).minW0().overflowHidden().flex().itemsCenter().gap(px(graph.ref_gap));
+        for (refs[0..n], 0..) |r, ri| {
+            const color = refColor(r.kind, theme);
+            area = area.child(div().id(.{ "history-ref", ix * 64 + ri }).h(px(16)).maxW(px(graph.ref_badge_max_width)).px(px(5)).flexNone()
+                .flex().itemsCenter().gap(px(2)).rounded(px(4)).bg(color.opacity(0.07))
+                .textSize(px(10)).textColor(color.opacity(0.9))
+                .tooltipWith(refDescription(r), ui.tooltip.build).tooltipShowDelay(350 * std.time.ns_per_ms)
+                .child(ui.icon.of(refIcon(r.kind), 10, color.opacity(0.78)).mt(px(1)))
+                .child(div().minW0().truncate().whitespaceNowrap().child(r.label)));
+        }
+        if (refs.len > n) {
+            var desc: std.ArrayList(u8) = .empty;
+            for (refs[n..], 0..) |r, i| {
+                if (i > 0) desc.appendSlice(frame(), " · ") catch {};
+                desc.appendSlice(frame(), refDescription(r)) catch {};
+            }
+            area = area.child(div().id(.{ "history-ref-overflow", ix }).flexNone().textSize(px(10)).textColor(theme.text_faint)
+                .tooltipWith(@as([]const u8, desc.items), ui.tooltip.build).tooltipShowDelay(350 * std.time.ns_per_ms)
+                .child(zpui.fmt("+{d}", .{refs.len - n})));
+        }
+        return area;
+    }
+
+    fn commitColumnWidth(self: *const HistoryPane) f32 {
+        const total = self.list.viewportBounds().size.width;
+        const w = if (total > 0) total else 520;
+        return @max(w - self.geometry.width - self.optionalColumnsWidth(), graph.subject_min_width);
+    }
+
+    pub fn renderRow(self: *HistoryPane, ix: usize, _: *Window, cx: *Context(HistoryPane)) AnyElement {
+        const theme = arenaTheme(ui.theme.get(cx).*);
+        if (ix >= self.visible.len) return self.loadMoreRow(theme, cx);
+        if (ix >= self.layout.rows.len) return zpui.empty();
+        const c = self.visible[ix];
+        const grow = self.layout.rows[ix];
+        const focus = self.graphFocus(cx);
+        const focused = if (focus) |f| f.color_id == grow.node_color_id else false;
+        const content_opacity: f32 = if (focus) |f| (if (!focused) 1 - (1 - graph.row_unfocused_opacity) * f.amount else 1) else 1;
+        const a = frame();
+        var row = div().id(.{ "history-row", ix }).h(px(graph.row_height)).wFull().flexNone().flex().flexRow().itemsCenter()
+            .textSize(px(11)).cursorPointer()
+            .hover(sb.bg(theme.ink(0.025)))
+            .onHover(cx.listenerWith(ix, onRowHover))
+            .onClick(cx.listenerWith(ix, onRowClick));
+        if (focus) |f| if (focused) {
+            row = row.bg(theme.ink(0.018 * f.amount));
+        };
+        const subject = if (c.subject.len == 0) "(no subject)" else c.subject;
+        var commit_col = div().flex1().minW(px(graph.subject_min_width)).overflowHidden().hFull().flex().itemsCenter()
+            .gap(px(graph.ref_gap)).pr(px(8)).opacity(content_opacity)
+            .child(div().flex1().minW0().truncate().whitespaceNowrap().textSize(px(12)).textColor(theme.text).child(subject));
+        if (c.refs.len > 0) commit_col = commit_col.child(refArea(c.refs, ix, graph.refAreaWidth(self.commitColumnWidth()), theme));
+        row = row.child(self.graphCell(ix, focus, theme, cx)).child(commit_col);
+        var cells = div().hFull().flex().flexRow().flexShrink(1);
+        if (self.show_author) {
+            var author = div().w(px(self.author_w)).minW(px(graph.author_min)).hFull().flexShrink(1).flex().itemsCenter().opacity(content_opacity);
+            const name = graph.authorName(c.authorName);
+            if (self.author_name_mode) {
+                author = author.pr(px(8)).truncate().whitespaceNowrap().textColor(theme.text_muted).child(name);
+            } else {
+                author = author.justifyCenter().child(div().id(.{ "history-author-avatar", ix }).size(px(20)).flexNone().flex().itemsCenter().justifyCenter()
+                    .overflowHidden().roundedFull().border1().borderColor(theme.hairline(0.12)).bg(theme.wash(0.08))
+                    .tooltipWith(name, ui.tooltip.build).tooltipShowDelay(300 * std.time.ns_per_ms)
+                    .child(div().wFull().textCenter().fontFamily(theme.font_sans).textSize(px(9)).lineHeight(px(18)).relative().top(px(0.5))
+                        .textColor(theme.text_faint).child(graph.authorInitial(a, name))));
+            }
+            cells = cells.child(author);
+        }
+        if (self.show_date) cells = cells.child(div().w(px(self.date_w)).minW(px(graph.date_min)).hFull().flexShrink(1).flex().itemsCenter()
+            .truncate().whitespaceNowrap().pr(px(8)).textSize(px(10.5)).opacity(content_opacity).textColor(theme.text_muted)
+            .child(graph.formatDate(a, c.authoredAt)));
+        if (self.show_sha) {
+            const copied = if (self.copied_sha) |s| std.mem.eql(u8, s, c.sha) else false;
+            cells = cells.child(div().w(px(self.sha_w)).minW(px(graph.sha_min)).hFull().pr(px(6)).flexShrink(1).flex().itemsCenter().opacity(content_opacity)
+                .child(div().id(.{ "history-sha", ix }).wFull().h(px(24)).flex().itemsCenter().rounded(px(4)).cursorPointer()
+                    .hover(sb.bg(theme.ink(0.07))).fontFamily(theme.font_mono).textSize(px(10.5))
+                    .textColor(if (copied) theme.accent else theme.text_muted)
+                    .onClick(cx.listenerWith(ix, onShaClick))
+                    .child(if (copied) "Copied" else c.sha[0..@min(7, c.sha.len)])));
+        }
+        return zpui.intoAnyElement(row.child(cells));
+    }
+
+    fn loadMoreRow(self: *HistoryPane, theme: *const Theme, cx: *Context(HistoryPane)) AnyElement {
+        const st = self.store.read(cx);
+        const pending = st.loading;
+        const has_error = st.error_message != null;
+        const label: []const u8 = if (pending) "Loading\u{2026}" else if (has_error) "Retry" else "Load more";
+        var b = div().id("history-load-older").h(px(28)).px(px(11)).flex().itemsCenter().justifyCenter().gap(px(6))
+            .rounded(px(7)).border1().borderColor(theme.border.opacity(0.85)).bg(theme.surface_raised.opacity(0.72))
+            .textSize(px(11)).textColor(if (pending) theme.text_faint else theme.text_muted);
+        if (!pending) b = b.cursorPointer()
+            .hover(sb.bg(theme.element_hover).borderColor(theme.border_strong.opacity(0.75)).textColor(theme.text))
+            .onClick(cx.listener(onLoadMore))
+            .child(ui.icon.of(if (has_error) .refresh else .alt_arrow_down, 11, theme.text_faint));
+        return zpui.intoAnyElement(div().wFull().h(px(48)).flexNone().flex().itemsCenter().justifyCenter().child(b.child(label)));
+    }
+
+    // ---- graph canvas -------------------------------------------------------------
+
+    const GraphPaint = struct {
+        rows: []const graph.Row,
+        list: zpui.ListState,
+        geometry: graph.Geometry,
+        palette: [6]Hsla,
+        bg: Hsla,
+        focus: ?Focus,
+        compact_rail: bool,
+    };
+
+    const Emitter = struct {
+        path: *zpui.scene.Path,
+        a: Allocator,
+        any: bool = false,
+        pub fn triangle(self: *Emitter, p0: graph.Pt, p1: graph.Pt, p2: graph.Pt) void {
+            self.path.pushTriangle(self.a, .{ .{ .x = p0.x, .y = p0.y }, .{ .x = p1.x, .y = p1.y }, .{ .x = p2.x, .y = p2.y } }, .{ .{ .x = 0, .y = 1 }, .{ .x = 0, .y = 1 }, .{ .x = 0, .y = 1 } }) catch {};
+            self.any = true;
+        }
+    };
+
+    fn paintGraph(g: GraphPaint, viewport: zpui.Bounds(f32), window: *Window, _: *App) void {
+        const a = frame();
+        const passes: usize = if (g.focus != null) 2 else 1;
+        for (0..passes) |pass| {
+            const selected_pass = g.focus != null and pass == 1;
+            for (g.palette, 0..) |color, color_ix| {
+                const width = if (selected_pass) graph.stroke_width + (graph.focused_stroke_width - graph.stroke_width) * g.focus.?.amount else graph.stroke_width;
+                var path = zpui.scene.Path.init(.{ .x = viewport.origin.x, .y = viewport.origin.y });
+                var em: Emitter = .{ .path = &path, .a = a };
+                for (g.rows, 0..) |row, ix| {
+                    const rb = g.list.boundsForItem(ix) orelse continue;
+                    if (rb.origin.y + rb.size.height < viewport.origin.y or rb.origin.y > viewport.origin.y + viewport.size.height) continue;
+                    const h = rb.size.height;
+                    if (h <= 0.5) continue;
+                    const mid = h / 2;
+                    const overlap = graph.row_overlap * std.math.clamp(h / graph.row_height, 0, 1);
+                    const ox = rb.origin.x;
+                    const oy = rb.origin.y;
+                    if (g.geometry.compact and g.compact_rail) {
+                        if (row.node_color_id % g.palette.len != color_ix) continue;
+                        if (g.focus) |f| if ((row.node_color_id == f.color_id) != selected_pass) continue;
+                        const x = ox + g.geometry.laneX(0);
+                        const end_y = if (g.list.boundsForItem(ix + 1)) |nb| nb.origin.y + nb.size.height / 2 else oy + h;
+                        graph.strokeQuads(&.{ .{ .x = x, .y = oy + mid }, .{ .x = x, .y = end_y } }, width, &em);
+                        continue;
+                    }
+                    for (row.segments) |seg| {
+                        if (seg.color_id % g.palette.len != color_ix) continue;
+                        if (g.focus) |f| if ((seg.color_id == f.color_id) != selected_pass) continue;
+                        const fx = ox + g.geometry.laneX(seg.from_lane);
+                        const tx = ox + g.geometry.laneX(seg.to_lane);
+                        var buf: [17]graph.Pt = undefined;
+                        switch (seg.shape) {
+                            .incoming => graph.strokeQuads(graph.flattenCubic(&buf, .{ .x = fx, .y = oy - overlap }, .{ .x = fx, .y = oy + mid * 0.55 }, .{ .x = tx, .y = oy + mid * 0.55 }, .{ .x = tx, .y = oy + mid }), width, &em),
+                            .outgoing => graph.strokeQuads(graph.flattenCubic(&buf, .{ .x = fx, .y = oy + mid }, .{ .x = fx, .y = oy + mid * 1.45 }, .{ .x = tx, .y = oy + mid * 1.45 }, .{ .x = tx, .y = oy + h + overlap }), width, &em),
+                            .through => if (seg.from_lane == seg.to_lane)
+                                graph.strokeQuads(&.{ .{ .x = fx, .y = oy - overlap }, .{ .x = tx, .y = oy + h + overlap } }, width, &em)
+                            else
+                                graph.strokeQuads(graph.flattenCubic(&buf, .{ .x = fx, .y = oy - overlap }, .{ .x = fx, .y = oy + mid }, .{ .x = tx, .y = oy + mid }, .{ .x = tx, .y = oy + h + overlap }), width, &em),
+                        }
+                    }
+                }
+                if (!em.any) continue;
+                var paint = color;
+                if (g.focus) |f| if (!selected_pass) {
+                    paint = zt.colorspace.mix(paint, g.bg, (1 - graph.unfocused_opacity) * f.amount);
+                };
+                window.paintPath(path, paint);
+            }
+        }
+    }
+
+    // ---- menus --------------------------------------------------------------------
+
+    fn menuOption(theme: *const Theme, id: anytype, label: []const u8, checked: bool) zpui.StatefulDiv {
+        return ui.popover.menuRow(theme, false).id(id).gap(px(0)).px(px(7)).py(px(4)).rounded(px(9 - ui.popover.card_inset)).textSize(px(11.5))
+            .child(div().flex1().child(label))
+            .child(div().w(px(12)).flexNone().flex().justifyEnd().child(if (checked) ui.icon.of(.check, 10, theme.text_muted) else null));
+    }
+
+    fn columnMenu(self: *HistoryPane, at: zpui.Point(f32), base: *const Theme, cx: *Context(HistoryPane)) AnyElement {
+        const theme = arenaTheme(base.forPopup());
+        const card = ui.popover.card(theme).w(px(132)).rounded(px(9)).onMouseDownOut(cx.listener(onMenuOutside))
+            .child(div().flex().flexCol().gap(px(ui.popover.menu_gap))
+                .child(menuOption(theme, "history-column-author", "Author", self.show_author).onClick(cx.listenerWith(Column.author, onToggleColumn)))
+                .child(menuOption(theme, "history-column-date", "Date", self.show_date).onClick(cx.listenerWith(Column.date, onToggleColumn)))
+                .child(menuOption(theme, "history-column-sha", "SHA", self.show_sha).onClick(cx.listenerWith(Column.sha, onToggleColumn))));
+        return ui.popover.anchoredAt(at, card);
+    }
+
+    fn authorMenu(self: *HistoryPane, at: zpui.Point(f32), base: *const Theme, cx: *Context(HistoryPane)) AnyElement {
+        const theme = arenaTheme(base.forPopup());
+        const card = ui.popover.card(theme).w(px(116)).rounded(px(9)).onMouseDownOut(cx.listener(onMenuOutside))
+            .child(menuOption(theme, "history-author-display-name", "Name", self.author_name_mode).onClick(cx.listener(onToggleAuthorDisplay)));
+        return ui.popover.anchoredAt(at, card);
+    }
+
+    // ---- render -------------------------------------------------------------------
+
+    fn columnHeader(self: *HistoryPane, theme: *const Theme, cx: *Context(HistoryPane)) zpui.StatefulDiv {
+        var cols = div().hFull().flex().flexRow().flexShrink(1);
+        var left: DataColumn = .commit;
+        if (self.show_author) {
+            cols = cols.child(div().id("history-author-header").relative().w(px(self.author_w)).minW(px(graph.author_min)).hFull().flexShrink(1)
+                .flex().itemsCenter().justifyCenter().cursorPointer().onMouseDown(.right, cx.listener(onAuthorRightClick)).child("Author")
+                .child(self.resizeHandle(left, .author, theme, cx)));
+            left = .author;
+        }
+        if (self.show_date) {
+            cols = cols.child(div().relative().w(px(self.date_w)).minW(px(graph.date_min)).hFull().flexShrink(1).flex().itemsCenter().child("Date")
+                .child(self.resizeHandle(left, .date, theme, cx)));
+            left = .date;
+        }
+        if (self.show_sha) cols = cols.child(div().relative().w(px(self.sha_w)).minW(px(graph.sha_min)).hFull().flexShrink(1).flex().itemsCenter().child("SHA")
+            .child(self.resizeHandle(left, .sha, theme, cx)));
+        var button = div().id("history-columns-button").absolute().right(px(3)).top(px(2)).size(px(20)).flex().itemsCenter().justifyCenter()
+            .rounded(px(5)).cursorPointer().hover(sb.bg(theme.ink(0.08)))
+            .onMouseDown(.left, cx.listener(onColumnsButton))
+            .tooltipWith(@as([]const u8, "Columns"), ui.tooltip.build).tooltipShowDelay(350 * std.time.ns_per_ms)
+            .child(ui.icon.of(.checklist, 12, theme.text_muted));
+        button = if (self.column_menu_at != null) button else button.opacity(0).groupHover("history-column-header", sb.opacity(1));
+        return div().id("history-column-header").group("history-column-header").relative().h(px(24)).flexNone().flex().itemsCenter()
+            .borderB1().borderColor(theme.hairline(0.06)).textSize(px(9.5)).textColor(theme.text_faint)
+            .child(div().w(px(self.geometry.width)).flexNone())
+            .child(div().flex1().minW(px(80)).child("Commit"))
+            .child(cols).child(button);
+    }
+
+    fn resizeHandle(self: *HistoryPane, left: DataColumn, right: DataColumn, theme: *const Theme, cx: *Context(HistoryPane)) zpui.StatefulDiv {
+        _ = self;
+        const pair: [2]DataColumn = .{ left, right };
+        return div().id(.{ "history-resize", @as(usize, @intFromEnum(left)) * 4 + @intFromEnum(right) })
+            .absolute().left(px(-3)).top(px(0)).bottom(px(0)).w(px(6)).cursorColResize()
+            .hover(sb.bg(theme.border_strong.opacity(0.7)))
+            .onMouseDown(.left, cx.listenerWith(pair, onResizeDown))
+            .onDrag(ColumnResize{}, buildResizeGhost);
+    }
+
+    fn widthOf(self: *const HistoryPane, c: DataColumn) f32 {
+        return switch (c) {
+            .commit => graph.subject_min_width,
+            .author => self.author_w,
+            .date => self.date_w,
+            .sha => self.sha_w,
+        };
+    }
+
+    fn setWidth(self: *HistoryPane, c: DataColumn, w: f32) void {
+        switch (c) {
+            .commit => {},
+            .author => self.author_w = w,
+            .date => self.date_w = w,
+            .sha => self.sha_w = w,
+        }
+    }
+
+    fn onResizeDown(self: *HistoryPane, pair: [2]DataColumn, ev: *const zpui.input.MouseDownEvent, window: *Window, cx: *Context(HistoryPane)) void {
+        window.preventDefault();
+        cx.stopPropagation();
+        if (ev.click_count >= 2) {
+            self.author_w = graph.author_width;
+            self.date_w = graph.date_width;
+            self.sha_w = graph.sha_width;
+            self.resize = null;
+            self.persistWidths(cx);
+            cx.notify();
+            return;
+        }
+        self.resize = .{ .start_x = ev.position.x, .left = pair[0], .right = pair[1], .left_w = self.widthOf(pair[0]), .right_w = self.widthOf(pair[1]) };
+    }
+
+    /// `resized_history_column_widths`: Commit's divider resizes only the
+    /// right column; other dividers trade width between neighbours.
+    fn onColumnResize(self: *HistoryPane, ev: *const zpui.DragMoveEvent(ColumnResize), _: *Window, cx: *Context(HistoryPane)) void {
+        const a = self.resize orelse return;
+        const delta = ev.event.position.x - a.start_x;
+        const rl = limits(a.right);
+        if (a.left == .commit) {
+            self.setWidth(a.right, std.math.clamp(a.right_w - delta, rl[0], rl[1]));
+        } else {
+            const ll = limits(a.left);
+            const min_d = @max(ll[0] - a.left_w, a.right_w - rl[1]);
+            const max_d = @min(ll[1] - a.left_w, a.right_w - rl[0]);
+            const d = std.math.clamp(delta, min_d, @max(min_d, max_d));
+            self.setWidth(a.left, a.left_w + d);
+            self.setWidth(a.right, a.right_w - d);
+        }
+        self.persistWidths(cx);
+        cx.notify();
+    }
+
+    fn persistWidths(self: *HistoryPane, cx: *Context(HistoryPane)) void {
+        const Set = struct {
+            fn set(v: [3]f32, s: *model.UiSettings, _: Allocator) void {
+                s.gitHistoryColumnWidths.author = v[0];
+                s.gitHistoryColumnWidths.date = v[1];
+                s.gitHistoryColumnWidths.sha = v[2];
+            }
+        };
+        _ = model.settings_store.update(cx.app, .debounced, [3]f32{ self.author_w, self.date_w, self.sha_w }, Set.set);
+    }
+
+    fn updateGeometry(self: *HistoryPane, width: f32, scale: f32) void {
+        const opt = self.optionalColumnsWidth();
+        const responsive = graph.responsiveGeometry(self.lane_capacity, width, opt);
+        const compact = graph.shouldUseCompact(responsive, self.target_geometry, width, opt);
+        const target = graph.stabilizedGeometry(responsive, self.target_geometry, scale, compact);
+        self.target_geometry = target;
+        self.geometry = target;
+    }
+
+    pub fn render(self: *HistoryPane, window: *Window, cx: *Context(HistoryPane)) zpui.AnyElement {
+        const theme = arenaTheme(ui.theme.get(cx).*);
+        ui.hover.tick(window, cx);
+        self.ensureLoaded(cx);
+        self.rebuild(cx);
+        const st = self.store.read(cx);
+        const vw = self.list.viewportBounds().size.width;
+        self.updateGeometry(if (vw > 0) vw else 519, window.scaleFactor());
+
+        const body: AnyElement = blk: {
+            if (st.target_key == null) break :blk zpui.intoAnyElement(div().flex1().flex().itemsCenter().justifyCenter().textSize(px(12)).textColor(theme.text_faint).child("No repository selected"));
+            if (st.loading and st.commits.items.len == 0) {
+                window.requestAnimationFrame();
+                break :blk zpui.intoAnyElement(div().flex1().flex().flexCol().itemsCenter().justifyCenter().gap(px(8))
+                    .child(ui.loaders.gradientSpinner(3, ui.loaders.phaseOf(cx, zt.motion.gradient_spin)))
+                    .child(div().textSize(px(12)).textColor(theme.text_faint).child("Loading history\u{2026}")));
+            }
+            if (self.visible.len == 0) {
+                const err = if (st.searchActive()) st.search_error else st.error_message;
+                const msg: []const u8 = err orelse if (st.searchActive()) "No matching commits" else if (self.view_mode == .branch_tips) "No branch tips found" else "No commits found";
+                break :blk zpui.intoAnyElement(div().flex1().flex().itemsCenter().justifyCenter().px(px(20)).textSize(px(12))
+                    .textColor(if (err != null) theme.warning else theme.text_faint).child(msg));
+            }
+            const paint: GraphPaint = .{
+                .rows = self.layout.rows,
+                .list = self.list,
+                .geometry = self.geometry,
+                .palette = palette(theme),
+                .bg = theme.bg,
+                .focus = self.graphFocus(cx),
+                .compact_rail = self.view_mode == .all_commits,
+            };
+            break :blk zpui.intoAnyElement(div().relative().flex1().minH0().overflowHidden()
+                .child(zpui.canvas(paint, paintGraph).absolute().inset0())
+                .child(zpui.list(self.list, cx, renderRow).sizeFull().withSizingBehavior(.auto)));
+        };
+
+        var root = div().id("history-pane").trackFocus(self.focus).keyContext("HistoryPane")
+            .onKeyDown(cx.listener(onKey))
+            .onDragMove(ColumnResize, cx.listener(onColumnResize))
+            .sizeFull().flex().flexCol().fontFamily(theme.font_sans_fixed).textColor(theme.text);
+        if (self.show_toolbar) root = root.child(self.toolbar(theme, window, cx));
+        if (st.fetch_error) |e| root = root.child(errorBanner(zpui.fmt("Fetch failed: {s}", .{e}), theme));
+        if ((if (st.searchActive()) st.search_error else st.error_message)) |e| if (self.visible.len > 0) {
+            root = root.child(errorBanner(e, theme));
+        };
+        var main = div().wFull().flex1().minH0().flex().flexCol();
+        if (self.visible.len > 0) main = main.child(self.columnHeader(theme, cx));
+        root = root.child(main.child(body));
+        if (self.column_menu_at) |at| root = root.child(self.columnMenu(at, theme, cx));
+        if (self.author_menu_at) |at| root = root.child(self.authorMenu(at, theme, cx));
+        return zpui.intoAnyElement(root);
+    }
+
+    fn errorBanner(text: []const u8, theme: *const Theme) zpui.Div {
+        return div().h(px(28)).flexNone().flex().itemsCenter().px(px(8)).borderB1().borderColor(theme.danger.opacity(0.16))
+            .bg(theme.danger.opacity(0.05)).truncate().whitespaceNowrap().textSize(px(11)).textColor(theme.danger_muted).child(text);
+    }
+};

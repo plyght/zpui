@@ -135,6 +135,8 @@ const TextState = struct {
     gpa: std.mem.Allocator,
     lines: []zpui.text.WrappedLine = &.{},
     natural: f32 = 0,
+    /// Unrounded shaped width (the overflow that drives the fade ease-in).
+    natural_exact: f32 = 0,
     line_height: f32 = 0,
 
     pub fn deinit(self: *TextState) void {
@@ -166,6 +168,7 @@ pub const FadedText = struct {
             c.state.lines = window.text_system.shapeText(c.text, c.font_size, c.runs, .{}) catch &.{};
             var w: f32 = 0;
             for (c.state.lines) |l| w = @max(w, l.size(c.state.line_height).width);
+            c.state.natural_exact = w;
             c.state.natural = @ceil(w);
         }
         return .{ .width = c.state.natural, .height = c.state.line_height };
@@ -189,11 +192,18 @@ pub const FadedText = struct {
     pub fn prepaint(_: *FadedText, _: ?GlobalElementId, _: Bounds, _: *void, _: *void, _: *Window, _: *App) void {}
 
     pub fn paint(self: *FadedText, _: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, _: *App) void {
-        const clipped = self.state.natural > bounds.size.width + 0.5;
+        // zeron `edge_faded(..).fade_right(true).fade_label_overflow(..)`: fade only while
+        // clipped, and ease the ramp in as the overflow grows from zero to one band by
+        // pushing the fade's right edge out past the clip (`label_fade_outset`), so a
+        // barely-clipped title does not dim its last characters a whole band early.
+        const overflow = self.state.natural_exact - bounds.size.width;
+        const clipped = overflow > 0.01;
         const mask: zpui.ContentMask = .{ .bounds = bounds };
         if (clipped) window.pushContentMask(mask);
         defer if (clipped) window.popContentMask(mask);
-        const prev = if (clipped) window.pushEdgeFade(.{ .bounds = bounds, .band = self.opts.band, .right = true }) else null;
+        var fade_bounds = bounds;
+        fade_bounds.size.width += zpui.effects.labelFadeOutset(overflow, self.opts.band);
+        const prev = if (clipped) window.pushEdgeFade(.{ .bounds = fade_bounds, .band = self.opts.band, .right = true }) else null;
         defer if (clipped) window.popEdgeFade(prev);
         const painter = window.glyphPainter();
         var origin = bounds.origin;

@@ -10,10 +10,12 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const tests = b.addTest(.{ .root_module = zpui });
+    const test_filters = b.option([]const []const u8, "test-filter", "Only run zpui tests whose names contain this (repeatable)") orelse &.{};
+    const tests = b.addTest(.{ .root_module = zpui, .filters = test_filters });
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run zpui unit tests");
     test_step.dependOn(&run_tests.step);
+    b.step("zpui-test", "Run only the zpui framework tests (-Dtest-filter=... to narrow)").dependOn(&run_tests.step);
 
     addZeronEngine(b, target, optimize, test_step);
     addZeronDesign(b, target, optimize, zpui, test_step);
@@ -32,6 +34,7 @@ pub fn build(b: *std.Build) void {
     addZeronTranscriptUi(b, target, optimize, zpui, test_step);
     addZeronApp(b, target, optimize, zpui, test_step);
     addListDemo(b, target, optimize, zpui);
+    addZeronRightPane(b, target, optimize, zpui, test_step);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -799,4 +802,43 @@ fn addListDemo(
     run.addPassthruArgs();
     const step = b.step("list-demo", "Run the virtualized list demo (examples/list_demo.zig)");
     step.dependOn(&run.step);
+}
+
+/// zeron right-pane Changes (diff) + Git History surfaces (apps/zeron/src/ui/changes,
+/// apps/zeron/src/ui/history; hosted by the shell via relative imports): their tests
+/// (`zig build changes-test`) and `zig build changes-demo -- --help`, which renders the
+/// reference fixtures at the reference pane position (apps/zeron/src/ui/right_pane_demo.zig).
+fn addZeronRightPane(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
+) void {
+    const os = target.result.os.tag;
+    const names = [_][]const u8{ "zeron_assets", "zeron_theme", "zeron_model", "zeron_engine", "zeron_actions", "zeron_markdown", "zeron_diff", "zeron_syntax", "zeron_input", "zeron_ui_markdown" };
+    var imports: std.ArrayList(std.Build.Module.Import) = .empty;
+    imports.append(b.allocator, .{ .name = "zpui", .module = zpui }) catch @panic("OOM");
+    for (names) |n| {
+        const m = b.modules.get(n) orelse return;
+        imports.append(b.allocator, .{ .name = n, .module = m }) catch @panic("OOM");
+    }
+    const root = b.createModule(.{
+        .root_source_file = b.path("apps/zeron/src/ui/right_pane_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = imports.items,
+    });
+    const tests = b.addRunArtifact(b.addTest(.{ .name = "zeron_right_pane", .root_module = root }));
+    tests.setCwd(b.path("."));
+    b.step("changes-test", "Run the zeron Changes/History pane tests").dependOn(&tests.step);
+    test_step.dependOn(&tests.step);
+    if (os != .linux) return;
+    const exe = b.addExecutable(.{ .name = "changes-demo", .root_module = root });
+    const install = b.addInstallArtifact(exe, .{});
+    const run = b.addRunArtifact(exe);
+    run.step.dependOn(&install.step);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    b.step("changes-demo", "Render the right-pane Changes/History surfaces from fixtures").dependOn(&run.step);
 }

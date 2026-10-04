@@ -93,6 +93,307 @@ fn append(list: anytype, item: anytype) void {
     list.append(arena_mod.frameAllocator(), item) catch @panic("OOM");
 }
 
+/// Interactive builder methods shared by `Div`, `StatefulDiv` and `Svg` (gpui
+/// `InteractiveElement` / `StatefulInteractiveElement`). `Self` must be a handle with a `d`
+/// pointer to data holding an `interactivity: Interactivity` field.
+pub fn InteractiveMethods(comptime Self: type, comptime stateful: bool) type {
+    return struct {
+        fn it(self: Self) *Interactivity {
+            return &self.d.interactivity;
+        }
+
+        fn requireId(comptime what: []const u8) void {
+            if (!stateful) @compileError(what ++ " needs an element id: call `.id(...)` first (gpui Stateful<Div>)");
+        }
+
+        // ---- interactive styles ------------------------------------------------------------
+
+        /// Style applied while the mouse is over this element.
+        pub fn hover(self: Self, s: anytype) Self {
+            it(self).hover_style = arenaRefinement(s);
+            return self;
+        }
+
+        /// Style applied while the mouse is over the element marked `.group(name)`.
+        pub fn groupHover(self: Self, group_name: []const u8, s: anytype) Self {
+            it(self).group_hover_style = .{ .group = group_name, .style = arenaRefinement(s) };
+            return self;
+        }
+
+        /// Style applied while this element is pressed (needs an id).
+        pub fn active(self: Self, s: anytype) Self {
+            requireId("active");
+            it(self).active_style = arenaRefinement(s);
+            return self;
+        }
+
+        pub fn groupActive(self: Self, group_name: []const u8, s: anytype) Self {
+            requireId("groupActive");
+            it(self).group_active_style = .{ .group = group_name, .style = arenaRefinement(s) };
+            return self;
+        }
+
+        /// Style applied while the tracked focus handle is focused (gpui `focus`).
+        pub fn focusStyle(self: Self, s: anytype) Self {
+            it(self).focus_style = arenaRefinement(s);
+            return self;
+        }
+
+        /// Style applied while focus is within this element (gpui `in_focus`).
+        pub fn inFocus(self: Self, s: anytype) Self {
+            it(self).in_focus_style = arenaRefinement(s);
+            return self;
+        }
+
+        /// Style applied while focused via the keyboard (gpui `focus_visible`).
+        pub fn focusVisible(self: Self, s: anytype) Self {
+            it(self).focus_visible_style = arenaRefinement(s);
+            return self;
+        }
+
+        /// Style applied while a drag of `T` hovers this element.
+        pub fn dragOver(self: Self, comptime T: type, s: anytype) Self {
+            append(&it(self).drag_over_styles, DragOverStyle{ .type_id = type_id.typeId(T), .style = arenaRefinement(s) });
+            return self;
+        }
+
+        pub fn groupDragOver(self: Self, group_name: []const u8, comptime T: type, s: anytype) Self {
+            append(&it(self).group_drag_over_styles, GroupDragOverStyle{ .type_id = type_id.typeId(T), .group = group_name, .style = arenaRefinement(s) });
+            return self;
+        }
+
+        /// Mark this element as group `name` for `groupHover` / `groupActive` (gpui `group`).
+        pub fn group(self: Self, name: []const u8) Self {
+            it(self).group = name;
+            return self;
+        }
+
+        // ---- focus & keyboard -----------------------------------------------------------------
+
+        /// Key context for keybindings, e.g. "Editor mode=full" (gpui `key_context`). Strings
+        /// are parsed once per window; a `KeyContext` value must outlive the frames using it.
+        pub fn keyContext(self: Self, ctx: anytype) Self {
+            if (@TypeOf(ctx) == KeyContext) {
+                it(self).key_context = .{ .parsed = ctx };
+            } else {
+                it(self).key_context = .{ .source = ctx };
+            }
+            return self;
+        }
+
+        /// Associate this element with `handle` (focus styles, focus on click, key dispatch).
+        pub fn trackFocus(self: Self, handle: FocusHandle) Self {
+            it(self).focusable = true;
+            it(self).tracked_focus_handle = handle;
+            return self;
+        }
+
+        /// Make this element focusable with a focus handle kept in its element state.
+        pub fn focusable(self: Self) Self {
+            requireId("focusable");
+            it(self).focusable = true;
+            return self;
+        }
+
+        pub fn tabIndex(self: Self, index: isize) Self {
+            it(self).focusable = true;
+            it(self).tab_index = index;
+            it(self).tab_stop = true;
+            return self;
+        }
+
+        pub fn tabStop(self: Self, stop: bool) Self {
+            it(self).tab_stop = stop;
+            return self;
+        }
+
+        pub fn tabGroup(self: Self) Self {
+            it(self).tab_group = true;
+            if (it(self).tab_index == null) it(self).tab_index = 0;
+            return self;
+        }
+
+        pub fn onKeyDown(self: Self, l: anytype) Self {
+            append(&it(self).key_down_listeners, KeyEntry(input.KeyDownEvent){ .listener = .init(l), .phase = .bubble });
+            return self;
+        }
+        pub fn captureKeyDown(self: Self, l: anytype) Self {
+            append(&it(self).key_down_listeners, KeyEntry(input.KeyDownEvent){ .listener = .init(l), .phase = .capture });
+            return self;
+        }
+        pub fn onKeyUp(self: Self, l: anytype) Self {
+            append(&it(self).key_up_listeners, KeyEntry(input.KeyUpEvent){ .listener = .init(l), .phase = .bubble });
+            return self;
+        }
+        pub fn captureKeyUp(self: Self, l: anytype) Self {
+            append(&it(self).key_up_listeners, KeyEntry(input.KeyUpEvent){ .listener = .init(l), .phase = .capture });
+            return self;
+        }
+        pub fn onModifiersChanged(self: Self, l: anytype) Self {
+            append(&it(self).modifiers_changed_listeners, Listener(input.ModifiersChangedEvent).init(l));
+            return self;
+        }
+
+        /// Handle action `A` dispatched to this element or a descendant (bubble phase).
+        pub fn onAction(self: Self, comptime A: type, l: anytype) Self {
+            append(&it(self).action_listeners, ActionEntry.init(A, Listener(A).init(l), .bubble));
+            return self;
+        }
+        /// Handle action `A` on the way down, before descendants see it.
+        pub fn captureAction(self: Self, comptime A: type, l: anytype) Self {
+            append(&it(self).action_listeners, ActionEntry.init(A, Listener(A).init(l), .capture));
+            return self;
+        }
+
+        // ---- mouse --------------------------------------------------------------------------
+
+        fn mouse(self: Self, comptime Ev: type, l: anytype, mode: MouseMode) Self {
+            const entry: MouseEntry(Ev) = .{ .listener = .init(l), .mode = mode };
+            switch (Ev) {
+                input.MouseDownEvent => append(&it(self).mouse_down_listeners, entry),
+                input.MouseUpEvent => append(&it(self).mouse_up_listeners, entry),
+                input.MouseMoveEvent => append(&it(self).mouse_move_listeners, entry),
+                input.MouseExitEvent => append(&it(self).mouse_exit_listeners, entry),
+                input.ScrollWheelEvent => append(&it(self).scroll_wheel_listeners, entry),
+                else => unreachable,
+            }
+            return self;
+        }
+
+        /// `button` pressed over this element (bubble phase).
+        pub fn onMouseDown(self: Self, button: input.MouseButton, l: anytype) Self {
+            return mouse(self, input.MouseDownEvent, l, .{ .bubble_button = button });
+        }
+        pub fn onAnyMouseDown(self: Self, l: anytype) Self {
+            return mouse(self, input.MouseDownEvent, l, .bubble_any);
+        }
+        pub fn captureAnyMouseDown(self: Self, l: anytype) Self {
+            return mouse(self, input.MouseDownEvent, l, .capture_any);
+        }
+        /// Any mouse down outside this element (capture phase), e.g. to dismiss popovers.
+        pub fn onMouseDownOut(self: Self, l: anytype) Self {
+            return mouse(self, input.MouseDownEvent, l, .out_any);
+        }
+        pub fn onMouseUp(self: Self, button: input.MouseButton, l: anytype) Self {
+            return mouse(self, input.MouseUpEvent, l, .{ .bubble_button = button });
+        }
+        pub fn onAnyMouseUp(self: Self, l: anytype) Self {
+            return mouse(self, input.MouseUpEvent, l, .bubble_any);
+        }
+        pub fn captureAnyMouseUp(self: Self, l: anytype) Self {
+            return mouse(self, input.MouseUpEvent, l, .capture_any);
+        }
+        pub fn onMouseUpOut(self: Self, button: input.MouseButton, l: anytype) Self {
+            return mouse(self, input.MouseUpEvent, l, .{ .out_button = button });
+        }
+        pub fn onMouseMove(self: Self, l: anytype) Self {
+            return mouse(self, input.MouseMoveEvent, l, .bubble_any);
+        }
+        pub fn onMouseExit(self: Self, l: anytype) Self {
+            return mouse(self, input.MouseExitEvent, l, .bubble_any);
+        }
+        pub fn onScrollWheel(self: Self, l: anytype) Self {
+            return mouse(self, input.ScrollWheelEvent, l, .scroll);
+        }
+
+        /// Block mouse events from reaching elements behind this one (gpui `occlude`).
+        pub fn occlude(self: Self) Self {
+            it(self).hitbox_behavior = .block_mouse;
+            return self;
+        }
+        pub fn blockMouseExceptScroll(self: Self) Self {
+            it(self).hitbox_behavior = .block_mouse_except_scroll;
+            return self;
+        }
+
+        // ---- drag and drop -----------------------------------------------------------------
+
+        /// Accept drops of `T` (`l` receives `*const T`).
+        pub fn onDrop(self: Self, comptime T: type, l: anytype) Self {
+            append(&it(self).drop_listeners, DropEntry.init(T, Listener(T).init(l)));
+            return self;
+        }
+
+        /// Decide whether a drag can be dropped here: `f(value: *const anyopaque, type_id, window, app) bool`.
+        pub fn canDrop(self: Self, f: *const fn (*const anyopaque, TypeId, *Window, *App) bool) Self {
+            it(self).can_drop = f;
+            return self;
+        }
+
+        /// While a drag of `T` moves anywhere in the window (capture phase).
+        pub fn onDragMove(self: Self, comptime T: type, l: anytype) Self {
+            append(&it(self).drag_move_listeners, DragMoveEntry.init(T, Listener(events.DragMoveEvent(T)).init(l)));
+            return self;
+        }
+
+        /// Start dragging `value` when the mouse moves past the threshold with the left button
+        /// down. `build(value, cursor_offset, window, app)` returns the preview view entity
+        /// (an owned `Entity(W)`). Needs an id.
+        pub fn onDrag(self: Self, value: anytype, comptime build: anytype) Self {
+            requireId("onDrag");
+            it(self).drag = DragSpec.init(value, build);
+            return self;
+        }
+
+        // ---- stateful interactions ---------------------------------------------------------
+
+        /// Left click (mouse down + up over this element, or enter/space while focused).
+        pub fn onClick(self: Self, l: anytype) Self {
+            requireId("onClick");
+            append(&it(self).click_listeners, Listener(ClickEvent).init(l));
+            return self;
+        }
+
+        /// Clicks with buttons other than left.
+        pub fn onAuxClick(self: Self, l: anytype) Self {
+            requireId("onAuxClick");
+            append(&it(self).aux_click_listeners, Listener(ClickEvent).init(l));
+            return self;
+        }
+
+        /// Called with `true`/`false` when hover starts/ends.
+        pub fn onHover(self: Self, l: anytype) Self {
+            requireId("onHover");
+            it(self).hover_listener = Listener(bool).init(l);
+            return self;
+        }
+
+        /// Show a tooltip after hovering: `build(window, app)` returns an owned view entity.
+        /// Use `tooltipWith` to pass data (e.g. a static string) to the builder.
+        pub fn tooltip(self: Self, comptime build: anytype) Self {
+            requireId("tooltip");
+            it(self).tooltip = TooltipBuilder.init(build, {});
+            return self;
+        }
+
+        /// Like `tooltip` with up to 24 bytes of data: `build(data, window, app)`.
+        pub fn tooltipWith(self: Self, data: anytype, comptime build: anytype) Self {
+            requireId("tooltip");
+            it(self).tooltip = TooltipBuilder.init(build, data);
+            return self;
+        }
+
+        pub fn hoverableTooltip(self: Self, comptime build: anytype) Self {
+            requireId("tooltip");
+            var t = TooltipBuilder.init(build, {});
+            t.hoverable = true;
+            it(self).tooltip = t;
+            return self;
+        }
+
+        pub fn tooltipShowDelay(self: Self, delay_ns: u64) Self {
+            it(self).tooltip_show_delay_ns = delay_ns;
+            return self;
+        }
+
+        /// Share scroll state with `handle` (offset, programmatic scrolling).
+        pub fn trackScroll(self: Self, handle: ScrollHandle) Self {
+            it(self).tracked_scroll_handle = handle;
+            return self;
+        }
+    };
+}
+
 fn DivImpl(comptime stateful: bool) type {
     return struct {
         const Self = @This();
@@ -163,291 +464,56 @@ fn DivImpl(comptime stateful: bool) type {
             return self;
         }
 
-        // ---- interactive styles ------------------------------------------------------------
-
-        /// Style applied while the mouse is over this element.
-        pub fn hover(self: Self, s: anytype) Self {
-            self.it().hover_style = arenaRefinement(s);
-            return self;
-        }
-
-        /// Style applied while the mouse is over the element marked `.group(name)`.
-        pub fn groupHover(self: Self, group_name: []const u8, s: anytype) Self {
-            self.it().group_hover_style = .{ .group = group_name, .style = arenaRefinement(s) };
-            return self;
-        }
-
-        /// Style applied while this element is pressed (needs an id).
-        pub fn active(self: Self, s: anytype) Self {
-            requireId("active");
-            self.it().active_style = arenaRefinement(s);
-            return self;
-        }
-
-        pub fn groupActive(self: Self, group_name: []const u8, s: anytype) Self {
-            requireId("groupActive");
-            self.it().group_active_style = .{ .group = group_name, .style = arenaRefinement(s) };
-            return self;
-        }
-
-        /// Style applied while the tracked focus handle is focused (gpui `focus`).
-        pub fn focusStyle(self: Self, s: anytype) Self {
-            self.it().focus_style = arenaRefinement(s);
-            return self;
-        }
-
-        /// Style applied while focus is within this element (gpui `in_focus`).
-        pub fn inFocus(self: Self, s: anytype) Self {
-            self.it().in_focus_style = arenaRefinement(s);
-            return self;
-        }
-
-        /// Style applied while focused via the keyboard (gpui `focus_visible`).
-        pub fn focusVisible(self: Self, s: anytype) Self {
-            self.it().focus_visible_style = arenaRefinement(s);
-            return self;
-        }
-
-        /// Style applied while a drag of `T` hovers this element.
-        pub fn dragOver(self: Self, comptime T: type, s: anytype) Self {
-            append(&self.it().drag_over_styles, DragOverStyle{ .type_id = type_id.typeId(T), .style = arenaRefinement(s) });
-            return self;
-        }
-
-        pub fn groupDragOver(self: Self, group_name: []const u8, comptime T: type, s: anytype) Self {
-            append(&self.it().group_drag_over_styles, GroupDragOverStyle{ .type_id = type_id.typeId(T), .group = group_name, .style = arenaRefinement(s) });
-            return self;
-        }
-
-        /// Mark this element as group `name` for `groupHover` / `groupActive` (gpui `group`).
-        pub fn group(self: Self, name: []const u8) Self {
-            self.it().group = name;
-            return self;
-        }
-
-        // ---- focus & keyboard -----------------------------------------------------------------
-
-        /// Key context for keybindings, e.g. "Editor mode=full" (gpui `key_context`). Strings
-        /// are parsed once per window; a `KeyContext` value must outlive the frames using it.
-        pub fn keyContext(self: Self, ctx: anytype) Self {
-            if (@TypeOf(ctx) == KeyContext) {
-                self.it().key_context = .{ .parsed = ctx };
-            } else {
-                self.it().key_context = .{ .source = ctx };
-            }
-            return self;
-        }
-
-        /// Associate this element with `handle` (focus styles, focus on click, key dispatch).
-        pub fn trackFocus(self: Self, handle: FocusHandle) Self {
-            self.it().focusable = true;
-            self.it().tracked_focus_handle = handle;
-            return self;
-        }
-
-        /// Make this element focusable with a focus handle kept in its element state.
-        pub fn focusable(self: Self) Self {
-            requireId("focusable");
-            self.it().focusable = true;
-            return self;
-        }
-
-        pub fn tabIndex(self: Self, index: isize) Self {
-            self.it().focusable = true;
-            self.it().tab_index = index;
-            self.it().tab_stop = true;
-            return self;
-        }
-
-        pub fn tabStop(self: Self, stop: bool) Self {
-            self.it().tab_stop = stop;
-            return self;
-        }
-
-        pub fn tabGroup(self: Self) Self {
-            self.it().tab_group = true;
-            if (self.it().tab_index == null) self.it().tab_index = 0;
-            return self;
-        }
-
-        pub fn onKeyDown(self: Self, l: anytype) Self {
-            append(&self.it().key_down_listeners, KeyEntry(input.KeyDownEvent){ .listener = .init(l), .phase = .bubble });
-            return self;
-        }
-        pub fn captureKeyDown(self: Self, l: anytype) Self {
-            append(&self.it().key_down_listeners, KeyEntry(input.KeyDownEvent){ .listener = .init(l), .phase = .capture });
-            return self;
-        }
-        pub fn onKeyUp(self: Self, l: anytype) Self {
-            append(&self.it().key_up_listeners, KeyEntry(input.KeyUpEvent){ .listener = .init(l), .phase = .bubble });
-            return self;
-        }
-        pub fn captureKeyUp(self: Self, l: anytype) Self {
-            append(&self.it().key_up_listeners, KeyEntry(input.KeyUpEvent){ .listener = .init(l), .phase = .capture });
-            return self;
-        }
-        pub fn onModifiersChanged(self: Self, l: anytype) Self {
-            append(&self.it().modifiers_changed_listeners, Listener(input.ModifiersChangedEvent).init(l));
-            return self;
-        }
-
-        /// Handle action `A` dispatched to this element or a descendant (bubble phase).
-        pub fn onAction(self: Self, comptime A: type, l: anytype) Self {
-            append(&self.it().action_listeners, ActionEntry.init(A, Listener(A).init(l), .bubble));
-            return self;
-        }
-        /// Handle action `A` on the way down, before descendants see it.
-        pub fn captureAction(self: Self, comptime A: type, l: anytype) Self {
-            append(&self.it().action_listeners, ActionEntry.init(A, Listener(A).init(l), .capture));
-            return self;
-        }
-
-        // ---- mouse --------------------------------------------------------------------------
-
-        fn mouse(self: Self, comptime Ev: type, l: anytype, mode: MouseMode) Self {
-            const entry: MouseEntry(Ev) = .{ .listener = .init(l), .mode = mode };
-            switch (Ev) {
-                input.MouseDownEvent => append(&self.it().mouse_down_listeners, entry),
-                input.MouseUpEvent => append(&self.it().mouse_up_listeners, entry),
-                input.MouseMoveEvent => append(&self.it().mouse_move_listeners, entry),
-                input.MouseExitEvent => append(&self.it().mouse_exit_listeners, entry),
-                input.ScrollWheelEvent => append(&self.it().scroll_wheel_listeners, entry),
-                else => unreachable,
-            }
-            return self;
-        }
-
-        /// `button` pressed over this element (bubble phase).
-        pub fn onMouseDown(self: Self, button: input.MouseButton, l: anytype) Self {
-            return self.mouse(input.MouseDownEvent, l, .{ .bubble_button = button });
-        }
-        pub fn onAnyMouseDown(self: Self, l: anytype) Self {
-            return self.mouse(input.MouseDownEvent, l, .bubble_any);
-        }
-        pub fn captureAnyMouseDown(self: Self, l: anytype) Self {
-            return self.mouse(input.MouseDownEvent, l, .capture_any);
-        }
-        /// Any mouse down outside this element (capture phase), e.g. to dismiss popovers.
-        pub fn onMouseDownOut(self: Self, l: anytype) Self {
-            return self.mouse(input.MouseDownEvent, l, .out_any);
-        }
-        pub fn onMouseUp(self: Self, button: input.MouseButton, l: anytype) Self {
-            return self.mouse(input.MouseUpEvent, l, .{ .bubble_button = button });
-        }
-        pub fn onAnyMouseUp(self: Self, l: anytype) Self {
-            return self.mouse(input.MouseUpEvent, l, .bubble_any);
-        }
-        pub fn captureAnyMouseUp(self: Self, l: anytype) Self {
-            return self.mouse(input.MouseUpEvent, l, .capture_any);
-        }
-        pub fn onMouseUpOut(self: Self, button: input.MouseButton, l: anytype) Self {
-            return self.mouse(input.MouseUpEvent, l, .{ .out_button = button });
-        }
-        pub fn onMouseMove(self: Self, l: anytype) Self {
-            return self.mouse(input.MouseMoveEvent, l, .bubble_any);
-        }
-        pub fn onMouseExit(self: Self, l: anytype) Self {
-            return self.mouse(input.MouseExitEvent, l, .bubble_any);
-        }
-        pub fn onScrollWheel(self: Self, l: anytype) Self {
-            return self.mouse(input.ScrollWheelEvent, l, .scroll);
-        }
-
-        /// Block mouse events from reaching elements behind this one (gpui `occlude`).
-        pub fn occlude(self: Self) Self {
-            self.it().hitbox_behavior = .block_mouse;
-            return self;
-        }
-        pub fn blockMouseExceptScroll(self: Self) Self {
-            self.it().hitbox_behavior = .block_mouse_except_scroll;
-            return self;
-        }
-
-        // ---- drag and drop -----------------------------------------------------------------
-
-        /// Accept drops of `T` (`l` receives `*const T`).
-        pub fn onDrop(self: Self, comptime T: type, l: anytype) Self {
-            append(&self.it().drop_listeners, DropEntry.init(T, Listener(T).init(l)));
-            return self;
-        }
-
-        /// Decide whether a drag can be dropped here: `f(value: *const anyopaque, type_id, window, app) bool`.
-        pub fn canDrop(self: Self, f: *const fn (*const anyopaque, TypeId, *Window, *App) bool) Self {
-            self.it().can_drop = f;
-            return self;
-        }
-
-        /// While a drag of `T` moves anywhere in the window (capture phase).
-        pub fn onDragMove(self: Self, comptime T: type, l: anytype) Self {
-            append(&self.it().drag_move_listeners, DragMoveEntry.init(T, Listener(events.DragMoveEvent(T)).init(l)));
-            return self;
-        }
-
-        /// Start dragging `value` when the mouse moves past the threshold with the left button
-        /// down. `build(value, cursor_offset, window, app)` returns the preview view entity
-        /// (an owned `Entity(W)`). Needs an id.
-        pub fn onDrag(self: Self, value: anytype, comptime build: anytype) Self {
-            requireId("onDrag");
-            self.it().drag = DragSpec.init(value, build);
-            return self;
-        }
-
-        // ---- stateful interactions ---------------------------------------------------------
-
-        /// Left click (mouse down + up over this element, or enter/space while focused).
-        pub fn onClick(self: Self, l: anytype) Self {
-            requireId("onClick");
-            append(&self.it().click_listeners, Listener(ClickEvent).init(l));
-            return self;
-        }
-
-        /// Clicks with buttons other than left.
-        pub fn onAuxClick(self: Self, l: anytype) Self {
-            requireId("onAuxClick");
-            append(&self.it().aux_click_listeners, Listener(ClickEvent).init(l));
-            return self;
-        }
-
-        /// Called with `true`/`false` when hover starts/ends.
-        pub fn onHover(self: Self, l: anytype) Self {
-            requireId("onHover");
-            self.it().hover_listener = Listener(bool).init(l);
-            return self;
-        }
-
-        /// Show a tooltip after hovering: `build(window, app)` returns an owned view entity.
-        /// Use `tooltipWith` to pass data (e.g. a static string) to the builder.
-        pub fn tooltip(self: Self, comptime build: anytype) Self {
-            requireId("tooltip");
-            self.it().tooltip = TooltipBuilder.init(build, {});
-            return self;
-        }
-
-        /// Like `tooltip` with up to 24 bytes of data: `build(data, window, app)`.
-        pub fn tooltipWith(self: Self, data: anytype, comptime build: anytype) Self {
-            requireId("tooltip");
-            self.it().tooltip = TooltipBuilder.init(build, data);
-            return self;
-        }
-
-        pub fn hoverableTooltip(self: Self, comptime build: anytype) Self {
-            requireId("tooltip");
-            var t = TooltipBuilder.init(build, {});
-            t.hoverable = true;
-            self.it().tooltip = t;
-            return self;
-        }
-
-        pub fn tooltipShowDelay(self: Self, delay_ns: u64) Self {
-            self.it().tooltip_show_delay_ns = delay_ns;
-            return self;
-        }
-
-        /// Share scroll state with `handle` (offset, programmatic scrolling).
-        pub fn trackScroll(self: Self, handle: ScrollHandle) Self {
-            self.it().tracked_scroll_handle = handle;
-            return self;
-        }
+        // Interactive builder methods (shared with `Svg`, see `InteractiveMethods`).
+        const IM = InteractiveMethods(Self, stateful);
+        pub const hover = IM.hover;
+        pub const groupHover = IM.groupHover;
+        pub const active = IM.active;
+        pub const groupActive = IM.groupActive;
+        pub const focusStyle = IM.focusStyle;
+        pub const inFocus = IM.inFocus;
+        pub const focusVisible = IM.focusVisible;
+        pub const dragOver = IM.dragOver;
+        pub const groupDragOver = IM.groupDragOver;
+        pub const group = IM.group;
+        pub const keyContext = IM.keyContext;
+        pub const trackFocus = IM.trackFocus;
+        pub const focusable = IM.focusable;
+        pub const tabIndex = IM.tabIndex;
+        pub const tabStop = IM.tabStop;
+        pub const tabGroup = IM.tabGroup;
+        pub const onKeyDown = IM.onKeyDown;
+        pub const captureKeyDown = IM.captureKeyDown;
+        pub const onKeyUp = IM.onKeyUp;
+        pub const captureKeyUp = IM.captureKeyUp;
+        pub const onModifiersChanged = IM.onModifiersChanged;
+        pub const onAction = IM.onAction;
+        pub const captureAction = IM.captureAction;
+        pub const onMouseDown = IM.onMouseDown;
+        pub const onAnyMouseDown = IM.onAnyMouseDown;
+        pub const captureAnyMouseDown = IM.captureAnyMouseDown;
+        pub const onMouseDownOut = IM.onMouseDownOut;
+        pub const onMouseUp = IM.onMouseUp;
+        pub const onAnyMouseUp = IM.onAnyMouseUp;
+        pub const captureAnyMouseUp = IM.captureAnyMouseUp;
+        pub const onMouseUpOut = IM.onMouseUpOut;
+        pub const onMouseMove = IM.onMouseMove;
+        pub const onMouseExit = IM.onMouseExit;
+        pub const onScrollWheel = IM.onScrollWheel;
+        pub const occlude = IM.occlude;
+        pub const blockMouseExceptScroll = IM.blockMouseExceptScroll;
+        pub const onDrop = IM.onDrop;
+        pub const canDrop = IM.canDrop;
+        pub const onDragMove = IM.onDragMove;
+        pub const onDrag = IM.onDrag;
+        pub const onClick = IM.onClick;
+        pub const onAuxClick = IM.onAuxClick;
+        pub const onHover = IM.onHover;
+        pub const tooltip = IM.tooltip;
+        pub const tooltipWith = IM.tooltipWith;
+        pub const hoverableTooltip = IM.hoverableTooltip;
+        pub const tooltipShowDelay = IM.tooltipShowDelay;
+        pub const trackScroll = IM.trackScroll;
 
         // Animation wrappers (src/elements/animation.zig, gpui `AnimationExt`).
         pub const withAnimation = @import("animation.zig").Ext(Self).withAnimation;

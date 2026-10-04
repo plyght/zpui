@@ -32,8 +32,8 @@ const padding: f32 = 12;
 
 pub const Hide = struct {};
 
-/// Local PTY support (the terminal core's forkpty runner is Linux-tested).
-const has_pty = builtin.os.tag == .linux;
+/// Local PTY support (`zeron_terminal.pty`: libc `forkpty`, Linux and macOS).
+const has_pty = builtin.os.tag == .linux or builtin.os.tag.isDarwin();
 const PtyT = if (has_pty) term.pty.Pty else void;
 
 pub const TerminalDock = struct {

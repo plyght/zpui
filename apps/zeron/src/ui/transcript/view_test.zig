@@ -39,6 +39,7 @@ fn makeStore(app: *App) !struct { Entity(model.EngineState), Entity(model.Transc
         .port = 1,
         .zeron_path = null,
         .reconnect = false,
+        .autoconnect = false,
     } });
     const store = try app.newWith(model.TranscriptStore, model.TranscriptStore.init, .{ engine, "chat-1" });
     return .{ engine, store };

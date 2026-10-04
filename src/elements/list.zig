@@ -728,12 +728,19 @@ pub const ListState = struct {
     fn spliceImpl(self: ListState, old_range: Range, new_count: usize, focus: ?[]const ?FocusHandle) void {
         self.clearTailExtra();
         const s = self.inner;
+        const was_empty = s.items.count() == 0;
         const items = s.gpa.alloc(ListItem, new_count) catch @panic("OOM");
         defer s.gpa.free(items);
         for (items, 0..) |*it, i| it.* = .unmeasured(null, if (focus) |f| f[i] else null);
         s.items.replaceRange(old_range.start, old_range.end, items);
         if (s.logical_scroll_top) |*st| {
-            if (old_range.contains(st.item_ix)) {
+            if (was_empty and !s.follow_state.isFollowing()) {
+                // Deviation from gpui: an empty list has no anchor item, so `{0, 0}` (e.g.
+                // after `scrollTo(.{})`) means "at the start". gpui's anchor arithmetic
+                // would move it past the new items, i.e. jump to the end. A following
+                // list still pins to the end below.
+                st.item_ix = 0;
+            } else if (old_range.contains(st.item_ix)) {
                 st.item_ix = old_range.start;
                 st.offset_in_item = 0;
             } else if (old_range.end <= st.item_ix) {
@@ -3981,4 +3988,58 @@ test "item tree splice, prefix and seek" {
     try std.testing.expect(t.rangeSummary(10, 13).has_unknown_height);
     try std.testing.expect(!t.rangeSummary(13, 93).has_unknown_height);
     try std.testing.expectEqual(@as(f32, 3), t.get(9).?.size.?.height);
+}
+
+test "item tree matches a linear model under random splices, sets and seeks" {
+    const gpa = std.testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    const r = prng.random();
+    for (0..20) |round| {
+        var t: ItemTree = .{ .gpa = gpa, .rng = @as(u32, @intCast(round)) *% 2654435761 +% 1 };
+        defer t.deinit();
+        var model: std.ArrayList(f32) = .empty; // 0 = unmeasured
+        defer model.deinit(gpa);
+        for (0..200) |_| {
+            const n = model.items.len;
+            switch (r.uintLessThan(u8, 3)) {
+                0 => { // splice
+                    const a = r.uintAtMost(usize, n);
+                    const b = a + r.uintAtMost(usize, n - a);
+                    const k = r.uintLessThan(usize, 6);
+                    var items: [6]ListItem = undefined;
+                    var hs: [6]f32 = undefined;
+                    for (0..k) |i| {
+                        hs[i] = if (r.boolean()) @floatFromInt(r.uintLessThan(u8, 4) * 10) else 0;
+                        items[i] = if (hs[i] > 0) .measuredItem(.{ .width = 1, .height = hs[i] }, null) else .unmeasured(null, null);
+                    }
+                    t.replaceRange(a, b, items[0..k]);
+                    model.replaceRange(gpa, a, b - a, hs[0..k]) catch unreachable;
+                },
+                1 => if (n > 0) { // measure
+                    const ix = r.uintLessThan(usize, n);
+                    const h: f32 = @floatFromInt(r.uintLessThan(u8, 5) * 10);
+                    t.set(ix, .measuredItem(.{ .width = 1, .height = h }, null));
+                    model.items[ix] = h;
+                },
+                else => {},
+            }
+            try std.testing.expectEqual(model.items.len, t.count());
+            var acc: f32 = 0;
+            for (0..model.items.len + 1) |k| {
+                try std.testing.expectEqual(acc, t.prefix(k).height);
+                if (k < model.items.len) acc += model.items[k];
+            }
+            // seek: count = number of leading items whose end is before h (or at h, right bias)
+            const h: f32 = @floatFromInt(r.uintAtMost(u32, @intFromFloat(acc + 10)));
+            for ([_]Bias{ .left, .right }) |bias| {
+                var expect: usize = 0;
+                var end: f32 = 0;
+                for (model.items) |ih| {
+                    end += ih;
+                    if (ItemTree.skips(end, h, bias)) expect += 1 else break;
+                }
+                try std.testing.expectEqual(expect, t.seekHeight(h, bias).count);
+            }
+        }
+    }
 }
