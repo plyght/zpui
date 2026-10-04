@@ -11,6 +11,14 @@ pub const Edges = geometry.Edges;
 pub const Corners = geometry.Corners;
 pub const ScaledPixels = geometry.ScaledPixels;
 pub const DevicePixels = geometry.DevicePixels;
+pub const Rems = geometry.Rems;
+pub const AbsoluteLength = geometry.AbsoluteLength;
+pub const DefiniteLength = geometry.DefiniteLength;
+pub const Length = geometry.Length;
+pub const px = geometry.px;
+pub const rems = geometry.rems;
+pub const relative = geometry.relative;
+pub const auto = geometry.auto;
 
 pub const color = @import("color.zig");
 pub const Hsla = color.Hsla;
@@ -28,6 +36,17 @@ pub const Scene = scene.Scene;
 pub const input = @import("input.zig");
 pub const platform = @import("platform/platform.zig");
 pub const text = @import("text/types.zig");
+
+pub const style = @import("style.zig");
+pub const Style = style.Style;
+pub const StyleRefinement = style.StyleRefinement;
+pub const TextStyle = style.TextStyle;
+pub const TextStyleRefinement = style.TextStyleRefinement;
+pub const BoxShadow = style.BoxShadow;
+pub const Refinement = style.Refinement;
+pub const styled = @import("styled.zig");
+pub const Styled = styled.Styled;
+pub const StyleBuilder = styled.StyleBuilder;
 
 test {
     @import("std").testing.refAllDecls(@This());
