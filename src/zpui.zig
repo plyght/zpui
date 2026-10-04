@@ -1,6 +1,7 @@
 //! zpui — a GPU-accelerated UI framework for Zig, ported from zui (zeronsh's gpui fork).
 
 pub const geometry = @import("geometry.zig");
+pub const layout = @import("layout/layout.zig");
 
 pub const Pixels = geometry.Pixels;
 pub const Point = geometry.Point;
