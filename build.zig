@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
     addVulkanRenderer(b, target, optimize, zpui);
     addMetalRenderer(b, target, optimize, zpui);
     addLinuxText(b, target, optimize, zpui);
+    addLinuxPlatform(b, target, optimize, zpui);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -241,5 +242,59 @@ fn addLinuxText(
     run.setCwd(b.path("."));
     run.addPassthruArgs();
     const step = b.step("text-dump", "Rasterize a sample paragraph on the CPU to zig-out/text-dump.png");
+    step.dependOn(&run.step);
+}
+
+/// Linux platform backend (src/platform/linux/): wayland-scanner protocol
+/// bindings, the `linux_c` translate-c module (wayland, xkbcommon, Xlib/xcb),
+/// system libraries, and the `linux-window` demo (`zig build linux-window`).
+fn addLinuxPlatform(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    if (target.result.os.tag != .linux) return;
+
+    const c = b.addTranslateC(.{
+        .root_source_file = b.path("src/platform/linux/c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const protocols = [_][]const u8{
+        "xdg-shell",              "xdg-decoration-unstable-v1", "fractional-scale-v1",
+        "viewporter",             "tablet-v2",                  "cursor-shape-v1",
+        "text-input-unstable-v3", "org-kde-kwin-blur",
+    };
+    for (protocols) |name| {
+        const xml = b.path(b.fmt("src/platform/linux/protocols/{s}.xml", .{name}));
+        const header = b.addSystemCommand(&.{ "wayland-scanner", "client-header" });
+        header.addFileArg(xml);
+        c.addIncludePath(header.addOutputFileArg(b.fmt("{s}-client-protocol.h", .{name})).dirname());
+        const code = b.addSystemCommand(&.{ "wayland-scanner", "private-code" });
+        code.addFileArg(xml);
+        zpui.addCSourceFile(.{ .file = code.addOutputFileArg(b.fmt("{s}-protocol.c", .{name})) });
+    }
+    zpui.addImport("linux_c", c.createModule());
+    zpui.link_libc = true;
+    for ([_][]const u8{
+        "wayland-client", "wayland-cursor", "xkbcommon", "xkbcommon-x11",
+        "X11",            "X11-xcb",        "xcb",       "xcb-xkb",
+        "Xcursor",        "Xi",
+    }) |lib| zpui.linkSystemLibrary(lib, .{});
+
+    const demo = b.addExecutable(.{
+        .name = "linux-window",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/linux_window.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    b.installArtifact(demo);
+    const run = b.addRunArtifact(demo);
+    run.addPassthruArgs();
+    const step = b.step("linux-window", "Open the Linux platform demo window (Wayland or X11)");
     step.dependOn(&run.step);
 }

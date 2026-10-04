@@ -36,6 +36,8 @@ pub const Scene = scene.Scene;
 pub const input = @import("input.zig");
 pub const platform = @import("platform/platform.zig");
 pub const renderer = @import("renderer/renderer.zig");
+/// Linux backend (Wayland/X11); an empty namespace on other targets.
+pub const linux_platform = if (@import("builtin").os.tag == .linux) @import("platform/linux/linux.zig") else struct {};
 pub const text = @import("text/text.zig");
 
 pub const style = @import("style.zig");
@@ -48,6 +50,23 @@ pub const Refinement = style.Refinement;
 pub const styled = @import("styled.zig");
 pub const Styled = styled.Styled;
 pub const StyleBuilder = styled.StyleBuilder;
+
+/// Reactive core: App, entities, contexts, executors, actions, keymap (docs/core-model.md).
+pub const core = @import("app/mod.zig");
+pub const App = core.App;
+pub const Context = core.Context;
+pub const Entity = core.Entity;
+pub const WeakEntity = core.WeakEntity;
+pub const AnyEntity = core.AnyEntity;
+pub const EntityId = core.EntityId;
+pub const Subscription = core.Subscription;
+pub const Subscriptions = core.Subscriptions;
+pub const Task = core.Task;
+pub const action = core.action.action;
+pub const AnyAction = core.AnyAction;
+pub const KeyContext = core.KeyContext;
+pub const KeyBinding = core.KeyBinding;
+pub const Keymap = core.Keymap;
 
 test {
     @import("std").testing.refAllDecls(@This());
