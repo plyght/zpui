@@ -3,6 +3,10 @@
 const std = @import("std");
 
 pub const Pixels = f32;
+/// Logical pixels multiplied by the window scale factor (what the GPU sees).
+pub const ScaledPixels = f32;
+/// Integer physical pixels (texture/atlas coordinates, viewport sizes).
+pub const DevicePixels = i32;
 
 pub fn Point(comptime T: type) type {
     return extern struct {
@@ -69,6 +73,22 @@ pub fn Bounds(comptime T: type) type {
         }
         pub fn isEmpty(self: Self) bool {
             return self.size.width <= 0 or self.size.height <= 0;
+        }
+        /// True if the two bounds overlap with non-zero area (edges touching do not count).
+        pub fn intersects(a: Self, b: Self) bool {
+            return a.origin.x < b.right() and a.right() > b.origin.x and
+                a.origin.y < b.bottom() and a.bottom() > b.origin.y;
+        }
+        /// Smallest bounds containing both `a` and `b`.
+        pub fn unionWith(a: Self, b: Self) Self {
+            return fromCorners(
+                .{ .x = @min(a.origin.x, b.origin.x), .y = @min(a.origin.y, b.origin.y) },
+                .{ .x = @max(a.right(), b.right()), .y = @max(a.bottom(), b.bottom()) },
+            );
+        }
+        /// Multiplies origin and size by `s` (e.g. logical -> scaled pixels).
+        pub fn scale(self: Self, s: T) Self {
+            return .{ .origin = self.origin.scale(s), .size = self.size.scale(s) };
         }
     };
 }
