@@ -16,4 +16,21 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
+      - name: Install Linux dependencies (Vulkan/lavapipe, Wayland, X11, fonts)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libvulkan-dev mesa-vulkan-drivers glslc \
+            libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libxcursor-dev libxi-dev libxrandr-dev \
+            libfreetype-dev libharfbuzz-dev libfontconfig-dev fonts-inter fonts-noto-color-emoji
+          echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json" >> "$GITHUB_ENV"
       - run: zig build test --summary all
+      - run: zig build render-test --summary all
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: render-test-${{ matrix.os }}
+          path: zig-out/render-test.png
+          if-no-files-found: warn
