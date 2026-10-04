@@ -1,0 +1,1790 @@
+37
+diff --git a/x b/x
+@@ -1 +1 @@
+-a
++b
+
+235
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -10,7 +10,8 @@ fn main() {
+     let a = 1;
+-    let b = 2;
++    let b = 3;
++    let c = 4;
+     println!("{a}");
+ 
+     done();
+ }
+
+133
+diff --git a/new.txt b/new.txt
+new file mode 100644
+index 0000000..e69de29
+--- /dev/null
++++ b/new.txt
+@@ -0,0 +1,2 @@
++hello
++world
+
+140
+diff --git a/gone.txt b/gone.txt
+deleted file mode 100644
+index e69de29..0000000
+--- a/gone.txt
++++ /dev/null
+@@ -1,2 +0,0 @@
+-hello
+-world
+
+194
+diff --git a/old name.txt b/new name.txt
+similarity index 90%
+rename from old name.txt
+rename to new name.txt
+index 1..2 100644
+--- a/old name.txt
++++ b/new name.txt
+@@ -1,3 +1,3 @@
+ a
+-b
++B
+ c
+
+139
+diff --git "a/sp ace/\"q\".txt" "b/sp ace/\"q\".txt"
+index 1..2 100644
+--- "a/sp ace/\"q\".txt"
++++ "b/sp ace/\"q\".txt"
+@@ -1 +1 @@
+-x
++y
+
+93
+diff --git a/img.png b/img.png
+index 1..2 100644
+Binary files a/img.png and b/img.png differ
+
+154
+diff --git a/bin.dat b/bin.dat
+new file mode 100644
+index 0000000..1234567
+GIT binary patch
+literal 10
+RcmZQzU|?WiU|?Wk0002A0RR91
+
+literal 0
+HcmV?d00001
+
+
+61
+diff --git a/run.sh b/run.sh
+old mode 100644
+new mode 100755
+
+143
+diff --git a/a.txt b/a.txt
+--- a/a.txt
++++ b/a.txt
+@@ -1,2 +1,2 @@
+-old last
+\ No newline at end of file
++new last
+\ No newline at end of file
+
+102
+diff --git a/crlf.txt b/crlf.txt
+--- a/crlf.txt
++++ b/crlf.txt
+@@ -1,2 +1,2 @@
+ line
+-old
++new
+
+111
+diff --git a/e.txt b/e.txt
+@@ -5 +5,2 @@
+ context
+
++added after empty
+--- not a header
++++ not a header either
+
+178
+garbage before any file
+@@ -1 +1 @@
+-x
++y
+diff --git a/after b/after
+@@ -3,0 +4 @@ heading text
++one
+@@ bad header @@
++still in previous hunk
+@@ -100,3 +200,4 @@
+ x
+-y
++z
++w
+ z2
+
+59
+diff --git a/m b/m
+@@ -1,4 +1,4 @@
+-a
+-b
++c
+ x
+-d
++e
++f
++g
+
+67
+diff --git a/u b/u
+@@ -9998,3 +9998,4 @@
+ é
+-ü
++ö
++日本
+ 🦀
+
+53
+diff --git a/p b/q
+--- a/p
++++ b/q
+@@ -1 +1 @@
+-p
++q
+
+71
+diff --git a/x b/x
+@@ -1,2 +1,2 @@
+ x
+@@ -10,2 +10,2 @@
+-a
++b
+\ marker
+
+102
+diff --git a/one b/one
+@@ -1 +1 @@
+-1
++2
+diff --git a/two b/two
+new file mode 100644
+@@ -0,0 +1 @@
++t
+
+0
+
+50
+diff --git a/only-header b/only-header
+index 1..2
+
+53
+diff --git a/tab	name b/tab	name
+@@ -1 +1 @@
+-	a
++	b
+
+60
+ create mode 100644 crates/ui/src/markdown/mermaid_cache.rs
+
+61
+ create mode 100644 crates/ui/src/shell/chat_rename_tests.rs
+
+43
+ create mode 100644 .github/dependabot.yml
+
+61
+ create mode 100644 crates/ui/src/shell/chat_rename_tests.rs
+
+43
+ create mode 100644 .github/dependabot.yml
+
+100
+ create mode 100644 .github/workflows/macos.yml
+ create mode 100755 scripts/ci/run-macos-fixture.sh
+
+351
+ create mode 100644 crates/ui/src/todo_panel.rs
+ create mode 100644 docs/screenshots/todo-panel/collapsed-headline.png
+ create mode 100644 docs/screenshots/todo-panel/done-compact.png
+ create mode 100644 docs/screenshots/todo-panel/expanded-folded.png
+ create mode 100644 docs/todo-panel.md
+ create mode 100644 edge/src/session-doc/todo-items.test.ts
+
+67
+ create mode 100644 crates/engine/examples/mcp_standalone_smoke.rs
+
+934
+ create mode 100644 crates/ui/assets/icons/microphone.svg
+ create mode 100644 crates/ui/src/composer_dictation_tests.rs
+ create mode 100644 crates/ui/src/dictation.rs
+ create mode 100644 crates/ui/src/dictation/glass.rs
+ create mode 100644 crates/ui/src/dictation/meter.rs
+ create mode 100644 crates/ui/src/dictation/model.rs
+ create mode 100644 crates/ui/src/dictation/permission.m
+ create mode 100644 crates/ui/src/dictation/waveform.rs
+ create mode 100644 crates/voice/Cargo.toml
+ create mode 100644 crates/voice/NOTICE.md
+ create mode 100644 crates/voice/examples/verify.rs
+ create mode 100644 crates/voice/model.json
+ create mode 100644 crates/voice/src/lib.rs
+ create mode 100644 crates/voice/src/resample.rs
+ create mode 100644 crates/voice/src/session_tests.rs
+ create mode 100644 dist/macos/Dictation.entitlements
+ create mode 100644 docs/design/desktop-parakeet-v3.md
+ create mode 100644 docs/reference/desktop-dictation.md
+
+304
+ create mode 100644 .github/actions/linux-ci/action.yml
+ create mode 100644 .github/workflows/release-profile-tests.yml
+ create mode 100755 scripts/ci/apt-install.sh
+ create mode 100755 scripts/ci/install-nextest.sh
+ create mode 100644 scripts/ci/nextest.toml
+ create mode 100755 scripts/ci/test-core.sh
+
+1534
+ create mode 100644 .github/actions/linux-ci/action.yml
+ create mode 100644 .github/actions/windows-ci-setup/action.yml
+ create mode 100644 .github/workflows/release-profile-tests.yml
+ create mode 100644 crates/engine/src/workspace_files/mutations.rs
+ create mode 100644 crates/ui/assets/icons/fast-tier-bold.svg
+ create mode 100644 crates/ui/examples/compact-picker-fixture.rs
+ create mode 100644 crates/ui/src/files/context_menu.rs
+ create mode 100644 crates/ui/src/files/drag.rs
+ create mode 100644 crates/ui/src/files/mutations.rs
+ create mode 100644 crates/ui/src/files/rename.rs
+ create mode 100644 crates/ui/src/files/test_support.rs
+ create mode 100644 crates/ui/src/glass.rs
+ create mode 100644 crates/ui/src/haptics.rs
+ create mode 100644 crates/ui/src/pickers/compact.rs
+ create mode 100644 crates/ui/src/shell/file_mutations.rs
+ create mode 100644 docs/file-tree-interactions.md
+ create mode 100644 docs/screenshots/compact-picker/README.md
+ create mode 100644 docs/screenshots/compact-picker/compact-fast-keyboard.png
+ create mode 100644 docs/screenshots/compact-picker/compact-model-list-light-narrow.png
+ create mode 100644 docs/screenshots/compact-picker/compact-panel-dark-wide.png
+ create mode 100644 docs/screenshots/compact-picker/compact-panel-light-wide.png
+ create mode 100644 docs/screenshots/compact-picker/switch-states.png
+ create mode 100755 scripts/ci/apt-install.sh
+ create mode 100755 scripts/ci/install-nextest.sh
+ create mode 100644 scripts/ci/nextest.toml
+ create mode 100755 scripts/ci/test-core.sh
+
+64
+ create mode 100644 .github/workflows/release-profile-tests.yml
+
+1230
+ create mode 100644 .github/actions/windows-ci-setup/action.yml
+ create mode 100644 crates/engine/src/workspace_files/mutations.rs
+ create mode 100644 crates/ui/assets/icons/fast-tier-bold.svg
+ create mode 100644 crates/ui/examples/compact-picker-fixture.rs
+ create mode 100644 crates/ui/src/files/context_menu.rs
+ create mode 100644 crates/ui/src/files/drag.rs
+ create mode 100644 crates/ui/src/files/mutations.rs
+ create mode 100644 crates/ui/src/files/rename.rs
+ create mode 100644 crates/ui/src/files/test_support.rs
+ create mode 100644 crates/ui/src/glass.rs
+ create mode 100644 crates/ui/src/haptics.rs
+ create mode 100644 crates/ui/src/pickers/compact.rs
+ create mode 100644 crates/ui/src/shell/file_mutations.rs
+ create mode 100644 docs/file-tree-interactions.md
+ create mode 100644 docs/screenshots/compact-picker/README.md
+ create mode 100644 docs/screenshots/compact-picker/compact-fast-keyboard.png
+ create mode 100644 docs/screenshots/compact-picker/compact-model-list-light-narrow.png
+ create mode 100644 docs/screenshots/compact-picker/compact-panel-dark-wide.png
+ create mode 100644 docs/screenshots/compact-picker/compact-panel-light-wide.png
+ create mode 100644 docs/screenshots/compact-picker/switch-states.png
+
+64
+ create mode 100644 .github/actions/windows-ci-setup/action.yml
+
+727
+ create mode 100644 crates/ui/assets/icons/fast-tier-bold.svg
+ create mode 100644 crates/ui/examples/compact-picker-fixture.rs
+ create mode 100644 crates/ui/src/glass.rs
+ create mode 100644 crates/ui/src/haptics.rs
+ create mode 100644 crates/ui/src/pickers/compact.rs
+ create mode 100644 docs/screenshots/compact-picker/README.md
+ create mode 100644 docs/screenshots/compact-picker/compact-fast-keyboard.png
+ create mode 100644 docs/screenshots/compact-picker/compact-model-list-light-narrow.png
+ create mode 100644 docs/screenshots/compact-picker/compact-panel-dark-wide.png
+ create mode 100644 docs/screenshots/compact-picker/compact-panel-light-wide.png
+ create mode 100644 docs/screenshots/compact-picker/switch-states.png
+
+439
+ create mode 100644 crates/engine/src/workspace_files/mutations.rs
+ create mode 100644 crates/ui/src/files/context_menu.rs
+ create mode 100644 crates/ui/src/files/drag.rs
+ create mode 100644 crates/ui/src/files/mutations.rs
+ create mode 100644 crates/ui/src/files/rename.rs
+ create mode 100644 crates/ui/src/files/test_support.rs
+ create mode 100644 crates/ui/src/shell/file_mutations.rs
+ create mode 100644 docs/file-tree-interactions.md
+
+240
+ create mode 100644 .github/actions/linux-ci/action.yml
+ create mode 100755 scripts/ci/apt-install.sh
+ create mode 100755 scripts/ci/install-nextest.sh
+ create mode 100644 scripts/ci/nextest.toml
+ create mode 100755 scripts/ci/test-core.sh
+
+100
+ create mode 100644 .github/workflows/macos.yml
+ create mode 100755 scripts/ci/run-macos-fixture.sh
+
+64
+ create mode 100644 .github/actions/windows-ci-setup/action.yml
+
+1000
+ delete mode 100644 crates/harness/src/acp/pi_mcp.rs
+ create mode 100644 crates/harness/src/pi/PROTOCOL.md
+ create mode 100644 crates/harness/src/pi/catalog.rs
+ rename crates/harness/src/{acp/pi_mcp.mjs => pi/mcp.mjs} (87%)
+ create mode 100644 crates/harness/src/pi/mcp.rs
+ create mode 100644 crates/harness/src/pi/mod.rs
+ create mode 100644 crates/harness/src/pi/normalize.rs
+ create mode 100644 crates/harness/src/pi/rpc.rs
+ create mode 100644 crates/harness/src/pi/sessions.rs
+ create mode 100644 crates/harness/src/pi/ui.rs
+ rename crates/harness/src/{acp/child.rs => process/owned.rs} (95%)
+ rename crates/harness/tests/fixtures/{fake-pi-acp.sh => fake-lifecycle-acp.sh} (100%)
+ create mode 100755 crates/harness/tests/fixtures/fake-pi-rpc.py
+ create mode 100644 crates/harness/tests/fixtures/pi-rpc-probe.ts
+ create mode 100644 crates/harness/tests/fixtures/pi_rpc.rs
+ create mode 100644 crates/harness/tests/pi_rpc.rs
+ create mode 100644 docs/pi.md
+ create mode 100644 docs/research/pi-rpc.md
+
+68
+ create mode 100644 crates/ui/src/composer/modal_selection_tests.rs
+
+62
+ create mode 100644 crates/engine/tests/subagent_idle_reap.rs
+
+114
+ create mode 100644 .github/workflows/linux-installer.yml
+ create mode 100755 scripts/test-linux-desktop-entry.sh
+
+110
+ create mode 100644 apps/zeron/tests/noop_browser.rs
+ create mode 100644 crates/harness/src/code_signature.rs
+
+64
+ create mode 100644 crates/ui/src/markdown/inline_code_links.rs
+
+60030
+diff --git a/.github/workflows/cursor-compatibility.yml b/.github/workflows/cursor-compatibility.yml
+index 9400259..c521f43 100644
+--- a/.github/workflows/cursor-compatibility.yml
++++ b/.github/workflows/cursor-compatibility.yml
+@@ -16,7 +16,7 @@ permissions:
+ jobs:
+   cursor-compatibility:
+     runs-on: ubuntu-24.04
+-    timeout-minutes: 20
++    timeout-minutes: 30
+     steps:
+       - uses: actions/checkout@v4
+       - uses: actions/setup-node@v4
+@@ -38,3 +38,7 @@ jobs:
+           cargo test --locked -p zeron-doc
+           cargo test --locked -p zeron-engine --test message_queue
+           cargo test --locked -p zeron-engine --lib sessions::tests
++      - name: Native Pi RPC driver
++        run: |
++          cargo test --locked -p zeron-harness --features native-fixture --test pi_rpc
++          cargo test --locked -p zeron-engine --test pi_resume
+diff --git a/apps/ios/Zeron/Composer/QuestionPanel.swift b/apps/ios/Zeron/Composer/QuestionPanel.swift
+index 83476cc..8d1a143 100644
+--- a/apps/ios/Zeron/Composer/QuestionPanel.swift
++++ b/apps/ios/Zeron/Composer/QuestionPanel.swift
+@@ -3,7 +3,7 @@ import UIKit
+ /// Replaces the composer while the agent asks questions: one glass card per
+ /// question, large option rows, "Other…" free text, and a single-select
+ /// auto-advance (220ms) so a 3-question form is three taps.
+-final class QuestionPanel: UIView, UITextFieldDelegate {
++final class QuestionPanel: UIView, UITextFieldDelegate, UITextViewDelegate {
+     var onSubmit: (([(questionId: String, labels: [String])]) -> Void)?
+     var onHeightChange: (() -> Void)?
+ 
+@@ -12,6 +12,7 @@ final class QuestionPanel: UIView, UITextFieldDelegate {
+     private let question = UILabel()
+     private let options = UIStackView()
+     private let other = UITextField()
++    private let editor = UITextView()
+     private let back = UIButton(type: .system)
+     private let nextButton = UIButton(type: .system)
+     private var items: [SessionChrome.Question] = []
+@@ -43,6 +44,15 @@ final class QuestionPanel: UIView, UITextFieldDelegate {
+         other.heightAnchor.constraint(equalToConstant: 44).isActive = true
+         other.accessibilityIdentifier = "question-other"
+ 
++        editor.font = Fonts.ui(.sans, 16)
++        editor.textColor = Palette.text
++        editor.backgroundColor = Palette.chip.withAlphaComponent(0.6)
++        editor.layer.cornerRadius = 12
++        editor.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
++        editor.delegate = self
++        editor.heightAnchor.constraint(equalToConstant: 140).isActive = true
++        editor.accessibilityIdentifier = "question-editor"
++
+         var backConfig = UIButton.Configuration.plain()
+         backConfig.title = "Back"
+         backConfig.baseForegroundColor = Palette.secondary
+@@ -59,7 +69,7 @@ final class QuestionPanel: UIView, UITextFieldDelegate {
+ 
+         let buttons = UIStackView(arrangedSubviews: [back, UIView(), nextButton])
+         buttons.axis = .horizontal
+-        let stack = UIStackView(arrangedSubviews: [header, question, options, other, buttons])
++        let stack = UIStackView(arrangedSubviews: [header, question, options, other, editor, buttons])
+         stack.axis = .vertical
+         stack.spacing = 10
+         stack.setCustomSpacing(14, after: question)
+@@ -91,7 +101,8 @@ final class QuestionPanel: UIView, UITextFieldDelegate {
+         page = 0
+         submitted = false
+         picks = [:]
+-        custom = [:]
++        // Question ids arrive from agents and synced docs: never trap on a duplicate.
++        custom = Dictionary(questions.map { ($0.id, $0.prefill ?? "") }, uniquingKeysWith: { first, _ in first })
+         render()
+     }
+ 
+@@ -124,7 +135,10 @@ final class QuestionPanel: UIView, UITextFieldDelegate {
+             b.addAction(UIAction { [weak self] _ in self?.pick(option) }, for: .touchUpInside)
+             options.addArrangedSubview(b)
+         }
++        other.isHidden = q.multiline
++        editor.isHidden = !q.multiline
+         other.text = custom[q.id]
++        editor.text = custom[q.id]
+         back.isHidden = page == 0
+         var n = nextButton.configuration
+         n?.title = page == items.count - 1 ? "Submit" : "Next"
+@@ -134,7 +148,7 @@ final class QuestionPanel: UIView, UITextFieldDelegate {
+     }
+ 
+     private func answered(_ q: SessionChrome.Question) -> Bool {
+-        !(picks[q.id] ?? []).isEmpty || !(custom[q.id] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
++        q.multiline || !(picks[q.id] ?? []).isEmpty || !(custom[q.id] ?? "").trimmingCharacters(in: .whitespaces).isEmpty
+     }
+ 
+     private func pick(_ option: String) {
+@@ -159,6 +173,12 @@ final class QuestionPanel: UIView, UITextFieldDelegate {
+         nextButton.isEnabled = answered(q)
+     }
+ 
++    func textViewDidChange(_ textView: UITextView) {
++        guard let q = current else { return }
++        custom[q.id] = textView.text
++        nextButton.isEnabled = answered(q)
++    }
++
+     func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+         advance()
+         return true
+@@ -181,7 +201,11 @@ final class QuestionPanel: UIView, UITextFieldDelegate {
+         }
+         let answers = items.map { q -> (questionId: String, labels: [String]) in
+             var labels = q.options.filter { (picks[q.id] ?? []).contains($0) }
+-            if let c = custom[q.id]?.trimmingCharacters(in: .whitespaces), !c.isEmpty { labels.append(c) }
++            if q.multiline {
++                labels.append(custom[q.id] ?? "")
++            } else if let c = custom[q.id]?.trimmingCharacters(in: .whitespaces), !c.isEmpty {
++                labels.append(c)
++            }
+             return (q.id, labels)
+         }
+         submitted = true
+diff --git a/apps/ios/Zeron/Core/Generated/zeron_core.swift b/apps/ios/Zeron/Core/Generated/zeron_core.swift
+index 8ab39c6..2a75051 100644
+--- a/apps/ios/Zeron/Core/Generated/zeron_core.swift
++++ b/apps/ios/Zeron/Core/Generated/zeron_core.swift
+@@ -7933,15 +7933,19 @@ public struct UserInputQuestion: Equatable, Hashable {
+     public var question: String
+     public var options: [String]
+     public var multiSelect: Bool
++    public var prefill: String?
++    public var multiline: Bool
+ 
+     // Default memberwise initializers are never public by default, so we
+     // declare one manually.
+-    public init(id: String, header: String, question: String, options: [String], multiSelect: Bool) {
++    public init(id: String, header: String, question: String, options: [String], multiSelect: Bool, prefill: String?, multiline: Bool) {
+         self.id = id
+         self.header = header
+         self.question = question
+         self.options = options
+         self.multiSelect = multiSelect
++        self.prefill = prefill
++        self.multiline = multiline
+     }
+ 
+     
+@@ -7964,7 +7968,9 @@ public struct FfiConverterTypeUserInputQuestion: FfiConverterRustBuffer {
+                 header: FfiConverterString.read(from: &buf), 
+                 question: FfiConverterString.read(from: &buf), 
+                 options: FfiConverterSequenceString.read(from: &buf), 
+-                multiSelect: FfiConverterBool.read(from: &buf)
++                multiSelect: FfiConverterBool.read(from: &buf), 
++                prefill: FfiConverterOptionString.read(from: &buf), 
++                multiline: FfiConverterBool.read(from: &buf)
+         )
+     }
+ 
+@@ -7974,6 +7980,8 @@ public struct FfiConverterTypeUserInputQuestion: FfiConverterRustBuffer {
+         FfiConverterString.write(value.question, into: &buf)
+         FfiConverterSequenceString.write(value.options, into: &buf)
+         FfiConverterBool.write(value.multiSelect, into: &buf)
++        FfiConverterOptionString.write(value.prefill, into: &buf)
++        FfiConverterBool.write(value.multiline, into: &buf)
+     }
+ }
+ 
+diff --git a/apps/ios/Zeron/Session/CoreSessionSource.swift b/apps/ios/Zeron/Session/CoreSessionSource.swift
+index a8474a3..609c10f 100644
+--- a/apps/ios/Zeron/Session/CoreSessionSource.swift
++++ b/apps/ios/Zeron/Session/CoreSessionSource.swift
+@@ -87,7 +87,7 @@ final class CoreSessionSource: SessionSource {
+         // Working state is shown at the transcript tail (layout engine), not here.
+         if let input = c.openInput {
+             next.questions = (input.requestId, input.questions.map {
+-                SessionChrome.Question(id: $0.id, header: $0.header, text: $0.question, options: $0.options, multiSelect: $0.multiSelect)
++                SessionChrome.Question(id: $0.id, header: $0.header, text: $0.question, options: $0.options, multiSelect: $0.multiSelect, prefill: $0.prefill, multiline: $0.multiline)
+             })
+         }
+         next.queue = c.queue.map { q in
+diff --git a/apps/ios/Zeron/Session/SessionSource.swift b/apps/ios/Zeron/Session/SessionSource.swift
+index e14472e..687ea47 100644
+--- a/apps/ios/Zeron/Session/SessionSource.swift
++++ b/apps/ios/Zeron/Session/SessionSource.swift
+@@ -19,6 +19,8 @@ struct SessionChrome: Equatable {
+         let text: String
+         let options: [String]
+         let multiSelect: Bool
++        var prefill: String? = nil
++        var multiline: Bool = false
+     }
+ 
+     /// Attachment upload progress (0…1) while images are escorted to the
+diff --git a/crates/client/src/demo/transcripts.rs b/crates/client/src/demo/transcripts.rs
+index 366b3e8..e0f0d5d 100644
+--- a/crates/client/src/demo/transcripts.rs
++++ b/crates/client/src/demo/transcripts.rs
+@@ -355,6 +355,8 @@ fn picker(host: &str, now: i64) -> Vec<SessionMessageEntry> {
+                                 "Local device".into(),
+                                 "Union of both".into(),
+                             ],
++                            prefill: None,
++                            multiline: false,
+                             multi_select: false,
+                         },
+                         UserInputQuestion {
+@@ -367,6 +369,8 @@ fn picker(host: &str, now: i64) -> Vec<SessionMessageEntry> {
+                                 "OpenCode".into(),
+                                 "Grok".into(),
+                             ],
++                            prefill: None,
++                            multiline: false,
+                             multi_select: true,
+                         },
+                     ],
+@@ -788,6 +792,8 @@ pub(crate) fn asking() -> Vec<Step> {
+             header: "Scope".into(),
+             question: "Should the fix cover Android too?".into(),
+             options: vec!["Yes, both platforms".into(), "iOS only".into()],
++            prefill: None,
++            multiline: false,
+             multi_select: false,
+         }]),
+     ]
+diff --git a/crates/engine/src/registry.rs b/crates/engine/src/registry.rs
+index ecb9913..bb0a077 100644
+--- a/crates/engine/src/registry.rs
++++ b/crates/engine/src/registry.rs
+@@ -698,29 +698,20 @@ pub fn default_registry() -> HarnessRegistry {
+         Box::new(|| zeron_harness::AcpHarness::hermes().installed()),
+         Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::hermes()) as Arc<dyn Harness>)),
+     );
+-    // pi over ACP (community `pi-acp` adapter), same lazy pattern: the static
+-    // descriptor mirrors AcpHarness::pi() exactly — turn-boundary steering,
+-    // pi's thinking ladder minus its "off" tier.
++    // Native Pi RPC. Thinking levels are discovered per model.
+     registry.register_lazy(
+         HarnessDescriptor {
+             id: HarnessId::Pi,
+             name: "Pi".into(),
+             supports_steering: true,
+-            steering_mode: SteeringMode::TurnBoundary,
+-            reasoning_levels: vec![
+-                ReasoningLevel::Minimal,
+-                ReasoningLevel::Low,
+-                ReasoningLevel::Medium,
+-                ReasoningLevel::High,
+-                ReasoningLevel::XHigh,
+-                ReasoningLevel::Max,
+-            ],
++            steering_mode: SteeringMode::StepBoundary,
++            reasoning_levels: Vec::new(),
+             installed: true,
+             can_install: false,
+             enabled: None,
+         },
+-        Box::new(|| zeron_harness::AcpHarness::pi().installed()),
+-        Box::new(|| Ok(Arc::new(zeron_harness::AcpHarness::pi()) as Arc<dyn Harness>)),
++        Box::new(|| zeron_harness::PiHarness::new().installed()),
++        Box::new(|| Ok(Arc::new(zeron_harness::PiHarness::new()) as Arc<dyn Harness>)),
+     );
+     // opencode over its NATIVE HTTP/SSE protocol (the one the opencode
+     // desktop app speaks — `opencode serve` + the /global/event bus), same
+@@ -909,17 +900,7 @@ mod tests {
+         assert_eq!(pi.id(), HarnessId::Pi);
+         assert_eq!(pi.display_name(), "Pi");
+         assert_eq!(pi.steering_mode(), SteeringMode::StepBoundary);
+-        assert_eq!(
+-            pi.reasoning_levels(),
+-            &[
+-                ReasoningLevel::Minimal,
+-                ReasoningLevel::Low,
+-                ReasoningLevel::Medium,
+-                ReasoningLevel::High,
+-                ReasoningLevel::XHigh,
+-                ReasoningLevel::Max
+-            ]
+-        );
++        assert!(pi.reasoning_levels().is_empty());
+     }
+ 
+     /// Catalogs serialized by engines that predate the `installed`/`enabled`
+diff --git a/crates/engine/src/sessions.rs b/crates/engine/src/sessions.rs
+index d809e4e..fb342c8 100644
+--- a/crates/engine/src/sessions.rs
++++ b/crates/engine/src/sessions.rs
+@@ -556,13 +556,26 @@ impl SessionsEngine {
+             let pending = pending_inputs.clone();
+             let engine_tx = engine_tx.clone();
+             Box::new(move |questions: Vec<UserInputQuestion>| {
+-                let (tx, rx) = oneshot::channel();
++                let (mut tx, rx) = oneshot::channel();
++                let (answer_tx, answer_rx) = oneshot::channel();
+                 let request_id = new_id();
+-                lock(&pending).insert(request_id.clone(), tx);
++                lock(&pending).insert(request_id.clone(), answer_tx);
+                 let _ = engine_tx.send(AgentEvent::InputRequested {
+-                    request_id,
++                    request_id: request_id.clone(),
+                     questions,
+                 });
++                let pending = pending.clone();
++                let engine_tx = engine_tx.clone();
++                tokio::spawn(async move {
++                    tokio::select! {
++                        // A dropped resolver stays an error for the harness, as before.
++                        answer = answer_rx => if let Ok(answer) = answer { let _ = tx.send(answer); },
++                        _ = tx.closed() => {
++                            lock(&pending).remove(&request_id);
++                            let _ = engine_tx.send(AgentEvent::InputResolved { request_id });
++                        }
++                    }
++                });
+                 rx
+             })
+         };
+diff --git a/crates/engine/tests/acp_lifecycle.rs b/crates/engine/tests/acp_lifecycle.rs
+index 3d65e7c..5870018 100644
+--- a/crates/engine/tests/acp_lifecycle.rs
++++ b/crates/engine/tests/acp_lifecycle.rs
+@@ -30,8 +30,9 @@ async fn quiet_acp_prompt_stays_working_until_response() {
+     let registry = HarnessRegistry::new();
+     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+         .join("../harness/tests/fixtures/acp-lifecycle.py");
+-    registry.register(Arc::new(AcpHarness::pi().with_executable(fixture)));
+-    let core = EngineCore::assemble(dir.path(), Arc::new(registry), HarnessId::Pi, None).unwrap();
++    registry.register(Arc::new(AcpHarness::devin().with_executable(fixture)));
++    let core =
++        EngineCore::assemble(dir.path(), Arc::new(registry), HarnessId::Devin, None).unwrap();
+     let chat = "acp-quiet-regression";
+     let handle = core.doc_host.open(chat).unwrap();
+     let doc = handle.doc();
+diff --git a/crates/engine/tests/e2e.rs b/crates/engine/tests/e2e.rs
+index 7567f38..2c2ccca 100644
+--- a/crates/engine/tests/e2e.rs
++++ b/crates/engine/tests/e2e.rs
+@@ -1423,6 +1423,8 @@ async fn respond_input_resolves_pending_question() {
+                     header: "Pick".into(),
+                     question: "Which one?".into(),
+                     options: vec!["a".into(), "b".into()],
++                    prefill: None,
++                    multiline: false,
+                     multi_select: false,
+                 }])
+                 .await
+@@ -1576,6 +1578,8 @@ async fn wrong_id_respond_is_rejected_and_correct_answer_still_resumes() {
+                     header: "Pick".into(),
+                     question: "Which one?".into(),
+                     options: vec!["a".into(), "b".into()],
++                    prefill: None,
++                    multiline: false,
+                     multi_select: false,
+                 }])
+                 .await
+@@ -1767,6 +1771,8 @@ async fn interrupt_unblocks_a_run_awaiting_input() {
+                         header: "Pick".into(),
+                         question: "Which one?".into(),
+                         options: vec!["a".into(), "b".into()],
++                        prefill: None,
++                        multiline: false,
+                         multi_select: false,
+                     }])
+                     .await;
+@@ -1914,6 +1920,8 @@ async fn harness_emitted_input_twin_is_dropped_and_answer_resumes() {
+                     header: "Pick".into(),
+                     question: "Which one?".into(),
+                     options: vec!["a".into(), "b".into()],
++                    prefill: None,
++                    multiline: false,
+                     multi_select: false,
+                 };
+                 // The pre-fix Claude/Codex shape: surface the question under
+diff --git a/crates/engine/tests/message_queue.rs b/crates/engine/tests/message_queue.rs
+index 5bdc070..d1793ce 100644
+--- a/crates/engine/tests/message_queue.rs
++++ b/crates/engine/tests/message_queue.rs
+@@ -106,17 +106,19 @@ impl Harness for HeldHarness {
+     ) -> Result<BoxStream<'static, Result<AgentEvent, HarnessError>>, HarnessError> {
+         self.prompts.lock().unwrap().push(request.prompt.clone());
+         self.requests.lock().unwrap().push(request.clone());
+-        if self.asks {
++        let answer = self.asks.then(|| {
+             // Only the engine can mint a request id it will honour, so the
+             // question has to go through controls rather than the stream.
+-            let _answer = (controls.request_input)(vec![UserInputQuestion {
++            (controls.request_input)(vec![UserInputQuestion {
+                 id: "q1".into(),
+                 header: "Choose".into(),
+                 question: "which one?".into(),
+                 options: vec!["a".into(), "b".into()],
++                prefill: None,
++                multiline: false,
+                 multi_select: false,
+-            }]);
+-        }
++            }])
++        });
+         let finish = self.finish.subscribe();
+         let steering = controls.steering;
+         let prompts = self.prompts.clone();
+@@ -155,7 +157,14 @@ impl Harness for HeldHarness {
+             done
+         })
+         .flatten();
+-        Ok(started.chain(gated).boxed())
++        // A live question owns its receiver until the run finishes. Dropping it
++        // now explicitly cancels the engine-owned input lifecycle.
++        Ok(started
++            .chain(gated)
++            .inspect(move |_| {
++                let _ = &answer;
++            })
++            .boxed())
+     }
+ }
+ 
+diff --git a/crates/engine/tests/pi_resume.rs b/crates/engine/tests/pi_resume.rs
+index c3217a7..ff02012 100644
+--- a/crates/engine/tests/pi_resume.rs
++++ b/crates/engine/tests/pi_resume.rs
+@@ -1,18 +1,20 @@
+-//! Pi's native session id survives an idle adapter crash through dispatch.
++//! Pi's native session id survives an idle process crash through dispatch.
++#![cfg(unix)]
+ use std::{sync::Arc, time::Duration};
+ use zeron_engine::{EngineCore, HarnessRegistry};
+-use zeron_harness::AcpHarness;
++use zeron_harness::PiHarness;
+ use zeron_proto::{HarnessId, RunRequest, SandboxLevel};
+ 
+ #[tokio::test]
+ async fn pi_idle_crash_next_dispatch_loads_stored_session() {
+     let dir = tempfile::tempdir().unwrap();
+     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+-        .join("../harness/tests/fixtures/fake-pi-acp.sh");
++        .join("../harness/tests/fixtures/fake-pi-rpc.py");
+     let registry = HarnessRegistry::new();
+     registry.register(Arc::new(
+-        AcpHarness::pi()
++        PiHarness::new()
+             .with_executable(fixture)
++            .with_session_store(dir.path().join("index"))
+             .with_graces(Duration::from_millis(50), Duration::from_millis(100)),
+     ));
+     let core = EngineCore::assemble(dir.path(), Arc::new(registry), HarnessId::Pi, None).unwrap();
+@@ -45,8 +47,75 @@ async fn pi_idle_crash_next_dispatch_loads_stored_session() {
+                 )) { break; }
+                 tokio::time::sleep(Duration::from_millis(10)).await;
+             }
+-        }).await.expect("fixture requires session/load on the next dispatch");
++        }).await.expect("fixture requires --session on the next dispatch");
+         // Let the fixture exit and the driver remove its live mailbox.
+         tokio::time::sleep(Duration::from_millis(500)).await;
+     }
+ }
++
++#[tokio::test]
++async fn timed_out_native_question_resolves_and_finishes_without_user_input() {
++    let dir = tempfile::tempdir().unwrap();
++    let registry = HarnessRegistry::new();
++    registry.register(Arc::new(
++        PiHarness::new()
++            .with_executable(
++                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
++                    .join("../harness/tests/fixtures/fake-pi-rpc.py"),
++            )
++            .with_session_store(dir.path().join("index"))
++            .with_graces(Duration::from_millis(50), Duration::from_millis(100)),
++    ));
++    let core = EngineCore::assemble(dir.path(), Arc::new(registry), HarnessId::Pi, None).unwrap();
++    let chat = "pi-question-timeout";
++    let handle = core.doc_host.open(chat).unwrap();
++    core.sessions
++        .dispatch(
++            chat,
++            HarnessId::Pi,
++            RunRequest {
++                prompt: "/question".into(),
++                harness: None,
++                model: None,
++                reasoning: None,
++                model_options: Default::default(),
++                cwd: dir.path().display().to_string(),
++                sandbox: SandboxLevel::WorkspaceWrite,
++                auto_approve: true,
++                attachments: vec![],
++                worktree: None,
++                resume: None,
++                mcp: None,
++            },
++            None,
++        )
++        .await
++        .unwrap();
++    tokio::time::timeout(Duration::from_secs(5), async {
++        while !core
++            .sessions
++            .session_status(chat)
++            .is_some_and(|s| s.status == zeron_proto::SessionStatus::AwaitingInput)
++        {
++            tokio::time::sleep(Duration::from_millis(5)).await;
++        }
++        loop {
++            let entries = handle.doc().read_entries().unwrap();
++            if entries.iter().any(|entry| {
++                entry.parts.iter().any(|part| {
++                    matches!(part, zeron_doc::MessagePart::Input { resolved: true, .. })
++                })
++            }) && core
++                .sessions
++                .session_status(chat)
++                .is_some_and(|s| s.status == zeron_proto::SessionStatus::Idle)
++            {
++                break;
++            }
++            tokio::time::sleep(Duration::from_millis(10)).await;
++        }
++    })
++    .await
++    .expect("the expired question must not strand the session");
++    core.shutdown().await;
++}
+diff --git a/crates/engine/tests/queue_order_live.rs b/crates/engine/tests/queue_order_live.rs
+index 8852858..dd92fa4 100644
+--- a/crates/engine/tests/queue_order_live.rs
++++ b/crates/engine/tests/queue_order_live.rs
+@@ -25,7 +25,7 @@ fn harness(name: &str) -> Arc<dyn Harness> {
+         "grok" => Arc::new(AcpHarness::grok()),
+         "devin" => Arc::new(AcpHarness::devin()),
+         "hermes" => Arc::new(AcpHarness::hermes()),
+-        "pi" => Arc::new(AcpHarness::pi()),
++        "pi" => Arc::new(zeron_harness::PiHarness::new()),
+         "antigravity" => Arc::new(AcpHarness::antigravity()),
+         _ => panic!("unknown harness {name}"),
+     }
+diff --git a/crates/engine/tests/steer_now_live.rs b/crates/engine/tests/steer_now_live.rs
+index bde3b0d..520c279 100644
+--- a/crates/engine/tests/steer_now_live.rs
++++ b/crates/engine/tests/steer_now_live.rs
+@@ -28,7 +28,7 @@ fn harness(name: &str) -> Arc<dyn Harness> {
+         "grok" => Arc::new(AcpHarness::grok()),
+         "devin" => Arc::new(AcpHarness::devin()),
+         "hermes" => Arc::new(AcpHarness::hermes()),
+-        "pi" => Arc::new(AcpHarness::pi()),
++        "pi" => Arc::new(zeron_harness::PiHarness::new()),
+         "antigravity" => Arc::new(AcpHarness::antigravity()),
+         _ => panic!("unknown harness {name}"),
+     }
+diff --git a/crates/engine/tests/steer_tool_live.rs b/crates/engine/tests/steer_tool_live.rs
+index bd0deba..d9681e0 100644
+--- a/crates/engine/tests/steer_tool_live.rs
++++ b/crates/engine/tests/steer_tool_live.rs
+@@ -53,7 +53,7 @@ fn harness(name: &str) -> Arc<dyn Harness> {
+         "grok" => Arc::new(AcpHarness::grok()),
+         "devin" => Arc::new(AcpHarness::devin()),
+         "hermes" => Arc::new(AcpHarness::hermes()),
+-        "pi" => Arc::new(AcpHarness::pi()),
++        "pi" => Arc::new(zeron_harness::PiHarness::new()),
+         "antigravity" => Arc::new(AcpHarness::antigravity()),
+         _ => panic!("unknown harness {name}"),
+     }
+diff --git a/crates/engine/tests/steering_live.rs b/crates/engine/tests/steering_live.rs
+index 9069628..60415f9 100644
+--- a/crates/engine/tests/steering_live.rs
++++ b/crates/engine/tests/steering_live.rs
+@@ -47,7 +47,7 @@ async fn rapid_steers_preserve_children_context_and_held_queue() {
+         "grok" => Arc::new(AcpHarness::grok()),
+         "devin" => Arc::new(AcpHarness::devin()),
+         "hermes" => Arc::new(AcpHarness::hermes()),
+-        "pi" => Arc::new(AcpHarness::pi()),
++        "pi" => Arc::new(zeron_harness::PiHarness::new()),
+         "antigravity" => Arc::new(AcpHarness::antigravity()),
+         _ => panic!("unknown harness"),
+     };
+diff --git a/crates/harness/Cargo.toml b/crates/harness/Cargo.toml
+index d47f450..d9eeb0d 100644
+--- a/crates/harness/Cargo.toml
++++ b/crates/harness/Cargo.toml
+@@ -16,6 +16,11 @@ name = "harness-native-fixture"
+ path = "tests/fixtures/native_agent.rs"
+ required-features = ["native-fixture"]
+ 
++[[bin]]
++name = "harness-pi-fixture"
++path = "tests/fixtures/pi_rpc.rs"
++required-features = ["native-fixture"]
++
+ [dependencies]
+ zeron-proto.workspace = true
+ base64 = "0.22"
+diff --git a/crates/harness/examples/steering_probe.rs b/crates/harness/examples/steering_probe.rs
+index 60d6a41..5bbd4d0 100644
+--- a/crates/harness/examples/steering_probe.rs
++++ b/crates/harness/examples/steering_probe.rs
+@@ -23,7 +23,7 @@ async fn main() -> anyhow::Result<()> {
+         "grok" => Arc::new(AcpHarness::grok()),
+         "devin" => Arc::new(AcpHarness::devin()),
+         "hermes" => Arc::new(AcpHarness::hermes()),
+-        "pi" => Arc::new(AcpHarness::pi()),
++        "pi" => Arc::new(zeron_harness::PiHarness::new()),
+         "antigravity" => Arc::new(AcpHarness::antigravity()),
+         _ => anyhow::bail!("unknown harness"),
+     };
+diff --git a/crates/harness/src/acp/mod.rs b/crates/harness/src/acp/mod.rs
+index 8b1d971..c5d14f0 100644
+--- a/crates/harness/src/acp/mod.rs
++++ b/crates/harness/src/acp/mod.rs
+@@ -5,8 +5,7 @@
+ //! `grok agent stdio`), Devin ([`AcpHarness::devin`], `devin acp`) and Hermes
+ //! ([`AcpHarness::hermes`], `hermes acp`) and Antigravity
+ //! ([`AcpHarness::antigravity`], Google's `agy_acp_server`, installed from its
+-//! pinned release archive) — plus pi ([`AcpHarness::pi`]) via the community
+-//! `pi-acp` adapter until a native driver exists. Claude, Codex and Cursor moved to native drivers
++//! pinned release archive). Pi, Claude, Codex and Cursor use native drivers
+ //! ([`crate::ClaudeHarness`], [`crate::CodexHarness`], [`crate::CursorHarness`])
+ //! after adapter-mediated ACP kept manufacturing done-status bugs the native
+ //! wires don't have (turn-hold bookkeeping vs the CLI's own eager result).
+@@ -31,7 +30,6 @@
+ mod antigravity_paths;
+ mod devin_models;
+ mod normalize;
+-mod pi_mcp;
+ mod subagent;
+ mod subagent_devin;
+ mod system_message;
+@@ -55,13 +53,13 @@ use zeron_proto::{
+ };
+ 
+ use crate::jsonrpc::{Incoming, RpcClient};
++pub(crate) use crate::process::owned as child;
+ use crate::process::{Command, Stdio};
+ use crate::scratch::ScratchDir;
+-use child::Child;
+-pub(crate) mod child;
+ use crate::{
+     CancellationToken, Harness, HarnessError, RunControls, Signal, send_signal, shutdown_child,
+ };
++use child::Child;
+ use normalize::{map_update, parse_commands, preferred_allow_option};
+ use subagent::SubagentTracker;
+ use subagent_devin::DevinTracker;
+@@ -94,7 +92,7 @@ struct AcpAgentSpec {
+     extra_paths: fn() -> Vec<PathBuf>,
+     /// The agent's own CLI binary (`claude`, `codex`, …) — what "installed"
+     /// means to the user. Distinct from `executable` where the spawned adapter
+-    /// wraps the CLI (`claude-agent-acp`, `codex-acp`, `pi-acp`), and the npx
++    /// wraps the CLI (third-party ACP adapters), and the npx
+     /// fallback deliberately doesn't count: npx can fetch an adapter on
+     /// demand, but an absent CLI still means no logins/config to drive.
+     cli_executable: &'static str,
+@@ -192,27 +190,6 @@ fn devin_effort_values(
+     }
+ }
+ 
+-/// npm-global bin dirs for an adapter binary (`npm i -g` installs).
+-fn npm_global_paths(exe: &'static str) -> fn() -> Vec<PathBuf> {
+-    // fn pointers can't capture; probe the fixed npm-global locations and
+-    // append the exe at call time via a small per-exe shim table.
+-    match exe {
+-        "pi-acp" => || npm_global_bins("pi-acp"),
+-        _ => || Vec::new(),
+-    }
+-}
+-
+-fn npm_global_bins(exe: &str) -> Vec<PathBuf> {
+-    let mut dirs = Vec::new();
+-    if let Some(home) = crate::executable::home_dir() {
+-        dirs.push(home.join(".local").join("bin").join(exe));
+-        dirs.push(home.join(".npm-global").join("bin").join(exe));
+-    }
+-    dirs.push(PathBuf::from("/opt/homebrew/bin").join(exe));
+-    dirs.push(PathBuf::from("/usr/local/bin").join(exe));
+-    dirs
+-}
+-
+ fn grok_install_paths() -> Vec<PathBuf> {
+     let mut dirs = Vec::new();
+     if let Some(home) = crate::executable::home_dir() {
+@@ -438,69 +415,6 @@ fn hermes_spec() -> AcpAgentSpec {
+     }
+ }
+ 
+-fn pi_spec() -> AcpAgentSpec {
+-    AcpAgentSpec {
+-        id: HarnessId::Pi,
+-        display_name: "Pi",
+-        executable: "pi-acp",
+-        env_override: "PI_ACP_EXECUTABLE",
+-        args: &[],
+-        npm_package: Some("pi-acp@0.0.33"),
+-        archive: None,
+-        extra_paths: npm_global_paths("pi-acp"),
+-        cli_executable: "pi",
+-        cli_extra_paths: || npm_global_bins("pi"),
+-        install_hint: "pi-acp (searched PATH, the login shell's PATH, npm global bins, \
+-             and fnm/nvm/volta/pnpm/bun install dirs; zeron installs the pinned \
+-             pi-acp automatically when npm is available — the pi CLI itself is \
+-             still required, `npm install -g --ignore-scripts \
+-             @earendil-works/pi-coding-agent`; set PI_ACP_EXECUTABLE to override)",
+-        // pi routes models through its own provider config (~/.pi); the picker
+-        // advertises the pass-through entry and pi keeps whatever the user set
+-        // up. Unknown ids are skipped by the config-option set.
+-        models: || {
+-            vec![Model {
+-                id: "default".into(),
+-                label: "pi default".into(),
+-                description: Some("Runs the model configured in pi (`pi` settings)".into()),
+-                reasoning_levels: vec![
+-                    ReasoningLevel::Minimal,
+-                    ReasoningLevel::Low,
+-                    ReasoningLevel::Medium,
+-                    ReasoningLevel::High,
+-                    ReasoningLevel::XHigh,
+-                    ReasoningLevel::Max,
+-                ],
+-                options: Vec::new(),
+-            }]
+-        },
+-        // No `_session/steering` extension: a steer preempts the generation
+-        // (waiting out running tools) and continues the turn — immediate.
+-        steering_mode: SteeringMode::StepBoundary,
+-        // pi's thinking ladder (minimal→max; its extra "off" tier has no zeron
+-        // equivalent and is left to the agent default).
+-        reasoning_levels: &[
+-            ReasoningLevel::Minimal,
+-            ReasoningLevel::Low,
+-            ReasoningLevel::Medium,
+-            ReasoningLevel::High,
+-            ReasoningLevel::XHigh,
+-            ReasoningLevel::Max,
+-        ],
+-        prompt_transform: identity_transform,
+-        effort_values: default_effort_values,
+-        ladder_extras: &[],
+-        prompt_complete_extension: false,
+-        prompt_stall: None,
+-        stall_hint: "The agent process is likely wedged.",
+-        effort_in_model_id: false,
+-        auth_method: None,
+-        skill_dirs: Vec::new,
+-        hidden_commands: &[],
+-        drops_unstarted_cancelled_prompt: false,
+-    }
+-}
+-
+ /// google's builds as the acp registry lists them (`antigravity-acp`); `None`
+ /// on platforms without one, where only an explicit override can launch.
+ fn antigravity_archive() -> Option<crate::archive_install::ArchivePin> {
+@@ -1264,7 +1178,7 @@ pub fn prewarm_managed_adapters() {
+     let Ok(handle) = tokio::runtime::Handle::try_current() else {
+         return;
+     };
+-    for spec in [grok_spec(), pi_spec()] {
++    for spec in [grok_spec()] {
+         let Some(pkg) = spec.npm_package else {
+             continue;
+         };
+@@ -1370,12 +1284,6 @@ impl AcpHarness {
+         Self::with_spec(hermes_spec())
+     }
+ 
+-    /// The pi coding agent over ACP — the community `pi-acp` adapter wrapping
+-    /// pi's RPC mode.
+-    pub fn pi() -> Self {
+-        Self::with_spec(pi_spec()).with_model_discovery_timeout(Duration::from_secs(60))
+-    }
+-
+     /// google antigravity over its acp server (`agy_acp_server`).
+     pub fn antigravity() -> Self {
+         Self::with_spec(antigravity_spec())
+@@ -1770,7 +1678,7 @@ impl AcpHarness {
+         cwd: Option<&str>,
+         block_on_install: bool,
+         extra_args: &[String],
+-        mcp: Option<&zeron_proto::McpServer>,
++        _mcp: Option<&zeron_proto::McpServer>,
+     ) -> Result<
+         (
+             Option<ScratchDir>,
+@@ -1807,13 +1715,6 @@ impl AcpHarness {
+         if let Some(dir) = &scratch {
+             dir.apply(&mut cmd);
+         }
+-        let scratch = if self.spec.id == HarnessId::Pi
+-            && let Some(mcp) = mcp
+-        {
+-            Some(pi_mcp::configure(&mut cmd, mcp)?)
+-        } else {
+-            scratch
+-        };
+         cmd.stdin(Stdio::piped())
+             .stdout(Stdio::piped())
+             .stderr(Stdio::piped())
+@@ -2288,8 +2189,7 @@ impl Harness for AcpHarness {
+                 Launch::Managed { .. } => None,
+             };
+         }
+-        // Overrides select the ACP transport. Pi's transport is pi-acp,
+-        // whereas version checks and self-updates must target the pi CLI.
++        // Version checks and updates target the agent CLI when its transport differs.
+         if self.spec.executable == self.spec.cli_executable {
+             if let Some(path) = &self.executable {
+                 return Some(path.clone());
+@@ -3155,6 +3055,8 @@ fn handle_server_request_live(
+             .unwrap_or("The agent needs your input.")
+             .to_owned(),
+         options: names.clone(),
++        prefill: None,
++        multiline: false,
+         multi_select: false,
+     };
+     let client = client.clone();
+@@ -4994,14 +4896,6 @@ mod tests {
+         }
+     }
+ 
+-    #[test]
+-    fn pi_discovery_allows_cold_extension_startup() {
+-        let pi = AcpHarness::pi();
+-        assert_eq!(pi.model_discovery_timeout, Duration::from_secs(60));
+-        assert_eq!(pi.handshake_timeout, Duration::from_secs(120));
+-        assert!(pi.spec.prompt_stall.is_none());
+-    }
+-
+     #[test]
+     fn antigravity_discovery_budget_covers_cold_start_without_changing_handshake() {
+         let harness = AcpHarness::antigravity();
+@@ -5273,24 +5167,6 @@ mod tests {
+         );
+     }
+ 
+-    #[test]
+-    fn cli_update_path_does_not_use_a_separate_acp_adapter_override() {
+-        let adapter = PathBuf::from("/test/custom-pi-acp");
+-        let pi = AcpHarness::pi().with_executable(&adapter);
+-        assert_eq!(
+-            pi.executable_path(),
+-            find_on_paths(pi.spec.cli_executable, (pi.spec.cli_extra_paths)())
+-        );
+-        assert_ne!(pi.executable_path(), Some(adapter.clone()));
+-        // Native ACP agents use the same executable for both roles.
+-        assert_eq!(
+-            AcpHarness::grok()
+-                .with_executable(&adapter)
+-                .executable_path(),
+-            Some(adapter)
+-        );
+-    }
+-
+     /// runs in a child process, since installs resolve through the
+     /// process-wide `ZERON_ADAPTERS_DIR`.
+     #[cfg(any(unix, windows))]
+@@ -5490,32 +5366,6 @@ mod tests {
+         }
+     }
+ 
+-    #[test]
+-    fn cli_update_path_ignores_pi_acp_environment_override() {
+-        const ADAPTER: &str = "/test/environment-pi-acp";
+-        if std::env::var("PI_ACP_EXECUTABLE").as_deref() != Ok(ADAPTER) {
+-            // Run with a private environment; do not mutate process-global
+-            // variables while other harness tests are running.
+-            let output = std::process::Command::new(std::env::current_exe().unwrap())
+-                .args([
+-                    "--exact",
+-                    "acp::tests::cli_update_path_ignores_pi_acp_environment_override",
+-                    "--nocapture",
+-                ])
+-                .env("PI_ACP_EXECUTABLE", ADAPTER)
+-                .output()
+-                .unwrap();
+-            assert!(output.status.success(), "{output:?}");
+-            return;
+-        }
+-        let pi = AcpHarness::pi();
+-        assert_eq!(
+-            pi.executable_path(),
+-            find_on_paths("pi", (pi.spec.cli_extra_paths)())
+-        );
+-        assert_ne!(pi.executable_path(), Some(PathBuf::from(ADAPTER)));
+-    }
+-
+     #[test]
+     fn devin_initialize_enables_only_the_supported_subagent_stream() {
+         let devin = initialize_params(HarnessId::Devin);
+diff --git a/crates/harness/src/acp/normalize.rs b/crates/harness/src/acp/normalize.rs
+index a75165b..e828fc8 100644
+--- a/crates/harness/src/acp/normalize.rs
++++ b/crates/harness/src/acp/normalize.rs
+@@ -51,14 +51,6 @@ pub(crate) fn chunk_text(update: &Value) -> Option<String> {
+     (!text.is_empty()).then(|| text.to_owned())
+ }
+ 
+-/// pi-acp's rendering of an extension `ctx.ui.notify(message, "error")`.
+-fn is_error_notify(update: &Value) -> bool {
+-    update
+-        .pointer("/_meta/piAcp/notify/level")
+-        .and_then(Value::as_str)
+-        == Some("error")
+-}
+-
+ /// Joined text of a tool call's `content` array, capped; `None` when empty.
+ fn tool_output(update: &Value) -> Option<String> {
+     let parts: Vec<&str> = update
+@@ -360,11 +352,6 @@ pub(crate) fn map_update(update: &Value) -> Vec<AgentEvent> {
+         .and_then(Value::as_str)
+         .unwrap_or("");
+     match kind {
+-        // Zeron's Pi extension reports provider failures as error notifies;
+-        // pi-acp itself still ends that turn with a plain end_turn.
+-        "agent_message_chunk" if is_error_notify(update) => chunk_text(update)
+-            .map(|message| vec![AgentEvent::Error { message }])
+-            .unwrap_or_default(),
+         "agent_message_chunk" => chunk_text(update)
+             .map(|text| vec![AgentEvent::TextDelta { text }])
+             .unwrap_or_default(),
+@@ -516,25 +503,6 @@ mod tests {
+     use super::*;
+     use serde_json::json;
+ 
+-    #[test]
+-    fn pi_error_notify_maps_to_error_and_other_notifies_stay_text() {
+-        let notify = |level: &str| {
+-            json!({
+-                "sessionUpdate": "agent_message_chunk",
+-                "content": { "type": "text", "text": "Codex error: unsupported model" },
+-                "_meta": { "piAcp": { "notify": { "level": level } } },
+-            })
+-        };
+-        assert!(matches!(
+-            map_update(&notify("error")).as_slice(),
+-            [AgentEvent::Error { message }] if message == "Codex error: unsupported model"
+-        ));
+-        assert!(matches!(
+-            map_update(&notify("warning")).as_slice(),
+-            [AgentEvent::TextDelta { .. }]
+-        ));
+-    }
+-
+     #[test]
+     fn message_and_thought_chunks_map_to_deltas() {
+         let update = json!({
+diff --git a/crates/harness/src/acp/pi_mcp.rs b/crates/harness/src/acp/pi_mcp.rs
+deleted file mode 100644
+index a866d0e..0000000
+--- a/crates/harness/src/acp/pi_mcp.rs
++++ /dev/null
+@@ -1,88 +0,0 @@
+-//! Per-run bridge for pi-acp, which accepts but does not implement mcpServers.
+-use crate::{HarnessError, process::Command, scratch::ScratchDir};
+-
+-pub(super) fn configure(
+-    cmd: &mut Command,
+-    mcp: &zeron_proto::McpServer,
+-) -> Result<ScratchDir, HarnessError> {
+-    let scratch = ScratchDir::new("pi-mcp")?;
+-    let extension = scratch.path().join("zeron-mcp.mjs");
+-    std::fs::write(&extension, include_str!("pi_mcp.mjs"))?;
+-    // pi-acp only accepts an executable, not extra argv. This private wrapper
+-    // adds the extension and otherwise forwards the adapter's RPC/session args.
+-    #[cfg(unix)]
+-    let (name, script) = (
+-        "pi",
+-        "#!/bin/sh\nexec \"$ZERON_PI_COMMAND\" --extension \"$ZERON_PI_EXTENSION\" \"$@\"\n",
+-    );
+-    #[cfg(windows)]
+-    let (name, script) = (
+-        "pi.cmd",
+-        "@echo off\r\n\"%ZERON_PI_COMMAND%\" --extension \"%ZERON_PI_EXTENSION%\" %*\r\n",
+-    );
+-    let wrapper = scratch.path().join(name);
+-    std::fs::write(&wrapper, script)?;
+-    #[cfg(unix)]
+-    {
+-        use std::os::unix::fs::PermissionsExt;
+-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o700))?;
+-    }
+-    cmd.env(
+-        "ZERON_PI_COMMAND",
+-        std::env::var_os("PI_ACP_PI_COMMAND").unwrap_or_else(|| name.into()),
+-    )
+-    .env("ZERON_PI_EXTENSION", extension)
+-    .env(
+-        "ZERON_PI_MCP",
+-        serde_json::to_string(mcp).expect("MCP config is serializable"),
+-    )
+-    .env("PI_ACP_PI_COMMAND", wrapper);
+-    Ok(scratch)
+-}
+-
+-#[cfg(all(test, unix))]
+-mod tests {
+-    use super::*;
+-    use std::os::unix::fs::PermissionsExt;
+-
+-    #[tokio::test]
+-    async fn mcp_injection_wrapper_preserves_argv_and_is_private() {
+-        let fixture = tempfile::tempdir().unwrap();
+-        let fake = fixture.path().join("pi with spaces");
+-        std::fs::write(&fake, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").unwrap();
+-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o700)).unwrap();
+-        let mut cmd = Command::new("sh");
+-        cmd.args([
+-            "-c",
+-            "exec \"$PI_ACP_PI_COMMAND\" --mode rpc --session 'session with spaces'",
+-        ]);
+-        let scratch = configure(
+-            &mut cmd,
+-            &zeron_proto::McpServer {
+-                name: "zeron".into(),
+-                command: "zeron".into(),
+-                args: vec!["mcp".into()],
+-                env: Default::default(),
+-            },
+-        )
+-        .unwrap();
+-        cmd.env("ZERON_PI_COMMAND", fake);
+-        let output = cmd.output().await.unwrap();
+-        assert!(output.status.success());
+-        let args = String::from_utf8(output.stdout).unwrap();
+-        assert_eq!(
+-            args.lines().collect::<Vec<_>>(),
+-            vec![
+-                "--extension",
+-                scratch.path().join("zeron-mcp.mjs").to_str().unwrap(),
+-                "--mode",
+-                "rpc",
+-                "--session",
+-                "session with spaces",
+-            ]
+-        );
+-        let path = scratch.path().to_path_buf();
+-        drop(scratch);
+-        assert!(!path.exists());
+-    }
+-}
+diff --git a/crates/harness/src/adapter_install.rs b/crates/harness/src/adapter_install.rs
+index 7f2dbb7..4187784 100644
+--- a/crates/harness/src/adapter_install.rs
++++ b/crates/harness/src/adapter_install.rs
+@@ -620,10 +620,10 @@ mod tests {
+         assert_eq!(pin.version, "1.1.14");
+         assert_eq!(pin.dir_name(), "agentclientprotocol__codex-acp");
+ 
+-        let pin = NpmPin::parse("pi-acp@0.0.33");
+-        assert_eq!(pin.name, "pi-acp");
++        let pin = NpmPin::parse("example-adapter@0.0.33");
++        assert_eq!(pin.name, "example-adapter");
+         assert_eq!(pin.version, "0.0.33");
+-        assert_eq!(pin.dir_name(), "pi-acp");
++        assert_eq!(pin.dir_name(), "example-adapter");
+     }
+ 
+     #[test]
+diff --git a/crates/harness/src/claude/mod.rs b/crates/harness/src/claude/mod.rs
+index 5f9d2b7..9e4d792 100644
+--- a/crates/harness/src/claude/mod.rs
++++ b/crates/harness/src/claude/mod.rs
+@@ -1025,6 +1025,8 @@ fn parse_questions(input: &Value) -> Vec<UserInputQuestion> {
+                 id: uuid::Uuid::new_v4().to_string(),
+                 header: field(["header", "title"]).unwrap_or("Question").into(),
+                 question: field(["question", "prompt"]).unwrap_or("").into(),
++                prefill: None,
++                multiline: false,
+                 multi_select: ["multiSelect", "multi_select"]
+                     .iter()
+                     .find_map(|k| q.get(*k).and_then(Value::as_bool))
+diff --git a/crates/harness/src/codex/mod.rs b/crates/harness/src/codex/mod.rs
+index ebecc91..93ef752 100644
+--- a/crates/harness/src/codex/mod.rs
++++ b/crates/harness/src/codex/mod.rs
+@@ -1818,6 +1818,8 @@ fn user_input_questions(params: &Value) -> Vec<(String, UserInputQuestion)> {
+                             .into(),
+                     })
+                     .collect(),
++                prefill: None,
++                multiline: false,
+                 multi_select: ["multiSelect", "multi_select"]
+                     .iter()
+                     .find_map(|k| q.get(*k).and_then(Value::as_bool))
+@@ -1871,6 +1873,8 @@ fn approval_question(method: &str, params: &Value) -> UserInputQuestion {
+         header,
+         question,
+         options: vec!["Yes".into(), "No".into()],
++        prefill: None,
++        multiline: false,
+         multi_select: false,
+     }
+ }
+diff --git a/crates/harness/src/install.rs b/crates/harness/src/install.rs
+index d488c2d..e0ac3f9 100644
+--- a/crates/harness/src/install.rs
++++ b/crates/harness/src/install.rs
+@@ -185,7 +185,7 @@ pub fn installed(id: HarnessId) -> bool {
+         Codex => crate::CodexHarness::new().installed(),
+         Cursor => crate::CursorHarness::new().installed(),
+         Opencode => crate::OpencodeHarness::new().installed(),
+-        Pi => crate::AcpHarness::pi().installed(),
++        Pi => crate::PiHarness::new().installed(),
+         Grok => crate::AcpHarness::grok().installed(),
+         Hermes => crate::AcpHarness::hermes().installed(),
+         Devin => crate::AcpHarness::devin().installed(),
+diff --git a/crates/harness/src/lib.rs b/crates/harness/src/lib.rs
+index 8d92aee..acefa20 100644
+--- a/crates/harness/src/lib.rs
++++ b/crates/harness/src/lib.rs
+@@ -6,8 +6,8 @@
+ //! ([`CursorHarness`]), and opencode over its own HTTP/SSE server protocol
+ //! ([`OpencodeHarness`] — what the opencode desktop app speaks). The shared
+ //! [`AcpHarness`] remains ONLY for agents built ground-up on ACP — Devin
+-//! (`devin acp`), Grok (`grok agent stdio`) and Hermes (`hermes acp`) — plus
+-//! pi via the community `pi-acp` adapter until a native driver exists.
++//! (`devin acp`), Grok (`grok agent stdio`) Hermes (`hermes acp`) and
++//! Antigravity. Pi uses native JSONL RPC ([`PiHarness`]).
+ //! Adapter-mediated ACP for claude/codex/cursor was retired — and opencode's
+ //! ACP layer with it: the adapters held prompt turns open for background
+ //! work the CLIs themselves settle eagerly (and opencode's settles on the
+@@ -184,6 +184,7 @@ pub(crate) mod jsonrpc;
+ pub mod mock;
+ mod model_context;
+ pub mod opencode;
++pub mod pi;
+ pub mod process;
+ mod scratch;
+ pub mod shell_env;
+@@ -390,6 +391,7 @@ pub use claude::ClaudeHarness;
+ pub use codex::CodexHarness;
+ pub use cursor::CursorHarness;
+ pub use opencode::OpencodeHarness;
++pub use pi::PiHarness;
+ 
+ // ---------------------------------------------------------------------------
+ // Child lifecycle (shared by the codex and ACP harnesses)
+diff --git a/crates/harness/src/mock.rs b/crates/harness/src/mock.rs
+index b980ef9..590154b 100644
+--- a/crates/harness/src/mock.rs
++++ b/crates/harness/src/mock.rs
+@@ -28,6 +28,8 @@ fn question_script() -> Vec<UserInputQuestion> {
+                 "Event-driven fold with coalesced commits".into(),
+                 "Hybrid: event-driven with a polling fallback".into(),
+             ],
++            prefill: None,
++            multiline: false,
+             multi_select: false,
+         },
+         UserInputQuestion {
+@@ -39,6 +41,8 @@ fn question_script() -> Vec<UserInputQuestion> {
+                 "End-to-end (two-device)".into(),
+                 "Golden screenshots".into(),
+             ],
++            prefill: None,
++            multiline: false,
+             multi_select: true,
+         },
+     ]
+diff --git a/crates/harness/src/opencode/mod.rs b/crates/harness/src/opencode/mod.rs
+index e60457b..252f6da 100644
+--- a/crates/harness/src/opencode/mod.rs
++++ b/crates/harness/src/opencode/mod.rs
+@@ -3542,6 +3542,8 @@ fn map_questions(props: &Value) -> Vec<UserInputQuestion> {
+                                     .collect()
+                             })
+                             .unwrap_or_default(),
++                        prefill: None,
++                        multiline: false,
+                         multi_select: q.get("multiple").and_then(Value::as_bool).unwrap_or(false),
+                     })
+                 })
+diff --git a/crates/harness/src/pi/PROTOCOL.md b/crates/harness/src/pi/PROTOCOL.md
+new file mode 100644
+index 0000000..eea51f3
+--- /dev/null
++++ b/crates/harness/src/pi/PROTOCOL.md
+@@ -0,0 +1,47 @@
++Pi RPC compatibility contract
++
++The native driver targets Pi >= 0.85.1. Requests and events are JSONL, never
++JSON-RPC. Responses and lifecycle events must retain stdout order.
++
++`prompt` success acknowledges preflight. Normal runs finish at `agent_settled`,
++not `agent_end`; a final error message determines the terminal status after
++retries. Extension commands and input handlers may acknowledge without a run.
++
++Legacy ACK barrier (verified against installed 0.85.1 and inspected 0.87.1):
++after prompt acceptance request `get_state`. In these versions AgentSession's
++`isStreaming` is `_isAgentRunActive`, covering retries/post-run continuations.
++The synchronous path sets it immediately after the preflight callback, before
++another stdin command can execute. A false isStreaming AND false isCompacting
++at this ordered barrier closes a handled prompt (or a run already settled).
++This is NOT polling for idle or a quiet timeout. Process all preceding events
++before the response, and scope barriers to the submitted execution. A future
++`data.disposition` is additive; the state barrier also catches extension-started
++work, which can accompany a handled disposition.
++
++Independent work started later by an extension is a new run (`agent_start`).
++Discovery/startup timeouts diagnose startup only; no active model run is timed
++out for lack of output. Interruption clears queues before aborting.
++
++Steering uses `prompt` with `streamingBehavior: "steer"`. `set_steering_mode`
++persists globally, so Pi's native `all` mode is selected only while neither
++global nor project settings configure a mode.
++Preflight/state barriers remain serialized, but consumption does not gate the
++next submission after `queue_update` confirms an appended steering entry.
++Keep one FIFO delivery record per original input, including duplicate text.
++`message_start` for each consumed user input emits its own `Steered`; neither
++the prompt ACK nor `queue_update` is a consumption receipt. Extension commands
++wait for earlier deliveries, and unqueued/handled inputs block pipelining until
++consumed or settled. An idle barrier must not confirm queued inputs that never
++produced their consumption events.
++
++Sources inspected: Pi dist/core/agent-session.js and dist/modes/rpc/rpc-mode.js
++0.85.1, and upstream commit f07218c4d4bbc12bef056a7058c3dd49dfe41abe.
++
++Session identity is refreshed from every accepted state barrier, including
++extension-driven new/switch/fork operations. Pi defers file creation until an
++assistant message. Only a host-owned empty-session record, checked with
++get_entries (model/thinking changes only) and a second idle get_state, permits
++recreation using --session-id in the same cwd. Any submitted input revokes that
++proof before the write to stdin. Missing history/custom entries never authorize
++recreating the same UUID; an unrestorable session starts a new one with a
++visible "without the previous context" notice, like the other harnesses.
+diff --git a/crates/harness/src/pi/catalog.rs b/crates/harness/src/pi/catalog.rs
+new file mode 100644
+index 0000000..be54aac
+--- /dev/null
++++ b/crates/harness/src/pi/catalog.rs
+@@ -0,0 +1,125 @@
++use super::{Process, normalize::string};
++use crate::HarnessError;
++use serde_json::{Value, json};
++use zeron_proto::{Model, ModelOption, ModelOptionChoice, ReasoningLevel, SlashCommand};
++
++pub(super) fn levels(data: &Value) -> Vec<ReasoningLevel> {
++    data["levels"]
++        .as_array()
++        .into_iter()
++        .flatten()
++        .filter_map(|v| serde_json::from_value(v.clone()).ok())
++        .collect()
++}
++pub(super) async fn models(process: &mut Process) -> Result<Vec<Model>, HarnessError> {
++    let mut backlog = vec![];
++    let data = process
++        .query(json!({"type":"get_available_models"}), &mut backlog)
++        .await?;
++    let mut result = vec![];
++    for model in data["models"].as_array().into_iter().flatten() {
++        let provider = string(model, "provider");
++        let id = string(model, "id");
++        process
++            .query(
++                json!({"type":"set_model","provider":provider,"modelId":id}),
++                &mut backlog,
++            )
++            .await?;
++        let supported = process
++            .query(
++                json!({"type":"get_available_thinking_levels"}),
++                &mut backlog,
++            )
++            .await?;
++        result.push(Model {
++            id: format!("{provider}/{id}"),
++            label: model["name"].as_str().unwrap_or(id).into(),
++            description: Some(provider.into()),
++            reasoning_levels: levels(&supported),
++            options: thinking_option(&supported),
++        });
++        backlog.clear();
++    }
++    Ok(result)
++}
++fn thinking_option(data: &Value) -> Vec<ModelOption> {
++    if !data["levels"]
++        .as_array()
++        .is_some_and(|v| v.iter().any(|s| s == "off"))
++    {
++        return vec![];
++    }
++    vec![ModelOption {
++        id: "pi_thinking".into(),
++        label: "Thinking".into(),
++        default_choice: "auto".into(),
++        choices: vec![
++            ModelOptionChoice {
++                id: "auto".into(),
++                label: "Use reasoning level".into(),
++            },
++            ModelOptionChoice {
++                id: "off".into(),
++                label: "Off".into(),
++            },
++        ],
++    }]
++}
++pub(super) fn commands(data: &Value) -> Vec<SlashCommand> {
++    let mut commands: Vec<_> = data["commands"]
++        .as_array()
++        .into_iter()
++        .flatten()
++        .filter_map(|v| {
++            let name = v["name"].as_str()?;
++            Some(SlashCommand {
++                name: name.into(),
++                description: string(v, "description").into(),
++                input_hint: None,
++            })
++        })
++        .collect();
++    for (name, description) in [
++        ("compact", "Compact context"),
++        ("session", "Session statistics"),
++        ("name", "Set session name"),
++        ("export", "Export session to HTML"),
++        ("autocompact", "Toggle automatic compaction"),
++        ("steering", "Steering queue mode"),
++        ("follow-up", "Follow-up queue mode"),
++    ] {
++        if !commands.iter().any(|c| c.name == name) {
++            commands.push(SlashCommand {
++                name: name.into(),
++                description: description.into(),
++                input_hint: None,
++            });
++        }
++    }
++    commands
++}
++pub(super) fn builtin(text: &str, auto: bool) -> Option<Value> {
++    let text = text.trim();
++    let (name, args) = text.split_once(char::is_whitespace).unwrap_or((text, ""));
++    let args = args.trim();
++    Some(match name {
++        "/compact" => json!({"type":"compact","customInstructions":args}),
++        "/session" => json!({"type":"get_session_stats"}),
++        "/name" => json!({"type":"set_session_name","name":args}),
++        "/export" => {
++            if args.is_empty() {
++                json!({"type":"export_html"})
++            } else {
++                json!({"type":"export_html","outputPath":args})
++            }
++        }
++        "/autocompact" => {
++            json!({"type":"set_auto_compaction","enabled":match args {"on"=>true,"off"=>false,_=>!auto}})
++        }
++        "/steering" if !args.is_empty() => json!({"type":"set_steering_mode","mode":args}),
++        "/follow-up" if !args.is_empty() => json!({"type":"set_follow_up_mode","mode":args}),
++        "/steering" | "/follow-up" => json!({"type":"get_state"}),
++        _ => return None,
++    })
++}
+diff --git a/crates/harness/src/acp/pi_mcp.mjs b/crates/harness/src/pi/mcp.mjs
+similarity index 87%
+rename from crates/harness/src/acp/pi_mcp.mjs
+rename to crates/harness/src/pi/mcp.mjs
+index 8d0ea85..bbb93f2 100644
+--- a/crates/harness/src/acp/pi_mcp.mjs
++++ b/crates/harness/src/pi/mcp.mjs
+@@ -1,7 +1,4 @@
+-// pi-acp 0.0.33 ignores session mcpServers. Loaded only into this run's pi
+-// process via --extension; no project/global settings or packages are changed.
+-// It also reports provider failures, which pi-acp otherwise ends as a silent
+-// end_turn with no output.
++// Per-run Zeron delegation bridge. No global settings or packages are modified.
+ import { spawn } from "node:child_process";
+ import { createInterface } from "node:readline";
+ 
+@@ -87,12 +84,6 @@ export default function (pi) {
+       throw error;
+     }
+   });
+-  pi.on("message_end", (event, ctx) => {
+-    const {message} = event;
+-    if (message?.role === "assistant" && message.stopReason === "error") {
+-      ctx.ui.notify(message.errorMessage || "Pi request failed", "error");
+-    }
+-  });
+   pi.on("session_shutdown", close);
+   process.once("exit", close);
+ }
+diff --git a/crates/harness/src/pi/mcp.rs b/crates/harness/src/pi/mcp.rs
+new file mode 100644
+index 0000000..21bd81d
+--- /dev/null
++++ b/crates/harness/src/pi/mcp.rs
+@@ -0,0 +1,16 @@
++//! Load the existing Zeron delegation tools into this Pi process only.
++use crate::{HarnessError, process::Command, scratch::ScratchDir};
++
++pub(super) fn configure(
++    cmd: &mut Command,
++    config: &zeron_proto::McpServer,
++) -> Result<ScratchDir, HarnessError> {
++    let scratch = ScratchDir::new("pi-mcp")?;
++    let extension = scratch.path().join("zeron-mcp.mjs");
++    std::fs::write(&extension, include_str!("mcp.mjs"))?;
++    cmd.arg("--extension").arg(extension).env(
++        "ZERON_PI_MCP",
++        serde_json::to_string(config).expect("serializable MCP config"),
++    );
++    Ok(scratch)
++}
+diff --git a/crates/harness/src/pi/mod.rs b/crates/harness/src/pi/mod.rs
+new file mode 100644
+index 0000000..d4cb166
+--- /dev/null
++++ b/crates/harness/src/pi/mod.rs
+@@ -0,0 +1,1020

@@ -1,0 +1,898 @@
+62
+# Title
+
+Hello **bold** and *italic* and `code` and ~~gone~~.
+
+77
+Paragraph one
+lazy continuation
+
+Paragraph two with a [link](https://x.dev).
+
+67
+- item one
+- item two
+  - nested a
+  - nested b
+- item three
+
+tail
+
+57
+1. first
+2. second
+
+   loose paragraph in item
+
+3. third
+
+58
+```rust
+fn main() {
+    println!("hi");
+}
+```
+
+after code
+
+35
+intro
+
+```
+unclosed fence streaming
+58
+> quoted line
+> more quote
+>
+> - a list in a quote
+
+plain
+
+46
+| a | b |
+|---|---|
+| 1 | 2 |
+| 3 | 4 |
+
+done
+
+36
+setext candidate
+===
+
+next para
+---
+
+29
+***
+
+text between rules
+
+---
+
+32
+- [x] done task
+- [ ] open task
+
+46
+    indented code line one
+    line two
+
+para
+
+78
+see [it's here](/tmp/2026/Some Folder/it's here.txt) and `[raw](/tmp/a b.md)`
+
+62
+text
+
+```
+[x](/tmp/a b.md)
+```
+
+after [y](file:///tmp/c d.md)
+
+67
+para with <span>inline html</span> inside
+
+<div>
+block html
+</div>
+
+29
+###### deep heading
+
+#### h4
+
+106
+Título 🦀
+
+Intro
+
+- [ ] repetida
+  - [X] repetida
+
+> - [x] citada
+
+```md
+- [ ] literal
+```
+
+188
+"How do we negotiate with machines that won't speak?" someone asked.
+
+Yuki almost laughed. "You don't. You listen to the silence. And you finally understand what it means to be powerless."
+62
+See [docs] for more.
+
+More text.
+
+[docs]: https://example.com
+
+71
+Before [![**alt**](a.png "Title")](next.md) after ![](b.png) ![](b.png)
+56
+PR is updated: https://github.com/zeronsh/comet/pull/31
+
+32
+see https://x.dev/a, then rest.
+
+32
+(docs: https://x.dev/Foo_(bar))
+
+26
+**see https://x.dev now**
+
+26
+foohttps://x.dev is glued
+
+26
+the https:// scheme alone
+
+24
+`https://x.dev` in code
+
+38
+[https://shown.dev](https://real.dev)
+
+57
+[label](https://example.com) and https://example.org/path
+21
+[x](Some Folder/a.md)
+24
+[x](/usr/bin/some thing)
+32
+[x](file://localhost/tmp/a b.md)
+16
+[x](/tmp/a b/c/)
+18
+[x](/tmp/a?b c.md)
+19
+[x](/tmp/../a b.md)
+46
+see [it](</tmp/Some Folder/it's here.txt>) now
+41
+shot ![two](/tmp/pics/two words.png) done
+25
+[x](file:///tmp/a b/c.md)
+69
+see [it](/tmp/Some Folder/it's here.txt) and [web](https://x.dev/a b)
+21
+    [x](/tmp/a b.md)
+
+97
+1. one
+   - a
+     - deep
+       1. deeper
+   - b
+2. two
+
+   ```js
+   let x = 1;
+   ```
+3. three
+
+86
+- item
+
+  ```python
+  def f():
+      return 1
+  ```
+
+- next
+  ~~~
+  tilde fence
+  ~~~
+
+13
+- a
+- b
+
+- c
+
+34
+* tight
+* list
++ new list
++ again
+
+59
+- [ ] todo
+- [x] done
+- [X] Done too
+- [] not a task
+- [ ]
+
+46
+1) paren
+2) list
+
+7. starts at seven
+8. eight
+
+134
+| Left | Center | Right | None |
+|:-----|:------:|------:|------|
+| `a|b` | **b** | c \| d | [l](u) |
+| short |
+| 1 | 2 | 3 | 4 | 5 |
+
+18
+a | b
+--|--
+1 | 2
+
+22
+| only header |
+|---|
+
+48
+| a |
+|---|
+| `code with \| pipe` |
+| x \\| y |
+
+73
+Inline ``code with ` backtick`` and ` `` ` and `` ` `` and ```triple```.
+
+29
+Unclosed `code here and *em*
+
+65
+*a **b** c* **a *b* c** ***abc*** **a*b*c** _a_b_ __a__b__ *a*b*
+
+54
+foo*bar* foo_bar_ *foo bar * ** not ** __ x__ a * b *
+
+37
+~~strike~~ ~one~ ~~~three~~~ a~~b~~c
+
+73
+<b>bold html</b> and <!-- comment --> and <?php x ?> and <![CDATA[ x ]]>
+
+63
+<details>
+<summary>Hi</summary>
+
+markdown *inside*
+
+</details>
+
+42
+<script>
+let a = '**x**';
+</script>
+after
+
+66
+Entities: &amp; &copy; &#35; &#x22; &notanentity; &#0; &#xFFFFFF;
+
+79
+Autolinks <https://example.com/a?b=c> and <mailto:me@x.y> and <me@example.com>
+
+49
+Hard  
+break and soft
+break and backslash\
+break
+
+62
+Heading with trailing hashes ##
+## Real heading ##
+#nospace
+#
+
+34
+> quote
+lazy
+> > nested
+> back
+
+>
+
+32
+```mermaid
+graph TD
+  A-->B
+```
+
+31
+```  rust  extra info
+code
+```
+
+31
+````
+```
+nested fence
+```
+````
+
+26
+Line one
+===
+Line two
+---
+
+7
+para
+-
+
+8
+para
+--
+
+6
+- a
+-
+
+88
+[ref link][r] and [collapsed][] and [r]
+
+[r]: /url "title"
+[collapsed]: </c d> 'single'
+
+32
+\*escaped\* \` \[ \] \\ \# done
+
+37
+tabs	in	text
+	indented code with tab
+
+63
+  - two space list
+    - nested
+
+        indented code in list
+
+40
+Emoji 😀 and ünicode **böld** _ém_
+
+37
+word**bold**word word__notbold__word
+
+82
+[link with `code`](https://a.b) and [**bold link**](x) and [nested [brackets]](y)
+
+39
+![image](i.png) ![alt *em*](j.png 'T')
+
+27
+Text ending with backslash\
+17
+Trailing spaces  
+12
+1. a
+
+
+2. b
+
+9
+- 
+  foo
+
+28
+> ```
+> code in quote
+> ```
+
+40
+| a | b |
+|---|---|
+| 1 | 2 |
+not a row
+
+35
+text
+| a | b |
+|---|---|
+| 1 | 2 |
+
+65
+\!\"\#\$\%\&\'\(\)\*\+\,\-\.\/\:\;\<\=\>\?\@\[\\\]\^\_\`\{\|\}\~
+
+51
+# foo
+## foo
+### foo
+#### foo
+##### foo
+###### foo
+
+41
+    chunk1
+
+    chunk2
+  
+ 
+ 
+    chunk3
+
+38
+<DIV CLASS="foo">
+
+*Markdown*
+
+</DIV>
+
+73
+<style
+  type="text/css">
+h1 {color:red;}
+
+p {color:blue;}
+</style>
+okay
+
+46
+<table>
+
+<tr>
+
+<td>
+Hi
+</td>
+
+</tr>
+
+</table>
+
+31
+    [foo]: /url "title"
+
+[foo]
+
+54
+1.      indented code
+
+   paragraph
+
+       more code
+
+36
+> 1. > Blockquote
+> continued here.
+
+30
+- a
+ - b
+  - c
+   - d
+    - e
+
+63
+[link](/url "title")
+[link](/url 'title')
+[link](/url (title))
+
+31
+[link \[bar][ref]
+
+[ref]: /uri
+
+34
+[Foo
+  bar]: /url
+
+[Baz][Foo bar]
+
+38
+[foo][bar]
+
+[foo]: /url1
+[bar]: /url2
+
+42
+![*foo* bar][]
+
+[*foo* bar]: /url "title"
+
+42
+< a><
+foo><bar/ >
+<foo bar=baz
+bim!bop />
+
+56
+| abc | def |
+| --- | --- |
+| bar |
+| bar | baz | boo |
+
+64
+|Col 1|Col 2|
+|-----|-----|
+|✓    |✓    |
+|✓    |✓    |
+
+191
+| Single | [first\|second] |
+|--|--|
+
+| Double | [first\\|second] |
+|--|--|
+
+| Triple | [first\\\|second] |
+|--|--|
+
+[first\|second]: https://rust-lang.org
+
+[first\\|second]: https://docs.rs
+
+35
+Here I fail to match up ~~tildes~.
+
+43
+[`
+i8
+`](
+../../../std/primitive.i8.html
+)
+
+41
+\[[link text](https://www.google.com/)\]
+
+87
+Lorem ipsum.[^a]
+
+An unordered list before the footnotes:
+* Ipsum
+* Lorem
+
+[^a]: Cool.
+
+66
+**~~_strong strike emphasis_~~** ~~*__strike emphasis strong__*~~
+
+76
+[x] is not a valid link definition, because parens aren't balanced.
+
+[x]: (
+
+51
+- [foo]: test
+bar
+
+> [bar]: test
+[baz]: rstr
+[bar]
+
+56
+[first
+-
+second]: https://example.com
+
+[first
+-
+second]
+
+43
+- [foo]: https://example.com
+'[foo]'
+[foo]
+
+56
+[link]: destination "
+          text          "
+
+[link]
+
+49
+"Hello," said the spider.
+"'Shelob' is my name."
+
+113
+one-
+two--
+three---
+four----
+five-----
+six------
+seven-------
+eight--------
+nine---------
+thirteen-------------.
+
+65
+*> b[t](/tmp/a b.md)![alt](i.png)&amp;---1. ++</a>"2) [ ] : !__![
+60
+😀[t](/tmp/a b.md): > <a href="x">1. !+| a |#:-:"## &#35;	
+145
+`| a |- |---|<[ ] |---|__]('![alt](i.png)http://x.y/z<https://q.r><a href="x"> ![alt](i.png))"'  >![-```"(# _über'😀@---](	😀<https://q.r>__
+97
+``    1`=<https://q.r>~``c&amp;<a href="x"> **<a href="x">über~~&#35;![![alt](i.png)>- &#35;* _)
+171
+![&nope;> 2) 
+&amp;>😀https://a.b/c_(d)
+##     ba![  😀http://x.y/z: [t](/tmp/a b.md):-:https://a.b/c_(d)#<!--===**<!--<<a href="x">:-:</a>* "<a href="x">* &nope;``2) 
+123
+<https://q.r>    </a>[ ]     *](*  [!\+a__| a |-<!--[a)![alt](i.png)word&#35;**>word
+- ><a href="x">[t](/tmp/a b.md)'=:-:-a
+98
+
+
+>``<<-[&amp;-&amp;bca [x] ## 
+~~| a |-<a href="x">[- > 'b~"&amp;<2) :-:- +&amp;<me@x.io>c2) ## 
+179
+b**-->\<a href="x">===&nope;> ***![alt](i.png)<me@x.io>c
+
+: word<me@x.io>![~~
+[ ] > `][t](/tmp/a b.md)|* _---![alt](i.png)http://x.y/z
+
+<me@x.io>['2) ---```😀+https://a.b/c_(d)
+55
+#> wordhttp://x.y/z\![`übera]word*|]>@#!\&amp;!=|1    
+82
+>: 	  *2) * ```[x] 
+
+_1über____<~~~**:-:~~~~~> ](über**<https://q.r>http://x.y/z
+23
+(<-->	]&nope;&amp;~~~__
+91
+# - ''	@'b=(+#```## ![alt](i.png)@|---|
+&nope;+*-
+
+<!--	[b| a |=</a>_: c2) [
+    [~~a\+:-:
+95
+	()    	:-:+:-:=<a href="x">a<*
+
+😀
+	|</a>\!```| a |</a>-&#35;__<a href="x">## "](@](<!--[x] 
+137
+]![alt](i.png)&#35;[t](/tmp/a b.md)``"über: =\|---|<!--&#35;@~~(aüber
+!😀]# <a href="x">](
+[t](/tmp/a b.md)<https://q.r>* 
+
+`word<!--
+92
+* =~~~> ![!<https://q.r>1c<a href="x">(`#<!--&nope;a**2) - <me@x.io>```"
+
+>|---|```	
+&amp;	
+68
+https://a.b/c_(d)@  _'* ____  2) - a#&amp;a"- 1. 
+
+`- 
+
+  ~&nope;:-:
+6
+*===~~
+95
+-->@    1|
+
+|---|2)     !<https://q.r>http://x.y/z``|'    | a |> 
+
+|**-->1-:-:[x]  +=<[x] |---|
+42
+~~	-->
+</a>http://x.y/za__&amp;>*===~</a>
+69
+
+> ---**| a |word* - https://a.b/c_(d)**1.   @_2) -![2) 1>|---|: 😀
+56
+=[-->	![alt](i.png)~~http://x.y/z===~~~b[t](/tmp/a b.md)
+135
+**---# **😀https://a.b/c_(d)``: =|1:-:word===@@http://x.y/z## ``~~~__<me@x.io>=<me@x.io>2) 	~~[ ] <<me@x.io>#
+
+<a href="x">```	-->[	@
+129
+* ![---c|*\](## ![alt](i.png)| a |😀-------#&nope;<a href="x">
+
+!<https://q.r>2) 
+
+<me@x.io>	#
+[ ] <https://q.r>![alt](i.png)  
+95
+[x] )<https://q.r>"<a href="x"><me@x.io>'- [x] [t](/tmp/a b.md)<https://q.r>
+  
+http://x.y/z- 
+98
+<[ ] über    c\[ ] [ ] ~~#[t](/tmp/a b.md)# c!
+* http://x.y/z<me@x.io>c!|## word
+_2) ~"😀1. ](
+153
+@===# https://a.b/c_(d)1<https://q.r>[t](/tmp/a b.md)<a href="x">    | a |1. [x] </a>>
+<~- <!--https://a.b/c_(d)word      ## )\> "http://x.y/z]()[x] 😀
+50
+&amp;  &nope;_*  b|---|	~\__``## > ```&nope;_über
+141
+)~~~:-:-->: ----1[*-->😀)&#35;[t](/tmp/a b.md)-|<a href="x">
+> 😀1. 😀:-:
+!-->über```![alt](i.png)===@[x] <https://q.r>##'- ===`word~~
+41
+=[t](/tmp/a b.md)``(http://x.y/z~~~__# - 
+114
+ *+[x] **=(	_~über- * ---c* ~![<a href="x">    @[<me@x.io>``# -| a |<!--	 - <a href="x">    ](~:-:&#35;über[x]  
+59
+![**)> [x] "---_😀|---|word~~"</a>[t](/tmp/a b.md)> [😀
+20
+_b&nope;</a></a>!## 
+131
+ c-|---|&#35;|---|## word**(__:-:\>  > ```~~=# 2) https://a.b/c_(d)``😀+&#35;[ ] [t](/tmp/a b.md)| a |[x] <me@x.io>> # ===> |---|
+132
+word| a |[x] |---|*<https://q.r>**``)~~~1. > <https://q.r>``: +1. "-->##  ~~~!<https://q.r>    *</a>"=#  --> ![alt](i.png)*word```![
+86
+1. ```a@<a href="x">2) _über_http://x.y/z>über&#35;😀\']'</a>	# _[ ] | a |~<'
+
+===
+12
+word:-:1. (_
+40
+<https://q.r>a1![*<https://q.r>-@====)> 
+150
+&#35;b~~http://x.y/z</a>https://a.b/c_(d)b=@  ---: @~~:-:  |---|<me@x.io>~~~[ '# ~~~</a>1```~\http://x.y/z<a href="x">
+
+</a>[ ] |1
+
+- |---|=word😀](
+115
+https://a.b/c_(d)[===~~![1
+- [t](/tmp/a b.md)!=`# ![alt](i.png)[ ] -_
+
+|---|1||---|
+
+_===](| a |'1[t](/tmp/a b.md)
+127
+```\: c  1. |---|(":-:\](=&amp;http://x.y/z&#35;``@## (http://x.y/z</a>	===__(
+1. word-]	😀a|---|<me@x.io>
+
+<!-----über~~# 
+164
+`http://x.y/z[t](/tmp/a b.md)http://x.y/z---- |## ~c[x] ~
+
+|&#35;</a>&amp;&amp;<https://q.r>http://x.y/z#>+- word
+| a |\<me@x.io>b`===|word
+---'1|	<a href="x">```
+35
+1	=`😀~*&nope;<!--<!--*~~~#1. +"-
+47
+
+</a>\+
+) #===| a |<]## > !- &#35;<a href="x">
+55
+:-:``    https://a.b/c_(d)a| a |überhttps://a.b/c_(d)(
+155
+[ ] 12) * # !![ ]     :-:<!--]|---|  -->\#~![alt](i.png)https://a.b/c_(d)[t](/tmp/a b.md): 
+https://a.b/c_(d)<a href="x">😀(]> <a href="x">*   <me@x.io>
+41
+<a href="x">~~~!>)|    &#35;: =# -->``_!#
+22
+1. http://x.y/z][x] )1
+120
+- a=<https://q.r>## 1. ---```]*😀<!--&#35;&#35;&#35;| a |+-:-:]	&nope; |---|#[x] |	2) ># 2) [ ] -->http://x.y/z==='**=
+65
+&#35;[	a
+1. http://x.y/z    @<!--``!![alt](i.png)`# *2) +![&amp;@
+94
+](-|- '===+: >	-->2) '``!a```* c(</a>![alt](i.png)aword[`**über## ![alt](i.png)===c&nope; \__
+63
+@~[
+
+&#35;[x] 😀
+
+#- <-->**1. [1. : 1. =- ~~
+
+_
+
+++-<me@x.io>
+63
+<[_#![alt](i.png)~~~[x] >@[x] -  @===	
+_(&nope;über
+
+[2) </a>
+39
+* - -
+übera=![__@<https://q.r>2) &amp;
+74
+
+=
+*
+* ![alt](i.png)
+	~~![alt](i.png)https://a.b/c_(d)![alt](i.png)- ``
+94
+<!--<https://q.r>b===
+===- _
+~~
+<!-- !```* <https://q.r>](#[ ] <-http://x.y/z&#35;&nope;😀<
+45
+http://x.y/z](| a |word![alt](i.png)]>=~~~(@1
+98
+![-->## 	    #https://a.b/c_(d)---&amp;](+* * ``word1`>1. (https://a.b/c_(d)=c[* https://a.b/c_(d)
+30
+
+
+=~~über+`<a href="x">```
+
+	
+126
+ <me@x.io>#~~~  
+2) )|---|~~~@&#35;http://x.y/z&amp;: __<https://q.r>``````
+
+[t](/tmp/a b.md): &nope;~~~> </a>1. :-:<me@x.io>]
+38
+**</a>b)> ---<me@x.io>    ## 1. über[
+114
+---[&#35;---[t](/tmp/a b.md)@__<https://q.r><!--> ~~~!&#35;
+wordword<me@x.io>-->
+
+*-'c@ +
+~|    &#35;=
+# : ](__
+58
+@## * <[t](/tmp/a b.md)über===+a```[x] -#2) 
+| a |*#[ ] !
+69
+ `* )-->"* _------
+
+|http://x.y/z~~*
+)<!--*- __word&#35;:-:[ ] _: *	
+32
+``**word* ``<a href="x">```|---|
+132
+**|&#35;https://a.b/c_(d) -http://x.y/z_"word(*     a😀~~  \<[ ] ---@über**-->[![![alt](i.png)1# https://a.b/c_(d)](```@=|---|~~~
+98
+  | a |)    _😀b=![*</a>~~2) 'https://a.b/c_(d)[**<https://q.r>![alt](i.png)]](<!--| a |&amp;![+
+118
+""](c====<me@x.io>|:-:<me@x.io>=</a>``+!* https://a.b/c_(d)1: !http://x.y/zhttps://a.b/c_(d)über~~~>~:-:1<a href="x">
+104
+<https://q.r>http://x.y/z===<!--[x] ```-<me@x.io>b![	&nope;`~~~#<https://q.r>\*``[x] **)__~~@-![ : 	    
+72
+=a===|<a href="x">2) <__~<a href="x"><me@x.io>![alt](i.png)
+_[x] ~~~---+
+92
+[x] > [t](/tmp/a b.md)---===http://x.y/z[t](/tmp/a b.md)]([x] 11. > https://a.b/c_(d)
+[ ] #
+116
+    :-:https://a.b/c_(d)=\:-:<me@x.io>[t](/tmp/a b.md)#: ````a## word)[t](/tmp/a b.md)[ ] * #+):-:1~~~ :-:[x] =<!--_
+89
+</a>![alt](i.png)](c😀<<!--| a |# ![alt](i.png)[ ] über_```|
+~~<<!--+>:-:</a>+😀__](
+37
+😀
+# =b2) =: 
+
+c# ~#[x] > &#35;2) 
+42
+  `"| a |-``https://a.b/c_(d)=<über&amp;*
+50
+~
+)<a href="x"><!--über<!--](|![alt](i.png)](\- 
+28
+``[t](/tmp/a b.md)a<me@x.io>
+99
+&#35;# *-
+<a href="x">]]__<a href="x">    2) 😀===cüber&amp;__    ![![alt](i.png)#<https://q.r>
+48
+1&amp;```-->=</a>\über-->&amp;```**
+</a>)__``b]
+119
+[ ] * | a |__<!--b=https://a.b/c_(d)
+
+\~~~<me@x.io>)c>2) !<!--|[t](/tmp/a b.md)
+]
+``b|b    `=	>https://a.b/c_(d)-``](|
+30
+`: ~")word~~~~~+===[ ] 😀~~~

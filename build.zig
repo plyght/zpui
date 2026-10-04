@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
     addLinuxPlatform(b, target, optimize, zpui);
     addMacPlatform(b, target, optimize, zpui);
     addZeronSyntax(b, target, optimize, test_step);
+    addZeronMarkdownDiff(b, target, optimize, test_step);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -372,4 +373,27 @@ fn addZeronSyntax(
     const run = b.addRunArtifact(b.addTest(.{ .root_module = syntax }));
     test_step.dependOn(&run.step);
     b.step("syntax-test", "Run only the zeron_syntax tests").dependOn(&run.step);
+}
+
+/// zeron markdown (apps/zeron/src/markdown: pulldown-cmark 0.12 port, block
+/// model, incremental reparse, streaming mend) and diff (apps/zeron/src/diff:
+/// unified patch parser, `similar` Myers/Patience port) modules + their
+/// parity tests.
+fn addZeronMarkdownDiff(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    test_step: *std.Build.Step,
+) void {
+    inline for (.{
+        .{ "zeron_markdown", "apps/zeron/src/markdown/root.zig" },
+        .{ "zeron_diff", "apps/zeron/src/diff/root.zig" },
+    }) |m| {
+        const mod = b.addModule(m[0], .{
+            .root_source_file = b.path(m[1]),
+            .target = target,
+            .optimize = optimize,
+        });
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .name = m[0], .root_module = mod })).step);
+    }
 }
