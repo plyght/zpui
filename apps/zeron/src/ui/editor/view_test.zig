@@ -150,7 +150,7 @@ test "loads, edits with auto-indent, undoes and saves through the hash guard" {
         try testing.expectEqualStrings("fn main() {\n    let a = 1;\n    b();\n}\n", t);
     }
     try testing.expect(h.ed.read(h.app).hasUnsavedChanges());
-    h.key("ctrl-s");
+    h.key("secondary-s");
     try testing.expect(!h.ed.read(h.app).hasUnsavedChanges());
     {
         const d = try h.disk("src/main.rs");
@@ -158,7 +158,7 @@ test "loads, edits with auto-indent, undoes and saves through the hash guard" {
         try testing.expectEqualStrings("fn main() {\n    let a = 1;\n    b();\n}\n", d);
     }
     // Undo back past the save marks the buffer dirty again.
-    h.key("ctrl-z");
+    h.key("secondary-z");
     try testing.expect(h.ed.read(h.app).hasUnsavedChanges());
 }
 
@@ -169,7 +169,7 @@ test "a stale hash surfaces a save conflict and keeps the buffer" {
     h.typeText("x");
     // Someone else rewrites the file.
     try h.tmp.dir.writeFile(testing.io, .{ .sub_path = "a.txt", .data = "theirs\n" });
-    h.key("ctrl-s");
+    h.key("secondary-s");
     const phase = h.ed.read(h.app).phase;
     try testing.expect(phase == .conflict or phase == .externally_modified);
     const t = try h.text();
@@ -181,7 +181,7 @@ test "find selects matches and replace all is one undo step" {
     var h = try Harness.init("b.txt", "alpha beta\nalpha gamma\n");
     defer h.deinit();
     h.focus();
-    h.key("ctrl-f");
+    h.key("secondary-f");
     try testing.expect(h.ed.read(h.app).find_open);
     h.typeText("alpha");
     {
@@ -205,7 +205,7 @@ test "soft wrap and read-only large file" {
     const ed = h.ed.read(h.app);
     try testing.expectEqual(@as(usize, 20001), ed.core.buffer.lineCount());
     h.focus();
-    h.key("ctrl-end");
+    h.key("secondary-end");
     try testing.expectEqual(h.ed.read(h.app).core.len(), h.ed.read(h.app).core.cursor());
     const Fx = struct {
         fn f(e: *FileEditor, cx: *Context(FileEditor)) void {
@@ -243,7 +243,7 @@ test "external change on a dirty buffer: banner, Keep Editing, then save overwri
     h.tw().click(390, 54);
     h.settle();
     try testing.expectEqual(view.Phase.ready, h.ed.read(h.app).phase);
-    h.key("ctrl-s");
+    h.key("secondary-s");
     const d = try h.disk("c.txt");
     defer testing.allocator.free(d);
     try testing.expectEqualStrings("xbase\n", d);
