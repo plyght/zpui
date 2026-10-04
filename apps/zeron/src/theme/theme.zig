@@ -225,6 +225,9 @@ pub const Selection = struct {
     wallpaper_color: ?model.Color = null,
 };
 
+/// Liquid Glass tint strength (main.zig reads ZERON_GLASS_TINT).
+pub var glass_tint_strength: f32 = 0.22;
+
 pub const Theme = struct {
     /// Which appearance these tokens were built for.
     appearance: Appearance,
@@ -609,6 +612,14 @@ pub const Theme = struct {
 
     /// [liquid-glass] Chrome and floating surfaces use native Liquid Glass instead of
     /// in-scene frost (implies `isFrost`, whose token math stays in effect).
+    /// Liquid Glass tint: the theme's shell surface, light enough to stay glass (macOS 27
+    /// renders near-opaque tints solid). `ZERON_GLASS_TINT` overrides the strength
+    /// (0 disables, default 0.22).
+    pub fn glassTint(self: *const Theme) ?Hsla {
+        if (glass_tint_strength <= 0) return null;
+        return self.surface.alpha(glass_tint_strength);
+    }
+
     pub fn isLiquid(self: Theme) bool {
         return self.liquid_glass and self.isFrost();
     }

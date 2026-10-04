@@ -79,7 +79,7 @@ pub fn call(v: *SettingsView, save: ?TitleSettings, cx: *Context(SettingsView)) 
     const res = if (save) |s|
         model.EngineState.request(eng, cx, SettingsView, cx.entityId(), .SetTitleSettings, s, onReply)
     else
-        model.EngineState.request(eng, cx, SettingsView, cx.entityId(), .GetTitleSettings, .{}, onReply);
+        model.EngineState.request(eng, cx, SettingsView, cx.entityId(), .GetTitleSettings, {}, onReply);
     res catch |err| {
         if (err == error.NotConnected) {
             // No engine (yet): show the default choice; the next open retries.

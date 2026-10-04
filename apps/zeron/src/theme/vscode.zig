@@ -608,7 +608,7 @@ fn parseSemanticStyle(v: json.Value) SemanticStyle {
 // ---- compile -------------------------------------------------------------------------------
 
 /// Detect and compile a single VS Code theme file or an extension package.
-pub fn compileSource(gpa: Allocator, io: Io, path_in: []const u8, options: CompileOptions, diag: *Diagnostic) Error!Owned(SourceCompilation) {
+pub fn compileSource(gpa: Allocator, io: Io, path_in: []const u8, options_in: CompileOptions, diag: *Diagnostic) Error!Owned(SourceCompilation) {
     const arena = try gpa.create(std.heap.ArenaAllocator);
     arena.* = .init(gpa);
     errdefer {
@@ -616,6 +616,14 @@ pub fn compileSource(gpa: Allocator, io: Io, path_in: []const u8, options: Compi
         gpa.destroy(arena);
     }
     const c: Ctx = .{ .a = arena.allocator(), .io = io, .diag = diag };
+    // The compilation owns everything it references (ids, names, provenance).
+    const options: CompileOptions = .{
+        .family_id = try c.a.dupe(u8, options_in.family_id),
+        .family_name = try c.a.dupe(u8, options_in.family_name),
+        .source_url = try c.a.dupe(u8, options_in.source_url),
+        .revision = try c.a.dupe(u8, options_in.revision),
+        .license = try c.a.dupe(u8, options_in.license),
+    };
     const path = try canonicalize(c, path_in);
     const package_json: ?[]const u8 = if (isDir(c, path)) blk: {
         const candidate = try std.fs.path.join(c.a, &.{ path, "package.json" });

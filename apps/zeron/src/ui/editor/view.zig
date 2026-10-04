@@ -93,6 +93,9 @@ pub const Phase = enum {
 
 pub const Options = struct {
     soft_wrap: bool = false,
+    /// Settings → Files → Autosave (`files_autosave_enabled` / `_delay_ms`).
+    autosave: bool = false,
+    autosave_delay_ms: u64 = 900,
     /// Force read-only (preview surfaces).
     read_only: bool = false,
     show_header: bool = true,
@@ -135,6 +138,9 @@ pub const FileEditor = struct {
     highlights: hl.Highlights,
     highlight_task: Task(hl.HighlightOutcome) = .none,
     rehighlight_timer: Task(void) = .none,
+    /// The pending autosave and the edit version it was scheduled for.
+    autosave_timer: Task(void) = .none,
+    autosave_version: u64 = 0,
     highlightable: bool = false,
     max_line_bytes: usize = 0,
     line_edits: std.ArrayList(core_mod.LineEdit) = .empty,
@@ -222,6 +228,7 @@ pub const FileEditor = struct {
         if (self.goto_sub) |*s| s.deinit();
         self.highlight_task.cancel();
         self.rehighlight_timer.cancel();
+        self.autosave_timer.cancel();
         self.drag_task.cancel();
         self.blink_task.cancel();
         self.files.release(app);
@@ -615,6 +622,38 @@ pub const FileEditor = struct {
         self.scheduleHighlight(hl.rehighlight_delay_ms, cx);
     }
 
+    /// `can_autosave`: savable and plainly ready (no conflict / failure / in-flight save).
+    fn canAutosave(self: *const FileEditor) bool {
+        return self.canSave() and self.phase == .ready and self.saving_version == null;
+    }
+
+    /// `schedule_autosave`: save `autosave_delay_ms` after the last edit,
+    /// only if nothing changed in between and the document can still autosave.
+    fn scheduleAutosave(self: *FileEditor, cx: *Context(FileEditor)) void {
+        self.autosave_timer.cancel();
+        self.autosave_timer = .none;
+        if (!self.opts.autosave or !self.canAutosave() or !self.core.isDirty()) return;
+        self.autosave_version = self.core.currentVersion();
+        self.autosave_timer = cx.timer(self.opts.autosave_delay_ms * std.time.ns_per_ms, onAutosaveTimer) catch .none;
+    }
+
+    fn onAutosaveTimer(self: *FileEditor, cx: *Context(FileEditor)) void {
+        self.autosave_timer.detach();
+        self.autosave_timer = .none;
+        const still_current = self.opts.autosave and self.canAutosave() and self.core.currentVersion() == self.autosave_version;
+        if (still_current) self.startSave(cx);
+    }
+
+    /// Settings → Files changed (`set_autosave` / delay) for an open editor.
+    pub fn setAutosave(self: *FileEditor, enabled: bool, delay_ms: u64, cx: *Context(FileEditor)) void {
+        self.opts.autosave = enabled;
+        self.opts.autosave_delay_ms = delay_ms;
+        if (!enabled) {
+            self.autosave_timer.cancel();
+            self.autosave_timer = .none;
+        } else self.scheduleAutosave(cx);
+    }
+
     fn scheduleHighlight(self: *FileEditor, delay_ms: u64, cx: *Context(FileEditor)) void {
         if (!self.highlightable) return;
         self.rehighlight_timer.cancel();
@@ -654,9 +693,8 @@ pub const FileEditor = struct {
     }
 
     fn afterEdit(self: *FileEditor, cx: *Context(FileEditor)) void {
-        const was_dirty = self.core.isDirty();
-        _ = was_dirty;
         self.syncLineEdits(cx);
+        self.scheduleAutosave(cx);
         self.reveal_cursor = true;
         self.blink_anchor = self.now(cx);
         self.context_menu = null;

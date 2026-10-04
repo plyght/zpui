@@ -230,6 +230,8 @@ pub const RightPane = struct {
     default_open: bool = false,
     /// The window hosting the pane (browser new-tab requests).
     window_id: ?zpui.WindowId = null,
+    /// Settings → Files (autosave, word wrap, show all) follow live.
+    settings_sub: ?zpui.Subscription = null,
 
     pub const Events = .{ SurfacesEmptied, OpenExplorer, AddToChat, SideChatError };
 
@@ -240,7 +242,55 @@ pub const RightPane = struct {
             .fixtures = fixtures,
             .strip_scroll = zpui.ScrollHandle.init(cx.gpa()),
             .default_open = default_open,
+            .settings_sub = cx.observeGlobal(model.SettingsStore, onSettingsChanged) catch null,
         };
+    }
+
+    // ---- Settings → Files ------------------------------------------------------------
+
+    fn filesSettings(cx: anytype) model.UiSettings {
+        const s = model.settings_store.current(if (@TypeOf(cx) == *App) cx else cx.app) orelse return .{};
+        return s.*;
+    }
+
+    /// New editors open with the files defaults (`files_word_wrap`, autosave).
+    fn editorOptions(cx: anytype) editor.view.Options {
+        const s = filesSettings(cx);
+        return .{ .soft_wrap = s.filesWordWrap, .autosave = s.filesAutosaveEnabled, .autosave_delay_ms = s.filesAutosaveDelayMs };
+    }
+
+    /// Push the live files settings into every open editor and explorer.
+    fn onSettingsChanged(self: *RightPane, cx: *Context(RightPane)) void {
+        const s = filesSettings(cx);
+        var it = self.chats.valueIterator();
+        while (it.next()) |t| {
+            for (t.tabs.items) |tab| if (tab.surface == .file) {
+                const ed = tab.surface.file;
+                ed.update(cx, editor.FileEditor.setSoftWrap, .{s.filesWordWrap});
+                ed.update(cx, editor.FileEditor.setAutosave, .{ s.filesAutosaveEnabled, s.filesAutosaveDelayMs });
+            };
+            if (t.explorer) |e| e.update(cx, files.FilesPanel.setShowAllFiles, .{s.filesShowAll});
+        }
+    }
+
+    /// An editor's own word-wrap toggle is the global files default (`set_files_word_wrap`).
+    fn onEditorWrap(_: *RightPane, _: Entity(editor.FileEditor), ev: *const editor.view.WordWrapChanged, cx: *Context(RightPane)) void {
+        const Set = struct {
+            fn f(on: bool, s: *model.UiSettings, _: std.mem.Allocator) void {
+                s.filesWordWrap = on;
+            }
+        };
+        _ = model.settings_store.update(cx.app, .debounced, ev.enabled, Set.f);
+    }
+
+    /// The explorer's eye toggle is the global "show all files" (`set_files_show_all`).
+    fn onExplorerShowAll(_: *RightPane, _: Entity(files.FilesPanel), ev: *const files.panel.ShowAllFilesChanged, cx: *Context(RightPane)) void {
+        const Set = struct {
+            fn f(on: bool, s: *model.UiSettings, _: std.mem.Allocator) void {
+                s.filesShowAll = on;
+            }
+        };
+        _ = model.settings_store.update(cx.app, .debounced, ev.show_all, Set.f);
     }
 
     pub fn deinit(self: *RightPane, app: *App) void {
@@ -250,6 +300,7 @@ pub const RightPane = struct {
             self.gpa.free(e.key_ptr.*);
         }
         self.chats.deinit(self.gpa);
+        if (self.settings_sub) |*sub| sub.deinit();
         self.strip_scroll.release();
         self.state.release(app);
     }
@@ -424,9 +475,10 @@ pub const RightPane = struct {
         const t = self.current(cx) orelse return null;
         if (t.explorer) |e| return e;
         const f = self.filesClient(cx) orelse return null;
-        const e = cx.newWith(files.FilesPanel, files.FilesPanel.init, .{ f, files.panel.Options{} }) catch return null;
+        const e = cx.newWith(files.FilesPanel, files.FilesPanel.init, .{ f, files.panel.Options{ .show_all_files = filesSettings(cx).filesShowAll } }) catch return null;
         t.explorer = e;
         t.explorer_sub = cx.subscribe(e, onExplorerOpenFile) catch null;
+        if (cx.subscribe(e, onExplorerShowAll)) |sub| t.explorer_subs.add(self.gpa, sub) catch {} else |_| {}
         surfaces_glue.subscribeExplorer(self, t, e, cx);
         return e;
     }
@@ -481,13 +533,16 @@ pub const RightPane = struct {
             return;
         };
         const f = self.filesClient(cx) orelse return;
-        const wrap = if (model.settings_store.current(cx.app)) |st| st.diffWrap else false;
-        const ed = cx.newWith(editor.FileEditor, editor.FileEditor.init, .{ f, path, editor.view.Options{ .soft_wrap = wrap } }) catch return;
+        const ed = cx.newWith(editor.FileEditor, editor.FileEditor.init, .{ f, path, editorOptions(cx) }) catch return;
         const tab = self.push(.{ .file = ed }, cx) orelse return ed.release(cx);
         tab.sub = cx.subscribe(ed, onEditorReveal) catch null;
         if (cx.subscribe(ed, onEditorState)) |sub| {
             var s2 = sub;
             s2.detach();
+        } else |_| {}
+        if (cx.subscribe(ed, onEditorWrap)) |sub| {
+            var s3 = sub;
+            s3.detach();
         } else |_| {}
         if (self.peek(cx)) |t| if (t.explorer) |e| e.update(cx, files.FilesPanel.revealFile, .{path});
     }

@@ -445,3 +445,146 @@ test "Escape closes the import dialog before Settings" {
     try testing.expect(v.read(h.app).import == null);
     try testing.expect(h.view() != null);
 }
+
+const accounts = @import("accounts.zig");
+const engine_state = model.engine_state;
+
+var sunk: std.ArrayList(u8) = .empty;
+
+fn sink(method: @import("zeron_engine").Method, params: []const u8) void {
+    sunk.print(gpa, "{s} {s}\n", .{ method.name(), params }) catch {};
+}
+
+fn deliver(v: *SettingsView, comptime f: anytype, text: []const u8, cx: *zpui.Context(SettingsView)) void {
+    var parsed = std.json.parseFromSlice(std.json.Value, gpa, text, .{}) catch unreachable;
+    defer parsed.deinit();
+    f(v, .{ .ok = parsed.value }, cx);
+}
+
+fn deliverErr(v: *SettingsView, comptime f: anytype, msg: []const u8, cx: *zpui.Context(SettingsView)) void {
+    f(v, .{ .err = .{ .kind = error.Remote, .message = msg } }, cx);
+}
+
+fn expandHarness(v: *SettingsView, h: @import("zeron_engine").protocol.HarnessId, cx: *zpui.Context(SettingsView)) void {
+    v.expanded_harness = h;
+    cx.notify();
+}
+
+fn switchAccount(v: *SettingsView, id: []const u8, cx: *zpui.Context(SettingsView)) void {
+    accounts.accountAction(v, true, id, cx);
+}
+
+fn startLogin(v: *SettingsView, cx: *zpui.Context(SettingsView)) void {
+    accounts.startLogin(v, .@"claude-code", null, cx);
+}
+
+const two_accounts =
+    \\{ "accounts": [
+    \\  { "id": "a1", "harness": "claude-code", "email": "ada@example.com", "planLabel": "Plus", "active": true, "switchable": true,
+    \\    "usageWindows": [ { "label": "5h", "usedFraction": 0.42, "resetsAt": "2026-10-04T15:00:00Z" }, { "label": "Weekly", "usedFraction": 0.97, "resetsAt": null } ] },
+    \\  { "id": "a2", "harness": "claude-code", "email": "bob@example.com", "active": false, "switchable": true }
+    \\], "warnings": [] }
+;
+
+test "Accounts: expanding a provider lists its logins; Switch is optimistic and RPC-backed; sign-in polls to done" {
+    var h = try Harness.init();
+    defer h.deinit();
+    defer {
+        engine_state.test_sink = null;
+        sunk.clearAndFree(gpa);
+    }
+    engine_state.test_sink = sink;
+    const v = h.openSettings(.harnesses);
+    v.update(h.app, expandHarness, .{.@"claude-code"});
+    h.frames(1);
+    try testing.expect(std.mem.indexOf(u8, sunk.items, "ListAgentAccounts {\"forceUsage\":true}") != null);
+    v.update(h.app, deliver, .{ accounts.replies.list, two_accounts });
+    h.frames(1);
+    try testing.expect(v.read(h.app).accounts.phase == .ready);
+    try testing.expectEqual(@as(usize, 2), v.read(h.app).accounts.snapshot.?.value.accounts.len);
+
+    // Switch to bob: optimistic, then ActivateAgentAccount with both id spellings.
+    v.update(h.app, switchAccount, .{"a2"});
+    const rows = v.read(h.app).accounts.snapshot.?.value.accounts;
+    try testing.expect(!rows[0].active and rows[1].active);
+    try testing.expect(std.mem.indexOf(u8, sunk.items, "ActivateAgentAccount {\"id\":\"a2\",\"accountId\":\"a2\",\"harness\":\"claude-code\"}") != null);
+    // A refusal restores the previous list and shows the reason.
+    v.update(h.app, deliverErr, .{ accounts.replies.action, "Keychain locked" });
+    try testing.expect(v.read(h.app).accounts.snapshot.?.value.accounts[0].active);
+    try testing.expectEqualStrings("Keychain locked", v.read(h.app).accounts.err.?);
+
+    // Sign in: StartAgentLogin → browser poll → done reloads the list.
+    v.update(h.app, startLogin, .{});
+    try testing.expect(std.mem.indexOf(u8, sunk.items, "StartAgentLogin {\"harness\":\"claude-code\"}") != null);
+    v.update(h.app, deliver, .{ accounts.replies.start, "{\"loginId\":\"L1\",\"url\":\"https://auth.openai.com/x\",\"mode\":\"browser\"}" });
+    try testing.expectEqualStrings("L1", v.read(h.app).accounts.login.?.login_id.?);
+    h.app.advanceClock(1600 * std.time.ns_per_ms);
+    h.app.runUntilParked();
+    try testing.expect(std.mem.indexOf(u8, sunk.items, "PollAgentLogin {\"loginId\":\"L1\"}") != null);
+    v.update(h.app, deliver, .{ accounts.replies.poll, "{\"status\":\"pending\",\"message\":\"Waiting on Google\"}" });
+    try testing.expectEqualStrings("Waiting on Google", v.read(h.app).accounts.login.?.status());
+    v.update(h.app, deliver, .{ accounts.replies.poll, "{\"status\":\"done\"}" });
+    try testing.expect(v.read(h.app).accounts.login == null);
+    // A failed sign-in keeps the dialog with the reason; Escape cancels it before Settings.
+    v.update(h.app, startLogin, .{});
+    v.update(h.app, deliverErr, .{ accounts.replies.start, "no browser" });
+    try testing.expectEqualStrings("Couldn't start the sign-in: no browser", v.read(h.app).accounts.login.?.step.failed);
+    h.frames(1);
+    h.tw().typeKey("escape");
+    h.app.runUntilParked();
+    try testing.expect(v.read(h.app).accounts.login == null);
+    try testing.expect(h.view() != null);
+}
+
+test "Providers: Install / Cancel / Update / Check now call the engine" {
+    var h = try Harness.init();
+    defer h.deinit();
+    defer {
+        engine_state.test_sink = null;
+        sunk.clearAndFree(gpa);
+    }
+    engine_state.test_sink = sink;
+    const v = h.openSettings(.harnesses);
+    v.update(h.app, struct {
+        fn f(view: *SettingsView, cx: *zpui.Context(SettingsView)) void {
+            view.installHarness(.cursor, cx);
+            view.cancelInstall(cx);
+            view.applyOrCancelUpdate(.@"claude-code", false, cx);
+            view.applyOrCancelUpdate(.@"claude-code", true, cx);
+            view.checkUpdates(cx);
+        }
+    }.f, .{});
+    for ([_][]const u8{
+        "InstallHarness {\"harness\":\"cursor\"}",
+        "CancelInstall {\"harness\":\"cursor\"}",
+        "ApplyHarnessUpdate {\"harness\":\"claude-code\"}",
+        "CancelHarnessUpdate {\"harness\":\"claude-code\"}",
+        "CheckHarnessUpdates {}",
+    }) |want| {
+        if (std.mem.indexOf(u8, sunk.items, want) == null) std.debug.print("missing {s} in:\n{s}\n", .{ want, sunk.items });
+        try testing.expect(std.mem.indexOf(u8, sunk.items, want) != null);
+    }
+    try testing.expectEqual(@as(?@import("zeron_engine").protocol.HarnessId, .cursor), v.read(h.app).installing);
+    try testing.expect(v.read(h.app).checking_updates);
+}
+
+test "General: thread naming loads and saves through Get/SetTitleSettings; Escape-stops toggle persists" {
+    var h = try Harness.init();
+    defer h.deinit();
+    defer {
+        engine_state.test_sink = null;
+        sunk.clearAndFree(gpa);
+    }
+    engine_state.test_sink = sink;
+    const v = h.openSettings(.general);
+    try testing.expect(std.mem.indexOf(u8, sunk.items, "GetTitleSettings {}") != null);
+    const tn = @import("thread_naming.zig");
+    v.update(h.app, struct {
+        fn f(view: *SettingsView, cx: *zpui.Context(SettingsView)) void {
+            tn.call(view, .{ .harness = .@"claude-code", .model = "claude-haiku-4-5" }, cx);
+        }
+    }.f, .{});
+    try testing.expect(std.mem.indexOf(u8, sunk.items, "SetTitleSettings {\"harness\":\"claude-code\",\"model\":\"claude-haiku-4-5\"}") != null);
+    v.update(h.app, flipToggle, .{select.Toggle.escape_stops});
+    try testing.expect(h.settings().escapeStopsActiveAgent);
+}

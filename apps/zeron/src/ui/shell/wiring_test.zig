@@ -303,8 +303,21 @@ test "transcript file links open the right-pane editor at the line" {
     const tab = t.tabs.items[t.tabs.items.len - 1];
     try testing.expect(tab.surface == .file);
     try testing.expectEqualStrings("src/lib.rs", tab.surface.file.read(h.app).filePath());
-    // Web links still go to the system opener.
+    // Web links: the session Browser by default ("Open web links in Zeron"),
+    // the system opener when that setting is off.
+    const tabs_before = h.tabs().?.tabs.items.len;
     const before = h.app.test_platform.?.opened_urls;
+    md.rich_text.openLink("https://example.com", h.window(), h.app);
+    h.settle();
+    try testing.expectEqual(before, h.app.test_platform.?.opened_urls);
+    try testing.expectEqual(tabs_before + 1, h.tabs().?.tabs.items.len);
+    try testing.expect(h.tabs().?.tabs.items[tabs_before].surface == .browser);
+    const Off = struct {
+        fn f(_: void, s: *model.UiSettings, _: std.mem.Allocator) void {
+            s.openWebLinksInZeron = false;
+        }
+    };
+    _ = model.settings_store.update(h.app, .immediate, {}, Off.f);
     md.rich_text.openLink("https://example.com", h.window(), h.app);
     try testing.expectEqual(before + 1, h.app.test_platform.?.opened_urls);
 }

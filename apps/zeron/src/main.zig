@@ -169,6 +169,8 @@ fn onLaunch(l: *Launch, app: *App) void {
     if (l.environ.get("ZERON_LIQUID_GLASS")) |v| if (std.mem.eql(u8, v, "0")) {
         settings_ui.store.default_liquid_disabled = true;
     };
+    // [liquid-glass] ZERON_GLASS_TINT=<0..1>: theme tint strength on glass (0 = none).
+    if (l.environ.get("ZERON_GLASS_TINT")) |v| zt.theme.glass_tint_strength = std.fmt.parseFloat(f32, v) catch zt.theme.glass_tint_strength;
     if (l.environ.get("ZERON_SIDEBAR_GLASS")) |v| {
         if (std.meta.stringToEnum(shell_mod.SidebarGlassMode, v)) |m| shell_mod.sidebar_glass_mode = m;
     }

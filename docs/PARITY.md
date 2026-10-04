@@ -77,13 +77,13 @@ handlers. Customizable combos come from `KeymapConfig` (`mod` = cmd on macOS, ct
 | `shell::ArchiveSession` | `mod-shift-a` | `ui/shell/wiring.zig` `actArchiveSession` (optimistic + `setChatArchived`, skipped while an overlay owns the keyboard) | ✅ |
 | `shell::OpenModelPicker` | `mod-/` | `ui/shell/wiring.zig` `actOpenModelPicker` → `ComposerView.toggleModelPicker` | ✅ |
 | `shell::SaveFile` | `mod-s` | `ui/shell/wiring.zig` `actSaveFile`: saves the active file tab while the pane is open (`save_active_document`) | ✅ |
-| `shell::RandomWallpaper` | `mod-u` | — | ❌ |
+| `shell::RandomWallpaper` | `mod-u` | `wiring.actRandomWallpaper` | ✅ |
 | File editor bindings (gpui-base input keymap: motions, selection, delete, indent, find/replace, go-to-line, save) | reinstalled by `shell::apply_keymap` after clearing | `keymap.zig` `component_bindings` hook (run first after every clear, like `gpui_base::init`); the shell installs `ui/editor/actions.zig` `bindDefaults` into it, so settings-driven rebuilds keep it | ✅ |
 | `browser::Reload/FocusAddress/NewTab/CloseTab/Back/Forward` | `mod-shift-r`, `mod-l/t/w/[/]` (Browser context) | — | ❌ (no browser) |
 | `zeron::*` (menu verbs) | `cmd-q/h/alt-cmd-h/m/w`, `mod-,` | bound and handled (see §1) | ✅ |
 | Appshot capture (global) | `ctrl-alt-space` / `mod-alt-space` | — | ❌ |
 | Settings → Shortcuts: record, conflict detection, reset, restore defaults, live rebind | `settings/shortcuts.rs` | `ui/settings/shortcuts.zig`, `ui/settings/store.zig` `applyKeymap` | ✅ |
-| Escape stops the active agent (setting) | `composer.rs` | setting stored (`escapeStopsActiveAgent`), no consumer | ❌ |
+| Escape stops the active agent (setting) | `composer.rs` | `wiring.onShellKey` → `ComposerView.escapeStop` | ✅ |
 
 ## 3. Shell, titlebar, gates
 
@@ -222,22 +222,22 @@ handlers. Customizable combos come from `KeymapConfig` (`mod` = cmd on macOS, ct
 | Page / feature | Rust | Zig | Status |
 |---|---|---|---|
 | Full-window settings mode, nav, Back/Escape, page scaffolding, selects, switches, tooltips | `settings.rs`, `settings/widgets.rs` | `ui/settings/view.zig`, `widgets.zig`, `select.zig` | ✅ |
-| General: send key, compact transcript, compact model picker, Escape stops agent | `settings/shortcuts.rs` (general half) | `ui/settings/general.zig` — controls persist; three of four have no runtime consumer (§15) | 🟡 |
-| General → Thread naming (`Get/SetTitleSettings`, model picker in title-bound mode) | `settings/thread_naming.rs` | a one-option stub select ("Session agent"); RPCs unused | 🟡 |
-| Appearance: scheme cards, light/dark variants, accent, glass, fonts, sizes, conversation width | `settings/appearance.rs` | `ui/settings/appearance.zig` | ✅ |
-| Appearance: match wallpaper colors | `settings/wallpaper_colors.rs` | `theme/wallpaper.zig` (needs a wallpaper source, which never gets set) | 🟡 |
-| Appearance: new-thread background image + effects + adjustment dialog | `new_thread_background_*.rs` | "Choose image" button without a listener | ❌ |
-| Appearance: wallpaper folder rotation (`RandomWallpaper`) | `settings/wallpaper.rs` | "Choose folder" without a listener | ❌ |
-| Appearance: theme library / VS Code theme import | `theme_library.rs`, `crates/theme/src/{library,vscode}.rs` | "Add theme" without a listener; importer not ported (`theme/root.zig` TODO) | ❌ |
-| Appearance: reduce motion (on/off/system), pause animations in background | `motion.rs` | stored; zpui reads only the OS preference (`Window.prefersReducedMotion`) | 🟡 |
+| General: send key, compact transcript, compact model picker, Escape stops agent | `settings/shortcuts.rs` (general half) | `ui/settings/general.zig`; Escape-stops drives `wiring.onShellKey` → `ComposerView.escapeStop` (`resolve_shell_escape`). Compact transcript (row folding) and the full (non-compact) model picker are not ported, so those two switches still only persist | 🟡 |
+| General → Thread naming (`Get/SetTitleSettings`, model picker in title-bound mode) | `settings/thread_naming.rs` | `ui/settings/thread_naming.zig`: Get on open, Set on pick / Reset; dropdown = Session agent + title-capable agents' models (`ListModels`), brand chip, error row. A flat model list rather than the composer picker's harness tabs | 🟡 |
+| Appearance: scheme cards, light/dark variants, accent, glass, fonts, sizes, conversation width | `settings/appearance.rs` | `ui/settings/appearance.zig`; searchable installed-font pickers `fonts.zig` over `zpui.text.font_catalog` (CoreText / fontconfig+FreeType, measured fixed width for the terminal, fallback when a family disappears) | ✅ |
+| Appearance: match wallpaper colors | `settings/wallpaper_colors.rs` | `theme/wallpaper.zig` + `ui/background/install.zig` (color extracted on install / backfilled off-thread) | ✅ |
+| Appearance: new-thread background image + effects + adjustment dialog | `new_thread_background_*.rs` | `ui/background/**` (off-thread decode, cover fit, mask, crossfade, 5 effects, managed copies in `new-thread-backgrounds/`), `ui/settings/appearance.zig` (Choose/Replace/Remove/thumbnail/unavailable/error/effect), `file_prompts.zig` (NSOpenPanel / portal), `background_adjust.zig` (Adjust dialog). Pixel-compared with Rust (RMSE < 0.7%, dark/light/halftone) | ✅ |
+| Appearance: wallpaper folder rotation (`RandomWallpaper`) | `settings/wallpaper.rs` | `ui/background/wallpaper.zig` (warm lookahead of 3), Choose folder / Shuffle, mod-u (`wiring.actRandomWallpaper`; no folder → Appearance + folder prompt) | ✅ |
+| Appearance: theme library / VS Code theme import | `theme_library.rs`, `crates/theme/src/{library,vscode}.rs` | `theme/vscode.zig` (JSONC/JSON5, include chains, token files, `.tmTheme` plists, packages, hardening, reports), `theme/library.zig` (serde-compatible `theme-library.json`, backup swap, reload/unlink/duplicate-as-editable/remove), `registry.active()`, `ui/settings/theme_library.zig` (Add-a-theme dialog, Review, rows) | ✅ |
+| Appearance: reduce motion (on/off/system), pause animations in background | `motion.rs` | `ui/settings/motion.zig` sets each window's reduced-motion flag from preference × OS × focus (OS re-read on refocus) | ✅ |
 | Notifications page | `settings/notifications.rs` | `ui/settings/notifications.zig`; consumed by `lifecycle/notify.zig` | ✅ |
 | Voice page (opt-in, model download, microphone, hold-to-dictate) | `dictation/model.rs` | `ui/settings/voice.zig` (switch + recorder only) | 🟡 |
 | Shortcuts page | `settings/shortcuts.rs` | `ui/settings/shortcuts.zig` | ✅ |
-| Providers: harness rows, enable switch (`SetHarnessEnabled`), update policy, check now | `settings/harnesses.rs` | `ui/settings/providers.zig` | 🟡 Install / Cancel install (`InstallHarness`, `CancelInstall`) and Update (`ApplyHarnessUpdate`, the button only sets a local "preparing" override) not wired; device switcher commit is a no-op |
-| Accounts: provider cards, account rows (plan, usage meters, reset), Switch / Forget, shared sign-in dialog (`StartAgentLogin/Poll/Complete/Cancel`) | `settings/accounts.rs` | routed to the Providers page (`.agents` → `providers.render`) | ❌ |
+| Providers: harness rows, enable switch (`SetHarnessEnabled`), update policy, check now | `settings/harnesses.rs` | `ui/settings/providers.zig`: Install / Cancel (`InstallHarness`, `CancelInstall`, "Installing …" in place), Update / Cancel (`ApplyHarnessUpdate`, `CancelHarnessUpdate`), Check now (`CheckHarnessUpdates` reply), error strip | 🟡 device switcher commit (`targetDeviceId`) is still a no-op |
+| Accounts: provider cards, account rows (plan, usage meters, reset), Switch / Forget, shared sign-in dialog (`StartAgentLogin/Poll/Complete/Cancel`) | `settings/accounts.rs` | `ui/settings/accounts.zig`, embedded in the expanded provider like Rust (`.agents` aliases Providers): rows, meters, ⋯ menu, optimistic Switch/Remove, Connect/Add per login option, sign-in dialog (browser poll, paste code, Retry) | ✅ (times shown in UTC like the rest of the Zig app) |
 | Per-agent completion preferences | `settings/completion.rs` | toggles exist in `providers.zig` (`onCompletionToggle`); the composer ignores them | 🟡 |
 | Devices: list, presence, copy id, rename | `settings/devices.rs` | `ui/settings/devices.zig` | ✅ |
-| Files: autosave, delay, word wrap, hidden/ignored | `settings/files.rs` | `ui/settings/files.zig` (persists; editor/explorer don't read the defaults) | 🟡 |
+| Files: autosave, delay, word wrap, hidden/ignored | `settings/files.rs` | `ui/settings/files.zig`; `editor/view.zig` autosave (`schedule_autosave`), `right_pane.zig` applies wrap/autosave/show-all live and writes back the editor/explorer toggles | ✅ |
 | Appshots page | `settings/appshots.rs` | `ui/settings/appshots.zig` (UI only) | 🟡 |
 | Archived sessions + Unarchive | `settings/archived.rs` | `ui/settings/archived.zig` | ✅ |
 
@@ -300,19 +300,15 @@ BeginQueuedMessageEdit RenewQueuedMessageEdit FinishQueuedMessageEdit SearchFile
 
 ## 15. Settings that persist but have no runtime effect
 
-From `model/settings.zig` `UiSettings`, fields with no reader outside `ui/settings/`:
-`windowGeometry`, `compactModelPicker`, `transcriptCompactMode`, `escapeStopsActiveAgent`,
-`skillsInSlashMenu`, `skillCompletionByHarness`, `sidebarGrouped`, `sidebarOrganization`,
-`sidebarSort`, `sidebarSectionsByProfile`, `githubStarBannerDismissed`, `lastSpaceId`,
-`lastProjectActionBySpaceId`, `spaceFilter`, `soundEnabled` (+3 cue flags),
-`notificationsEnabled`, `notificationsBackgroundOnly`, `agentUpdateNotifications`,
-`rightPaneOpen`, `terminalHeight`, `terminalOpen`, `appshotsEnabled`, `appshotSoundEnabled`,
-`appshotDestination`, `dictationEnabled`, `dictationInput`, `codeFencesFitContent`,
-`openWebLinksInZeron`, `filesAutosaveEnabled`, `filesAutosaveDelayMs`, `filesWordWrap`,
-`filesShowAll`, `newThreadComposerBackground`, `newThreadBackgroundEffect`, `wallpaperFolder`,
-`wallpaperSource`, `wallpaperHistory`, `gitHistoryColumnOrder`. Layout fields
-(`sidebarWidth`, `sidebarCollapsed`, `rightPaneWidth`, `filesPanelWidth`) are read at boot but
-never saved.
+Now consumed (settings pass): `escapeStopsActiveAgent`, `reduceMotion`, `pauseAnimationsInBackground`,
+`openWebLinksInZeron` (web links open in the session Browser), `filesAutosaveEnabled`,
+`filesAutosaveDelayMs`, `filesWordWrap`, `filesShowAll`, `newThreadComposerBackground`,
+`newThreadBackgroundEffect`, `wallpaperFolder`, `wallpaperSource`, `wallpaperHistory`, the font
+families (installed fonts, with fallback). Still without a runtime consumer (their features are not
+ported): `compactModelPicker` (no full picker), `transcriptCompactMode` (no compact row folding),
+`skillsInSlashMenu` / `skillCompletionByHarness` in the composer, `appshots*`, `dictation*`,
+`sidebarGrouped`, `sidebarSectionsByProfile`, `githubStarBannerDismissed`, `lastSpaceId`,
+`lastProjectActionBySpaceId`, `terminalHeight`, `terminalOpen`, `gitHistoryColumnOrder`.
 
 ## 16. zpui framework gaps (gpui features zeron uses)
 
@@ -323,7 +319,7 @@ never saved.
 | `on_app_quit` (async teardown) | flush, install-on-quit, engine drain | — | ❌ |
 | `on_window_should_close` veto | unsaved files | platform callback exists; core always returns true | ❌ |
 | `observe_window_bounds`, `window_bounds()`, `displays()` with `uuid()`, `display_id` in options | window geometry restore | `displays` exists; `moved` callback not surfaced; no display uuid | 🟡 |
-| `prompt_for_paths` | attach, wallpaper folder, background image, theme import | Linux portal (in progress, `file_dialog.zig`); macOS NSOpenPanel missing | 🟡 |
+| `prompt_for_paths` | attach, wallpaper folder, background image, theme import | `Platform.promptForPaths`: NSOpenPanel (`mac/file_dialog.zig`), XDG portal (`linux/file_dialog.zig`) | ✅ |
 | `window.prompt` (modal alert) | rare confirmations | — (zeron mostly draws its own dialogs) | ❌ |
 | External file drag-and-drop (`ExternalPaths`, `on_drop`, `drag_over`) | attachments, chat drop zone | macOS window receives drops but `src/window/dispatch.zig` turns them into mouse moves (TODO: payload); Wayland `onDndDrop` is a no-op; no XDND | ❌ |
 | Internal drag-and-drop (`on_drag`, `on_drop`, drag ghosts) | tabs, pins, queue | `div.onDrag/onDrop/onDragMove` | ✅ |

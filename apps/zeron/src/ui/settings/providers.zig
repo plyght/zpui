@@ -12,6 +12,7 @@ const ui = @import("../components/root.zig");
 const w = @import("widgets.zig");
 const select = @import("select.zig");
 const view_mod = @import("view.zig");
+const accounts = @import("accounts.zig");
 
 const SettingsView = view_mod.SettingsView;
 const Theme = ui.Theme;
@@ -232,6 +233,12 @@ fn details(v: *SettingsView, ix: usize, t: *const Theme, d: *const protocol.Harn
             .child(div().flex1().minW0().child(w.rowTitle(t, "Update policy"))
             .child(w.metaLine(t, &.{.{ .text = select.update_policies[sel_ix][2] }})))
             .child(policyTrigger(v, ix, policy, t, cx))));
+    }
+    // Accounts (sign-in providers): the provider's logins and its sign-in flow.
+    if (accounts.signsIn(d.id)) {
+        accounts.ensureFor(v, d.id, cx);
+        const now_s = @import("../shell/prefs.zig").get(cx).now(v.io).secs;
+        col = col.child(accounts.embedded(v, d.id, t, now_s, cx));
     }
     return zpui.intoAnyElement(ui.anim.menuIn(zpui.fmt("agent-details-{d}", .{ix}), col, -2));
 }

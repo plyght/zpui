@@ -42,6 +42,7 @@ const background_adjust = @import("background_adjust.zig");
 const fonts_mod = @import("fonts.zig");
 const thread_naming = @import("thread_naming.zig");
 const theme_library = @import("theme_library.zig");
+const accounts_mod = @import("accounts.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -196,6 +197,8 @@ pub const SettingsView = struct {
     review_entry: ?[]u8 = null,
     /// The last theme-library action failure (owned).
     library_error: ?[]u8 = null,
+    /// Providers → expanded provider → Accounts (`accounts.zig`).
+    accounts: accounts_mod.State = .{},
 
     // ---- archived ----
     unarchived: std.ArrayList([]u8) = .empty,
@@ -237,6 +240,7 @@ pub const SettingsView = struct {
         if (self.import) |*d| d.deinit(self.gpa, app);
         if (self.review_entry) |r| self.gpa.free(r);
         if (self.library_error) |e| self.gpa.free(e);
+        self.accounts.deinit(self.gpa, app);
         if (self.copied) |c| self.gpa.free(c);
         var it = self.device_names.iterator();
         while (it.next()) |e| {
@@ -373,7 +377,7 @@ pub const SettingsView = struct {
             return;
         }
         // Escape closes the import / review dialog before Settings (`dismiss_on_escape`).
-        if (std.mem.eql(u8, key, "escape") and theme_library.dismissOnEscape(self, cx)) {
+        if (std.mem.eql(u8, key, "escape") and (theme_library.dismissOnEscape(self, cx) or accounts_mod.dismissOnEscape(self, cx))) {
             cx.stopPropagation();
             return;
         }
@@ -822,7 +826,7 @@ pub const SettingsView = struct {
     pub fn checkUpdates(self: *SettingsView, cx: *Context(SettingsView)) void {
         self.clearProviderError();
         self.checking_updates = true;
-        model.EngineState.request(self.catalogEngine(cx), cx, SettingsView, cx.entityId(), .CheckHarnessUpdates, .{}, onChecked) catch |err| {
+        model.EngineState.request(self.catalogEngine(cx), cx, SettingsView, cx.entityId(), .CheckHarnessUpdates, {}, onChecked) catch |err| {
             self.checking_updates = false;
             self.setProviderError("{s}", .{if (err == error.NotConnected) "Engine not connected" else @errorName(err)});
         };
@@ -999,6 +1003,7 @@ pub const SettingsView = struct {
         if (background_adjust.render(self, window, cx)) |d| root = root.child(d);
         if (theme_library.importDialog(self, window, cx)) |d| root = root.child(d);
         if (theme_library.reviewDialog(self, window, cx)) |d| root = root.child(d);
+        if (accounts_mod.loginDialog(self, window, cx)) |d| root = root.child(d);
         if (self.animating) window.requestAnimationFrame();
         return root;
     }

@@ -387,7 +387,19 @@ pub fn relativeTo(root: []const u8, path: []const u8) ?[]const u8 {
 
 /// `activate_session_link`: a file link opens in the right pane's editor
 /// (at its line); anything else falls through to the system opener.
-fn openLink(self: *Shell, url: []const u8, _: *Window, handled: *bool, cx: *Ctx) void {
+fn openLink(self: *Shell, url: []const u8, window: *Window, handled: *bool, cx: *Ctx) void {
+    // Web links open in the session Browser when "Open web links in Zeron" is on
+    // (`resolved.action = Internal`); otherwise the OS opens them.
+    if (std.mem.startsWith(u8, url, "http://") or std.mem.startsWith(u8, url, "https://")) {
+        if (!settings_ui.store.current(cx).openWebLinksInZeron) return;
+        if (self.state.read(cx).workspace.read(cx).selected_chat == null) return;
+        handled.* = true;
+        self.setRightOpen(true, cx);
+        var l = self.right_pane.lease(cx);
+        defer l.end();
+        _ = l.value.addBrowser(url, window, &l.cx);
+        return;
+    }
     var buf: [4096]u8 = undefined;
     const link = parseFileLink(&buf, url) orelse return;
     const ws = self.state.read(cx).workspace.read(cx);

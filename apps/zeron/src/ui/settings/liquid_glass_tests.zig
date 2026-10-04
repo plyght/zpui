@@ -220,10 +220,10 @@ test "Liquid Glass sidebar sees the desktop: tint around it, a backdrop hole, ca
     h.app.runUntilParked();
     h.window().drawAndPresent();
     const tw = h.tw();
-    // Floating pane (macOS 26): hole = the glass rect, inset 8.
+    // Default: zeron's original flush column, square corners, made of glass.
     const hole = tw.backdrop_hole orelse return error.NoBackdropHole;
-    try testing.expectEqual(@as(f32, 8), hole.bounds.origin.x);
-    try testing.expectEqual(@as(f32, 8), hole.bounds.origin.y);
+    try testing.expectEqual(@as(f32, 0), hole.bounds.origin.x);
+    try testing.expectEqual(@as(f32, 0), hole.corner_radii[1]);
     try testing.expectEqual(@as(usize, 0), countKind(tw, .sidebar_material));
     // One titlebar container; its capsules are members (no full-width strip).
     try testing.expectEqual(@as(usize, 1), countKind(tw, .container));
@@ -246,12 +246,14 @@ test "Liquid Glass sidebar sees the desktop: tint around it, a backdrop hole, ca
     try testing.expectEqual(@as(usize, 1), countKind(tw, .sidebar_material));
     try testing.expect(tw.backdrop_hole == null);
 
-    // macOS 27: flush pane, square inner corners.
+    // Opt-in floating pane: hole = the glass rect, inset 8.
     shell_mod.sidebar_glass_mode = .glass;
-    h.app.test_platform.?.liquid_glass_revision = 27;
+    const prev_layout = shell_mod.sidebar_layout_override;
+    defer shell_mod.sidebar_layout_override = prev_layout;
+    shell_mod.sidebar_layout_override = .floating;
     h.window().refresh();
     h.window().drawAndPresent();
-    const flush = tw.backdrop_hole orelse return error.NoBackdropHole;
-    try testing.expectEqual(@as(f32, 0), flush.bounds.origin.x);
-    try testing.expectEqual(@as(f32, 0), flush.corner_radii[1]);
+    const floating = tw.backdrop_hole orelse return error.NoBackdropHole;
+    try testing.expectEqual(@as(f32, 8), floating.bounds.origin.x);
+    try testing.expectEqual(@as(f32, 8), floating.bounds.origin.y);
 }

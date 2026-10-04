@@ -128,6 +128,7 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, files_now: f3
     // back to the sidebar seam (the strip brings its own 8px pad).
     const takeover = shell.right_expanded and right_now > 0.5;
     const liquid = theme.isLiquid(); // [liquid-glass] Tahoe capsules around item groups
+    glass_tint = theme.glassTint();
     const row_left = if (takeover)
         @max(sidebar_now - 8, contentStart() - layout.titlebar_identity_gap + plus_inset - 14)
     else
@@ -236,26 +237,30 @@ pub const capsule_pad: f32 = 3;
 const title_pad: f32 = 10;
 /// `NSGlassEffectContainerView.spacing` of the titlebar group.
 pub const capsule_spacing: f32 = 6;
+/// Glass corner radius for titlebar groups: zeron's own control radius, not pills.
+const glass_radius: f32 = layout.chrome_control_radius;
+/// Theme tint for the titlebar glass groups, refreshed each render.
+var glass_tint: ?zpui.Hsla = null;
 /// Extra room between the nav capsule and the title capsule (sidebar collapsed).
 const capsule_clearance: f32 = 8;
 
 /// `child` in a capsule of glass (Liquid Glass), or unchanged.
 fn capsule(liquid: bool, name: []const u8, pad: f32, child: anytype) zpui.AnyElement {
     if (!liquid) return zpui.intoAnyElement(child);
-    return zpui.intoAnyElement(zpui.liquidGlass(name, .{ .shape = .capsule, .interactive = true }, div().flexNone().h(px(capsule_h)).px(px(pad))
+    return zpui.intoAnyElement(zpui.liquidGlass(name, .{ .shape = .{ .rounded = glass_radius }, .interactive = true, .tint = glass_tint }, div().flexNone().h(px(capsule_h)).px(px(pad))
         .flex().flexRow().itemsCenter().child(child)));
 }
 
 /// The session identity in a shrinkable capsule (it truncates like the bare title).
 fn titleCapsule(ident: zpui.Div) zpui.AnyElement {
-    return zpui.intoAnyElement(zpui.liquidGlass("titlebar-title-glass", .{ .shape = .capsule }, div().minW0().overflowHidden().h(px(capsule_h)).px(px(title_pad))
+    return zpui.intoAnyElement(zpui.liquidGlass("titlebar-title-glass", .{ .shape = .{ .rounded = glass_radius }, .tint = glass_tint }, div().minW0().overflowHidden().h(px(capsule_h)).px(px(title_pad))
         .flex().flexRow().itemsCenter().child(ident)));
 }
 
 /// "Add action" as its own capsule: the glass replaces the frosted fill and edge.
 fn liquidActionPill(theme: *const Theme) zpui.AnyElement {
     return capsule(true, "titlebar-action-glass", 0, div().id("project-action-add").h(px(capsule_h)).px(px(10)).flex().itemsCenter().gap(px(5))
-        .rounded(px(capsule_h / 2)).cursorPointer().occlude()
+        .rounded(px(glass_radius)).cursorPointer().occlude()
         .textSize(px(11.5)).fontWeight(500).textColor(theme.text)
         .hover(sb.bg(theme.wash(0.06)))
         .child(ui.icon.of(.plus, 13, theme.text_muted))

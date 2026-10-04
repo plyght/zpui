@@ -881,28 +881,31 @@ pub const Shell = struct {
 // samples the wallpaper through the non-opaque window. `vev` mode instead puts AppKit's
 // behind-window `.sidebar` material under that transparent region with `.clear` glass
 // on top (the pre-Tahoe recipe; compare both on a Mac with `ZERON_SIDEBAR_GLASS`).
-// Layout: a floating pane inset 8px (macOS 26), or flush with the window edges
-// (macOS 27 / WWDC26; `ZERON_SIDEBAR_LAYOUT=floating|flush` overrides).
+// Layout: flush with the window edges, zeron's original column (default), or a
+// floating pane inset 8px (`ZERON_SIDEBAR_LAYOUT=floating`).
 
 pub const SidebarGlassMode = enum { glass, vev };
 pub const SidebarLayout = enum { floating, flush };
 
 /// `ZERON_SIDEBAR_GLASS=glass|vev` (main.zig).
 pub var sidebar_glass_mode: SidebarGlassMode = .glass;
-/// `ZERON_SIDEBAR_LAYOUT=floating|flush` (main.zig); null = by OS release.
+/// `ZERON_SIDEBAR_LAYOUT=floating|flush` (main.zig); null = flush.
 pub var sidebar_layout_override: ?SidebarLayout = null;
 
 pub fn sidebarLayout(cx: anytype) SidebarLayout {
     if (sidebar_layout_override) |l| return l;
-    return if (zpui.liquidGlassRevision(cx) >= 27) .flush else .floating;
+    // The original zeron sidebar: a straight full-height column, just made of glass
+    // (user preference; the floating pane is opt-in via ZERON_SIDEBAR_LAYOUT=floating).
+    _ = cx;
+    return .flush;
 }
 
 /// Inset of the floating sidebar glass pane from the window edges.
 const liquid_sidebar_inset: f32 = 8;
 /// Corner radius of the floating pane.
 const liquid_sidebar_radius: f32 = 12;
-/// Flush pane: radius of its window-side corners (AppKit's window mask clips the rest).
-const liquid_flush_radius: f32 = 12;
+/// Flush pane: square corners (the window's own corner mask rounds the outer ones).
+const liquid_flush_radius: f32 = 0;
 /// Width of the tint ring around the floating pane (only its inner, glass-concentric
 /// edge is visible; the rest is clipped to the sidebar column).
 const tint_ring: f32 = 48;
@@ -932,7 +935,7 @@ fn liquidSidebar(theme: *const Theme, sidebar_now: f32, window: *Window, cx: any
         .r = if (lay == .floating) liquid_sidebar_radius else liquid_flush_radius,
     };
     var column = div().absolute().top(px(0)).bottom(px(0)).left(px(0)).w(px(sidebar_now)).overflowHidden();
-    if (g.w <= 2 * g.r) {
+    if (g.w <= 2 * g.r or g.w <= 1) {
         // Too narrow for a pane (mid-collapse): plain tint.
         return out.child(column.bg(tint));
     }
@@ -948,7 +951,7 @@ fn liquidSidebar(theme: *const Theme, sidebar_now: f32, window: *Window, cx: any
     const style: zpui.LiquidGlassStyle = if (mode == .vev) .clear else .regular;
     const pane = div().absolute().left(px(g.x)).top(px(g.y)).w(px(glass_w)).h(px(g.h))
         .child(if (mode == .vev) zpui.sidebarMaterial("sidebar-material", .{ .corner_radius = if (lay == .floating) g.r else 0 }, div().sizeFull()) else null)
-        .child(zpui.liquidGlass("sidebar-glass", .{ .style = style, .shape = .{ .rounded = g.r } }, div().sizeFull()));
+        .child(zpui.liquidGlass("sidebar-glass", .{ .style = style, .shape = .{ .rounded = g.r }, .tint = theme.glassTint() }, div().sizeFull()));
     column = column.child(pane);
     // Cut the pane out of the window's behind-window blur (glass mode).
     const radii: [4]f32 = if (lay == .floating) .{ g.r, g.r, g.r, g.r } else .{ g.r, 0, 0, g.r };
