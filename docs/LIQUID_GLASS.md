@@ -40,7 +40,7 @@ Where the glass appears in zeron:
 | Surface | Liquid Glass | Default (frosted) |
 |---|---|---|
 | Sidebar | Glass pane that shows the **desktop**: floating, inset 8 px (macOS 26), or flush with the window edges (macOS 27) | Wash column + hairline |
-| Titlebar | No strip. One glass **capsule per item group**: the title, the session actions, "Add action", the pane toggles, and (sidebar collapsed) the sidebar-toggle/back/forward group next to the traffic lights. A soft fade under the band, drawn in Metal | Transparent band |
+| Titlebar | No strip. One glass **capsule per item group**: the title, the session actions, "Add action", the pane toggles, and (sidebar collapsed) one leading island that wraps the traffic lights and the sidebar-toggle/back/forward group. A soft fade under the band, drawn in Metal | Transparent band |
 | Composer pill, question wizard, queue/todo panels | Glass | Backdrop blur + tint |
 | Popovers, menus, model picker, tooltips, dialogs | Floating glass | Backdrop blur + tint |
 | Command palette, add-project palette | Floating glass | Backdrop blur + tint |
@@ -95,9 +95,16 @@ What zeron does now:
   `NSGlassEffectContainerView` (`spacing` 6), so neighbours that come close, for
   example while the sidebar collapses, melt into each other. Their content is each
   capsule's foreground, painted on the plane *above* the glass. That fixes the missing
-  title. The nav group (sidebar toggle, back, forward, +) gets a capsule only when the
+  title. The nav group (sidebar toggle, back, forward, +) gets glass only when the
   sidebar no longer lies under it; over the sidebar it sits bare on the pane, as on
-  Tahoe. Capsules for buttons set `effectIsInteractive` on macOS 27. A soft
+  Tahoe. With the sidebar collapsed it is the Rust client's titlebar *island*
+  (`render_titlebar_cluster`, `titlebar_island_vertical_geometry` in zeron's
+  `shell.rs`; plain zeron UI, not AppKit): one rounded rect from x = 6 to the
+  cluster's 10 px trailing pad, 32 px high centred on the controls, radius 12, so it
+  wraps the traffic lights too (they are AppKit's titlebar buttons and draw above it).
+  Rust fills it with frost + `glass_overlay` (dark grey); here it is native glass
+  tinted with `glass_overlay`. The title and right-hand capsules keep zeron's 6 px
+  control radius. Capsules for buttons set `effectIsInteractive` on macOS 27. A soft
   scroll-edge fade (the window tint fading to transparent over 50 px) is drawn in
   Metal over the transcript under the band.
 * **macOS 27 tint:** 27 renders near-opaque glass tints as a solid fill, so zpui caps a
@@ -296,9 +303,9 @@ zeron smoke test. CI uploads all of it as the `glass-lab` artifact.
      the files and right-pane toggles share one.
    * The toggle, back and forward buttons sit bare on the sidebar pane next to the
      traffic lights.
-5. **Titlebar, sidebar collapsed (⌘\ or the toggle).** The toggle, back, forward and +
-   buttons get a capsule right of the traffic lights, and the title capsule sits clear
-   of it. During the collapse animation, neighbouring capsules may briefly melt
+5. **Titlebar, sidebar collapsed (⌘\ or the toggle).** One dark island (radius 12)
+   wraps the traffic lights and the toggle, back, forward and + buttons, starting 6 px
+   from the window's left edge. The title capsule sits clear of it. During the collapse animation, neighbouring capsules may briefly melt
    together; that is intended.
 6. **Scroll edge.** Scroll the transcript. Text passing under the titlebar fades
    softly, and there is no hard band.

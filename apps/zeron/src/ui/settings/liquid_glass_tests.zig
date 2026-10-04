@@ -258,3 +258,71 @@ test "Liquid Glass sidebar sees the desktop: tint around it, a backdrop hole, ca
     try testing.expectEqual(@as(f32, 8), floating.bounds.origin.x);
     try testing.expectEqual(@as(f32, 8), floating.bounds.origin.y);
 }
+
+const titlebar_mod = @import("../shell/titlebar.zig");
+
+const PlacedGlass = struct { bounds: zpui.Bounds(zpui.Pixels), radius: f32, tint: ?[4]f32 };
+
+/// The attached titlebar glass views (members of the titlebar container).
+fn titlebarGlass(tw: *TestWindow, out: []PlacedGlass) []PlacedGlass {
+    var n: usize = 0;
+    for (tw.glass_attach, tw.native_attached, tw.native_placement, tw.glass_config) |g, a, p, c| {
+        if (g == null or !a or g.?.kind != .glass or g.?.parent == null or p == null or c == null) continue;
+        if (p.?.bounds.origin.y > zt.layout.titlebar_height) continue;
+        out[n] = .{ .bounds = p.?.bounds, .radius = c.?.corner_radius, .tint = c.?.tint };
+        n += 1;
+    }
+    return out[0..n];
+}
+
+test "Liquid Glass: with the sidebar collapsed, one island wraps the traffic lights and the nav controls" {
+    var h = try Harness.init(true);
+    defer h.deinit();
+    store.force_liquid = true;
+    defer store.force_liquid = false;
+    store.applyTheme(h.app);
+    h.app.runUntilParked();
+    h.window().drawAndPresent();
+    const tw = h.tw();
+    var buf: [32]PlacedGlass = undefined;
+
+    // Sidebar expanded: the controls sit bare on the sidebar pane (no island).
+    for (titlebarGlass(tw, &buf)) |g| try testing.expect(g.radius != titlebar_mod.lead_capsule_radius);
+
+    h.app.globalMut(prefs_mod.Prefs).sidebar_collapsed = true;
+    h.window().refresh();
+    h.window().drawAndPresent();
+    h.settle();
+    const has_chat = h.state.read(h.app).workspace.read(h.app).selected_chat != null;
+    const placed = titlebarGlass(tw, &buf);
+    var island: ?PlacedGlass = null;
+    for (placed) |g| if (g.radius == titlebar_mod.lead_capsule_radius) {
+        try testing.expect(island == null); // exactly one
+        island = g;
+    };
+    const lead = island orelse return error.NoLeadingIsland;
+    // zeron's titlebar island: from x = 6 (left of the traffic lights at 14,14), 32
+    // high centred on the controls (y 5..37, offset here by the phase fade-in's slide,
+    // like every capsule), to the cluster's trailing pad.
+    try testing.expectEqual(@as(f32, 6), lead.bounds.origin.x);
+    try testing.expectEqual(@as(f32, 32), lead.bounds.size.height);
+    try testing.expectEqual(titlebar_mod.leadCapsuleRight(has_chat), lead.bounds.origin.x + lead.bounds.size.width);
+    try testing.expect(lead.bounds.origin.x < 14); // covers the traffic lights on macOS
+    // Tinted with the island's dark `glass_overlay` fill.
+    const want = ui.theme.get(h.app).glassOverlay().toRgba();
+    const tint = lead.tint orelse return error.NoTint;
+    try testing.expectApproxEqAbs(want.a, tint[3], 0.001);
+    try testing.expect(tint[0] < 0.2 and tint[1] < 0.2 and tint[2] < 0.2);
+
+    // The other groups keep zeron's 6px control radius and stay clear of the island
+    // (farther than the container's merge spacing).
+    var others: usize = 0;
+    for (placed) |g| if (g.radius != titlebar_mod.lead_capsule_radius) {
+        others += 1;
+        try testing.expectEqual(zt.layout.chrome_control_radius, g.radius);
+        // Same vertical centre (the controls' y = 21).
+        try testing.expectEqual(g.bounds.origin.y + g.bounds.size.height / 2, lead.bounds.origin.y + lead.bounds.size.height / 2);
+        try testing.expect(g.bounds.origin.x >= lead.bounds.origin.x + lead.bounds.size.width + titlebar_mod.capsule_spacing);
+    };
+    if (has_chat) try testing.expect(others >= 1);
+}

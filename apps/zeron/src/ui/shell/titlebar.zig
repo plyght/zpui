@@ -241,8 +241,9 @@ pub const capsule_spacing: f32 = 6;
 const glass_radius: f32 = layout.chrome_control_radius;
 /// Theme tint for the titlebar glass groups, refreshed each render.
 var glass_tint: ?zpui.Hsla = null;
-/// Extra room between the nav capsule and the title capsule (sidebar collapsed).
-const capsule_clearance: f32 = 8;
+/// Extra room between the leading island and the title capsule (sidebar collapsed),
+/// on top of the identity gap; keeps them farther apart than `capsule_spacing`.
+pub const capsule_clearance: f32 = 8;
 
 /// `child` in a capsule of glass (Liquid Glass), or unchanged.
 fn capsule(liquid: bool, name: []const u8, pad: f32, child: anytype) zpui.AnyElement {
@@ -267,14 +268,34 @@ fn liquidActionPill(theme: *const Theme) zpui.AnyElement {
         .child(div().relative().top(px(-1)).child("Add action")));
 }
 
+/// The leading capsule (sidebar collapsed): zeron's titlebar "island"
+/// (`render_titlebar_cluster` + `titlebar_island_vertical_geometry`, shell.rs): it
+/// starts 6px from the window's left edge, so it wraps the traffic lights (at 14,14)
+/// as well as the toggle / back / forward (/ +) controls, runs to the cluster's 10px
+/// trailing pad, is 32px high centred on the controls (y 5..37) and has radius 12,
+/// filled with `glass_overlay` (dark grey in dark themes). Here the island is native
+/// glass tinted with that fill. The title / right-hand groups keep the 6px radius.
+pub const lead_capsule_left: f32 = 6;
+pub const lead_capsule_h: f32 = 32;
+pub const lead_capsule_radius: f32 = 12;
+
+/// The island's tint: the Rust island's `glass_overlay` fill (null when
+/// `ZERON_GLASS_TINT=0` turns glass tints off).
+pub fn leadCapsuleTint(theme: *const Theme) ?zpui.Hsla {
+    if (theme.glassTint() == null) return null;
+    return theme.glassOverlay();
+}
+
+/// Right edge of the leading capsule (window coordinates).
+pub fn leadCapsuleRight(has_chat: bool) f32 {
+    return clusterStart() + cluster_buttons_width + (if (has_chat) action_slot_width else 0) + cluster_pad;
+}
+
 /// The sidebar toggle + back/forward (+ new session) group. Over the sidebar glass it
-/// sits bare on the pane (as on Tahoe); with the sidebar collapsed it gets a capsule
-/// next to the traffic lights.
+/// sits bare on the pane (as on Tahoe); with the sidebar collapsed it and the traffic
+/// lights share one capsule (the leading island, above).
 fn liquidCluster(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div {
     const has_chat = shell.state.read(cx).workspace.read(cx).selected_chat != null;
-    var row = div().absolute().top(px(0)).left(px(0)).h(px(layout.titlebar_height))
-        .flex().flexRow().itemsCenter().pt(px(layout.titlebar_top_pad)).px(px(cluster_pad));
-    if (is_mac) row = row.child(div().flexNone().hFull().w(px(clusterStart() - cluster_pad - capsule_pad)));
     var group = div().flex().flexRow().itemsCenter()
         .child(button.windowControl("toggle-sidebar", .sidebar_minimalistic_left, "Toggle left sidebar", theme)
         .onClick(cx.listener(Shell.onToggleSidebarClick)));
@@ -290,12 +311,18 @@ fn liquidCluster(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.D
         .gap(px(layout.titlebar_control_gap)).child(back).child(fwd));
     if (has_chat) group = group.child(div().flexNone().ml(px(layout.titlebar_group_gap))
         .child(button.windowControl("titlebar-new-session", .plus, "New session", theme).onClick(cx.listener(Shell.onNewSessionClick))));
-    // The sidebar pane no longer lies under the group: give it its own capsule.
+    const row = div().absolute().top(px(0)).left(px(0)).h(px(layout.titlebar_height))
+        .flex().flexRow().itemsCenter().pt(px(layout.titlebar_top_pad));
+    // Over the sidebar pane: bare controls at the cluster's usual place.
     const on_sidebar = shell.sidebarNow(cx) >= clusterStart() + cluster_buttons_width;
-    return row.child(if (on_sidebar)
-        zpui.intoAnyElement(div().px(px(capsule_pad)).child(group))
-    else
-        capsule(true, "titlebar-nav-glass", capsule_pad, group));
+    if (on_sidebar) return row.pl(px(clusterStart())).pr(px(cluster_pad)).child(group);
+    // Collapsed: one island from x = 6, wrapping the traffic lights and the controls.
+    const island = div().flexNone().h(px(lead_capsule_h)).flex().flexRow().itemsCenter()
+        .pl(px(clusterStart() - lead_capsule_left)).pr(px(cluster_pad)).child(group);
+    return row.pl(px(lead_capsule_left)).child(zpui.liquidGlass("titlebar-nav-glass", .{
+        .shape = .{ .rounded = lead_capsule_radius },
+        .tint = leadCapsuleTint(theme),
+    }, island));
 }
 
 fn rightTab(theme: *const Theme, label: []const u8, active: bool) zpui.Div {
