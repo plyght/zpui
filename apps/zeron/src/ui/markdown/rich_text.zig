@@ -339,8 +339,17 @@ pub const RichText = struct {
             rangeRects(&st.layout, r, fa, &rects);
             for (rects.items, 0..) |rect, part| {
                 if (registry.url(self.key, li) == null) continue;
-                const hit = zpui.div().id(.{ "link-tip", mixId(self.key, li * 64 + part) })
-                    .w(zpui.px(rect.size.width)).h(zpui.px(rect.size.height))
+                var hit = zpui.div().id(.{ "link-tip", mixId(self.key, li * 64 + part) })
+                    .w(zpui.px(rect.size.width)).h(zpui.px(rect.size.height));
+                // Accessibility (zeron link_interaction.rs: `Role::Link` + the link text as
+                // label): the first segment of each link is its node; AT activation opens it.
+                if (part == 0 and window.a11yActive()) {
+                    const shown = if (st.truncated()) st.shown.text.items else self.text.text;
+                    const label = std.mem.trim(u8, shown[@min(r.start, shown.len)..@min(r.end, shown.len)], " \n");
+                    hit = hit.role(.link).ariaLabel(label).ariaUrl(registry.url(self.key, li).?)
+                        .onA11yAction(.click, linkActivation(self.key, li, self.link_owner));
+                }
+                hit = hit
                     .tooltipWith(LinkTip{ .key = self.key, .ix = @intCast(li) }, Destination.build);
                 const el = zpui.intoAnyElement(hit);
                 el.prepaintAsRoot(rect.origin, zpui.window.element.avail.definite(rect.size), window, app);
@@ -576,6 +585,26 @@ pub fn rangeRects(tl: *const TextLayout, r: Range, a: std.mem.Allocator, out: *s
 // ---------------------------------------------------------------------------
 
 const LinkTip = struct { key: u64, ix: u32 };
+
+/// Opens link `ix` of text `key` (assistive-technology activation of a link node).
+fn linkActivation(key: u64, ix: usize, owner: ?LinkOwner) zpui.Listener(zpui.a11y.ActionRequest) {
+    const Data = extern struct { ix: u64, owner: u64, f: usize };
+    var l: zpui.Listener(zpui.a11y.ActionRequest) = .{ .func = struct {
+        fn f(data: *const zpui.core.context.ListenerData, _: *const zpui.a11y.ActionRequest, window: ?*Window, app: *App) void {
+            const d = data.get(Data);
+            const w = window orelse return;
+            const u = registry.url(data.entity, @intCast(d.ix)) orelse return;
+            if (d.f != 0) {
+                const hook: *const fn (u64, []const u8, *Window, *App) bool = @ptrFromInt(d.f);
+                if (hook(d.owner, u, w, app)) return;
+            }
+            openLink(u, w, app);
+        }
+    }.f };
+    l.data.entity = key;
+    l.data.set(Data{ .ix = ix, .owner = if (owner) |o| o.owner else 0, .f = if (owner) |o| @intFromPtr(o.f) else 0 });
+    return l;
+}
 
 /// `viewport_limits`: the card fits small viewports.
 pub fn viewportLimits(width: f32, height: f32) [2]f32 {

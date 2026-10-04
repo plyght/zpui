@@ -557,6 +557,19 @@ pub const Platform = struct {
         /// Play an in-memory sound (WAV) without blocking (macOS NSSound, Linux
         /// paplay / pw-play / aplay / ffplay / mpv). Failures are swallowed.
         playSound: ?*const fn (ptr: *anyopaque, bytes: []const u8) void = null,
+        // -- global hotkey + window capture (optional; see `GlobalHotkey`) -----------------
+        /// Register (or with null, unregister) the app's one system-wide hotkey. Replaces
+        /// the previous registration. `handler` runs on the main thread per press.
+        setGlobalHotkey: ?*const fn (ptr: *anyopaque, hotkey: ?GlobalHotkey, handler: GlobalHotkeyHandler) void = null,
+        /// Current hotkey / capture / accessibility-text readiness (cheap; main thread).
+        windowCaptureCapabilities: ?*const fn (ptr: *anyopaque) WindowCaptureCapabilities = null,
+        /// Capture the frontmost window of another application. Never blocks: `done` runs
+        /// later on the main thread exactly once.
+        captureActiveWindow: ?*const fn (ptr: *anyopaque, gpa: std.mem.Allocator, done: WindowCaptureCallback) void = null,
+        /// Ask the OS for a capture permission (macOS prompts; elsewhere a no-op).
+        requestCaptureAccess: ?*const fn (ptr: *anyopaque, kind: CaptureAccess) void = null,
+        /// Bring this app back to the front after a user-requested capture (macOS).
+        foregroundAfterCapture: ?*const fn (ptr: *anyopaque) void = null,
         // [liquid-glass] Native Liquid Glass (macOS 26+ NSGlassEffectView) is available
         // on this machine. Null = never (every non-macOS backend, older macOS).
         supportsLiquidGlass: ?*const fn (ptr: *anyopaque) bool = null,
@@ -622,6 +635,133 @@ pub const Platform = struct {
         const f = p.vtable.promptForPaths orelse return done.func(done.ctx, null);
         f(p.ptr, options, done);
     }
+    /// Register / replace / (null) remove the system-wide hotkey. No-op without support.
+    pub fn setGlobalHotkey(p: Platform, hotkey: ?GlobalHotkey, handler: GlobalHotkeyHandler) void {
+        if (p.vtable.setGlobalHotkey) |f| f(p.ptr, hotkey, handler);
+    }
+    pub fn windowCaptureCapabilities(p: Platform) WindowCaptureCapabilities {
+        const f = p.vtable.windowCaptureCapabilities orelse return .{};
+        return f(p.ptr);
+    }
+    /// Capture the frontmost window; `done` runs on the main thread (owns the result).
+    pub fn captureActiveWindow(p: Platform, gpa: std.mem.Allocator, done: WindowCaptureCallback) void {
+        const f = p.vtable.captureActiveWindow orelse {
+            var r: WindowCaptureResult = .{ .err = .{ .failed = gpa.dupe(u8, "Appshots are not available on this platform.") catch &.{} } };
+            return done.done(done.ctx, gpa, &r);
+        };
+        f(p.ptr, gpa, done);
+    }
+    pub fn requestCaptureAccess(p: Platform, kind: CaptureAccess) void {
+        if (p.vtable.requestCaptureAccess) |f| f(p.ptr, kind);
+    }
+    pub fn foregroundAfterCapture(p: Platform) void {
+        if (p.vtable.foregroundAfterCapture) |f| f(p.ptr);
+    }
+};
+
+// ---------------------------------------------------------------------------------------
+// Global hotkey + frontmost-window capture (zeron Appshots: `appshots/{macos,linux}`)
+// ---------------------------------------------------------------------------------------
+
+/// A system-wide hotkey: one key (gpui key name: "space", "a", "f5", "pageup", ...) plus
+/// modifiers. `platform` is Command on macOS and Super/Logo elsewhere.
+pub const GlobalHotkey = struct {
+    key: []const u8,
+    control: bool = false,
+    alt: bool = false,
+    shift: bool = false,
+    platform: bool = false,
+    /// Linux GlobalShortcuts portal: the shortcut's description shown by the desktop.
+    description: []const u8 = "Capture an Appshot",
+    /// Linux GlobalShortcuts portal: the shortcut id (stable per app).
+    id: []const u8 = "capture-appshot",
+
+    pub fn eql(a: GlobalHotkey, b: GlobalHotkey) bool {
+        return std.mem.eql(u8, a.key, b.key) and a.control == b.control and a.alt == b.alt and
+            a.shift == b.shift and a.platform == b.platform;
+    }
+};
+
+/// Main-thread hotkey press handler.
+pub const GlobalHotkeyHandler = struct {
+    ctx: ?*anyopaque = null,
+    func: *const fn (ctx: ?*anyopaque) void,
+};
+
+/// Readiness of one capture capability (zeron `CapabilityState`).
+pub const CapabilityState = enum { checking, ready, permission_required, setup_required, user_selection, unavailable };
+
+/// Which backend captures (zeron `AppshotPlatform`).
+pub const CaptureSystem = enum { macos, linux_wayland, linux_x11, unsupported };
+
+/// What a capture targets (zeron `CaptureTarget`).
+pub const CaptureTarget = enum { active_window, portal_window_picker };
+
+pub const WindowCaptureCapabilities = struct {
+    system: CaptureSystem = .unsupported,
+    global_hotkey: CapabilityState = .unavailable,
+    window_capture: CapabilityState = .unavailable,
+    application_text: CapabilityState = .unavailable,
+    target: CaptureTarget = .active_window,
+};
+
+pub const CaptureAccess = enum { capture, semantic };
+
+/// A captured window. All slices are owned (allocated with the `gpa` passed to
+/// `captureActiveWindow`); free with `deinit`.
+pub const WindowCapture = struct {
+    /// The window's pixels, PNG-encoded.
+    png: []u8,
+    app_name: []u8,
+    bundle_identifier: ?[]u8 = null,
+    window_title: ?[]u8 = null,
+    /// Accessibility-tree text (AXUIElement / AT-SPI), one node per line; "" when none.
+    accessibility: []u8 = &.{},
+    accessibility_truncated: bool = false,
+    /// The application's icon, PNG-encoded (presentation only).
+    icon_png: ?[]u8 = null,
+
+    pub fn deinit(self: *WindowCapture, gpa: std.mem.Allocator) void {
+        gpa.free(self.png);
+        gpa.free(self.app_name);
+        if (self.bundle_identifier) |s| gpa.free(s);
+        if (self.window_title) |s| gpa.free(s);
+        gpa.free(self.accessibility);
+        if (self.icon_png) |s| gpa.free(s);
+        self.* = undefined;
+    }
+};
+
+/// zeron `CaptureError` (the message of `.failed` is owned).
+pub const WindowCaptureError = union(enum) {
+    permission_required,
+    cancelled,
+    self_capture,
+    no_eligible_window,
+    shortcut_unavailable,
+    failed: []u8,
+};
+
+pub const WindowCaptureResult = union(enum) {
+    ok: WindowCapture,
+    err: WindowCaptureError,
+
+    pub fn deinit(self: *WindowCaptureResult, gpa: std.mem.Allocator) void {
+        switch (self.*) {
+            .ok => |*c| c.deinit(gpa),
+            .err => |e| if (e == .failed) gpa.free(e.failed),
+        }
+    }
+};
+
+/// Completion of `captureActiveWindow` (main thread). The callee takes ownership of
+/// `result` (move it out or `deinit` it with `gpa`). `pixels_ready`, when set, fires on
+/// the main thread as soon as the pixels are saved, before slower accessibility
+/// enrichment finishes (zeron's capture sound cue).
+pub const WindowCaptureCallback = struct {
+    ctx: ?*anyopaque = null,
+    done: *const fn (ctx: ?*anyopaque, gpa: std.mem.Allocator, result: *WindowCaptureResult) void,
+    pixels_ready: ?*const fn (ctx: ?*anyopaque) void = null,
 };
 
 // ---------------------------------------------------------------------------------------

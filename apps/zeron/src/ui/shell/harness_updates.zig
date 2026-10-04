@@ -702,7 +702,7 @@ pub const HarnessUpdateIsland = struct {
         const available = act.method == null or row.connected;
         const enabled = interactive and available;
         const primary = act.method != null and act.method.? == .ApplyHarnessUpdate;
-        var b = div().id(.{ "harness-update-action", ix }).h(px(26)).px(px(9)).flexNone().roundedFull()
+        var b = div().id(.{ "harness-update-action", ix }).role(.button).ariaLabel(zpui.fmt("{s} · {s} · {s}", .{ act.label, agentName(row.status.harness), row.device_name })).ariaDisabled(!enabled).h(px(26)).px(px(9)).flexNone().roundedFull()
             .border1().borderColor(zpui.color.transparent_black)
             .flex().itemsCenter().justifyCenter()
             .textSize(rems(11.5)).fontWeight(500)
@@ -781,7 +781,7 @@ pub const HarnessUpdateIsland = struct {
         // ---- summary ----
         var summary = div().id("home-harness-update-summary").h(px(chip_height)).wFull().flexNone()
             .pl(px(12)).pr(px(g.trailing)).flex().itemsCenter();
-        if (multiple) summary = summary.cursorPointer().rounded(px(radius)).onClick(cx.listener(onToggle));
+        if (multiple) summary = summary.role(.button).ariaLabel(if (expanded) "Collapse agent updates" else "Show agent updates").ariaExpanded(expanded).cursorPointer().rounded(px(radius)).onClick(cx.listener(onToggle));
         summary = summary
             .child(div().flexNone().w(px(g.marks_width * (1 - reveal))).mr(px(8 * (1 - reveal))).overflowHidden()
             .opacity(1 - stage(reveal, 0, 0.55)).child(markStack(list, theme)))

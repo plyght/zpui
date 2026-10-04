@@ -7,8 +7,8 @@
 //!     .child(dialog.title(theme, "Discard working tree changes?"))
 //!     .child(div().mt(px(6)).child(dialog.body(theme, "…")))
 //!     .child(div().mt(px(16)).flex().justifyEnd().gap(px(8))
-//!         .child(dialog.btnGhost(theme, "Cancel").id("cancel").onClick(...))
-//!         .child(dialog.btnDanger(theme, "Discard changes").id("ok").onClick(...)));
+//!         .child(dialog.btnGhost(theme, "Cancel").id("cancel").role(.button).onClick(...))
+//!         .child(dialog.btnDanger(theme, "Discard changes").id("ok").role(.button).onClick(...)));
 //! root.child(dialog.modal(window, card, cx.listener(Self.onScrimDown)))
 //! ```
 

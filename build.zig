@@ -40,6 +40,27 @@ pub fn build(b: *std.Build) void {
     addZeronBrowserHelper(b, target);
     addZeronMedia(b, target, optimize, zpui, test_step);
     addZeronLifecycle(b);
+    addZeronVoice(b, target, optimize, zpui);
+}
+
+/// zeron on-device dictation engine (apps/zeron/src/voice, port of zeron
+/// `crates/voice`): `zig build voice-test` runs its tests — resampler and
+/// log-mel parity with the Rust fixtures, the session coordinator, model
+/// management, and (with `ZERON_VOICE_MODEL=<dir>` and an ONNX Runtime from
+/// `ZERON_ONNXRUNTIME=<lib>`) an end-to-end transcription of
+/// apps/zeron/fixtures/voice/speech.wav. The app itself imports the same
+/// files from apps/zeron/src/main.zig.
+fn addZeronVoice(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, zpui: *std.Build.Module) void {
+    const voice = b.createModule(.{
+        .root_source_file = b.path("apps/zeron/src/voice/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{.{ .name = "zpui", .module = zpui }},
+    });
+    const run = b.addRunArtifact(b.addTest(.{ .name = "zeron_voice", .root_module = voice }));
+    run.setCwd(b.path("."));
+    b.step("voice-test", "Run the zeron dictation engine tests (ZERON_VOICE_MODEL / ZERON_ONNXRUNTIME enable the end-to-end transcript)").dependOn(&run.step);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -1081,6 +1102,7 @@ fn addZeronLifecycle(b: *std.Build) void {
         \\pub const done = @embedFile("sounds/done.wav");
         \\pub const request = @embedFile("sounds/request.wav");
         \\pub const attention = @embedFile("sounds/attention.wav");
+        \\pub const appshot = @embedFile("sounds/appshot.wav");
         \\
     ) });
     root.addImport("zeron_sounds", sounds);

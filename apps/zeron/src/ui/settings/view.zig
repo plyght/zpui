@@ -156,6 +156,10 @@ pub const SettingsView = struct {
 
     // ---- shortcut recording ----
     recording: ?ShortcutId = null,
+    /// [appshots] Capability snapshot (refreshed by "Check again" / access requests).
+    appshot_caps: ?zpui.platform.WindowCaptureCapabilities = null,
+    capture_access_prompted: bool = false,
+    semantic_access_prompted: bool = false,
     notice: std.ArrayList(u8) = .empty,
     notice_for: ?ShortcutId = null,
 
@@ -231,7 +235,10 @@ pub const SettingsView = struct {
     }
 
     pub fn deinit(self: *SettingsView, app: *App) void {
-        if (self.recording != null) store.applyKeymap(app);
+        if (self.recording != null) {
+            store.applyKeymap(app);
+            @import("../../appshots/service.zig").setRecording(app, false); // [appshots]
+        }
         self.subs.deinit(self.gpa);
         self.closeRename(app);
         if (self.adjust) |*d| d.deinit(self.gpa);
@@ -527,6 +534,7 @@ pub const SettingsView = struct {
         self.clearNotice();
         // Suspend the keymap so the chord being recorded never runs its action.
         cx.app.keymap.clear();
+        @import("../../appshots/service.zig").setRecording(cx.app, true); // [appshots] the global hotkey too
         window.focus(self.record_focus);
         cx.notify();
     }
@@ -535,6 +543,7 @@ pub const SettingsView = struct {
         if (self.recording == null) return;
         self.recording = null;
         store.applyKeymap(cx.app);
+        @import("../../appshots/service.zig").setRecording(cx.app, false); // [appshots]
     }
 
     pub fn clearNotice(self: *SettingsView) void {

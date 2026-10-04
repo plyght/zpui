@@ -447,6 +447,22 @@ pub const EditorState = struct {
         return changed;
     }
 
+    /// Dictation's replacement of its own range (Rust `apply_dictation` +
+    /// `Dictation::replace`): the whole session is one undo step — the
+    /// pre-dictation snapshot is pushed (and redo cleared) only with the
+    /// first result. The caret collapses after the transcript.
+    pub fn replaceDictated(self: *EditorState, range: Range, new_text: []const u8, snapshot_first: bool) Allocator.Error!void {
+        if (snapshot_first) {
+            try self.pushUndo();
+            clearStack(self.gpa, &self.redo_stack);
+        }
+        try self.splice(self.clampRange(range), new_text);
+        self.selected = .collapsed(range.start + new_text.len);
+        self.reversed = false;
+        self.affinity = .downstream;
+        self.preferred_column = null;
+    }
+
     // ---- motions (left/right/home/end/...) --------------------------------------------
 
     pub fn left(self: *EditorState) void {

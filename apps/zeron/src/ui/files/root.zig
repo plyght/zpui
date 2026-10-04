@@ -17,10 +17,12 @@ pub const decorations = @import("decorations.zig");
 pub const icons = @import("icons.zig");
 pub const search = @import("search.zig");
 pub const panel = @import("panel.zig");
+pub const drag = @import("drag.zig");
 pub const markdown_preview = @import("markdown_preview.zig");
 pub const image_preview = @import("image_preview.zig");
 
 pub const FilesPanel = panel.FilesPanel;
+pub const WorkspacePathDrag = drag.WorkspacePathDrag;
 pub const MarkdownPreview = markdown_preview.MarkdownPreview;
 pub const ImagePreview = image_preview.ImagePreview;
 
@@ -30,5 +32,6 @@ test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("panel_test.zig");
     _ = markdown_preview;
+    _ = drag;
     _ = image_preview;
 }

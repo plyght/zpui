@@ -124,6 +124,8 @@ pub const Shell = struct {
     wiring: wiring_mod.State = .{},
     /// CI smoke only (`ZERON_SMOKE_MENU`): the frosted-menu blur probe.
     smoke_probe: smoke_probe.Mode = .off,
+    /// [appshots] Last selected chat (Appshot "Last session" destination).
+    last_appshot_chat: ?[]u8 = null,
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, server_decorations: bool, window: *Window, cx: *Context(Shell)) !Shell {
         const focus = cx.focusHandle();
@@ -170,6 +172,7 @@ pub const Shell = struct {
         self.right_pane.release(app);
         for (self.nav.items) |e| if (e) |s| self.gpa.free(s);
         self.nav.deinit(self.gpa);
+        if (self.last_appshot_chat) |s| self.gpa.free(s); // [appshots]
         self.focus.release(app);
         self.main.release(app);
         self.sidebar.release(app);
@@ -182,6 +185,7 @@ pub const Shell = struct {
 
     fn onWorkspaceChanged(self: *Shell, ws: Entity(model.WorkspaceStore), cx: *Context(Shell)) void {
         const selected = ws.read(cx).selected_chat;
+        @import("appshots.zig").noteSelection(self, selected); // [appshots]
         self.recordNav(selected);
         cx.notify();
     }
@@ -640,7 +644,7 @@ pub const Shell = struct {
     }
 
     fn resizeHandle(comptime T: type, id: []const u8, listener: anytype) zpui.StatefulDiv {
-        return div().id(id).absolute().top(px(layout.titlebar_height)).bottom(px(0))
+        return div().id(id).role(.separator).ariaLabel(if (T == SidebarResize) "Resize sidebar" else "Resize panel").ariaOrientation(.vertical).absolute().top(px(layout.titlebar_height)).bottom(px(0))
             .left(px(-resize_hitbox_half)).w(px(resize_hitbox_half * 2))
             .cursorColResize()
             .onDrag(T{}, buildGhost(T))

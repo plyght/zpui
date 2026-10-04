@@ -478,7 +478,7 @@ pub fn dismissOnEscape(v: *SettingsView, cx: *Context(SettingsView)) bool {
 // ---- rendering -------------------------------------------------------------------------
 
 fn compactAction(t: *const Theme, label: []const u8, id: anytype) zpui.StatefulDiv {
-    return w.textAction(t, .outlined, label).id(id);
+    return w.textAction(t, .outlined, label).id(id).role(.button).ariaLabel(label);
 }
 
 fn paletteOf(t: *const Theme) zpui.Div {
@@ -535,7 +535,7 @@ fn modeControl(v: *SettingsView, t: *const Theme, label: []const u8, description
     const active = v.import.?.mode == value;
     var dot = div().size(px(16)).roundedFull().border1().borderColor(if (active) t.accent else t.border_strong).flex().itemsCenter().justifyCenter();
     if (active) dot = dot.child(div().size(px(8)).roundedFull().bg(t.accent));
-    var c = div().id(.{ "theme-import-mode", @intFromEnum(value) }).flex1().minW0().p(px(10)).rounded(px(9)).border1()
+    var c = div().id(.{ "theme-import-mode", @intFromEnum(value) }).role(.button).flex1().minW0().p(px(10)).rounded(px(9)).border1()
         .borderColor(if (active) t.accent else t.border).bg(if (active) t.accent_wash else t.surface_raised.opacity(0.28))
         .cursorPointer().onClick(cx.listenerWith(value, onMode))
         .child(div().flex().itemsCenter().gap(px(7)).child(dot)
@@ -591,7 +591,7 @@ pub fn importDialog(v: *SettingsView, window: *Window, cx: *Context(SettingsView
             const selected_now = d.isSelected(variant.id) != null;
             const review_open = if (d.review_variant) |r| std.mem.eql(u8, r, variant.id) else false;
             const sample = sampleTheme(variant);
-            var check = div().id(.{ "theme-import-select", ix }).size(px(18)).rounded(px(5)).border1()
+            var check = div().id(.{ "theme-import-select", ix }).role(.check_box).ariaLabel(variant.name).ariaToggled(selected_now).size(px(18)).rounded(px(5)).border1()
                 .borderColor(if (selected_now) t.accent else t.border_strong).bg(if (selected_now) t.accent else t.bg)
                 .flex().itemsCenter().justifyCenter().cursorPointer().onClick(cx.listenerWith(ix, onToggleVariant));
             if (selected_now) check = check.child(ui.icon.of(.check, 12, t.on_accent));
@@ -628,11 +628,11 @@ pub fn importDialog(v: *SettingsView, window: *Window, cx: *Context(SettingsView
         .child(div().flex1().minW0()
         .child(dialog.title(t, "Add a theme"))
         .child(dialog.body(t, "Import a local theme into your library or keep it linked to its source.").mt(px(4))))
-        .child(div().id("theme-import-close").size(px(28)).rounded(px(7)).border1().borderColor(t.border)
+        .child(div().id("theme-import-close").role(.button).ariaLabel("Close").size(px(28)).rounded(px(7)).border1().borderColor(t.border)
         .bg(t.surface_raised.opacity(0.28)).flex().itemsCenter().justifyCenter().cursorPointer()
         .hover(sb.bg(t.surface_raised_hover)).onClick(cx.listener(onClose))
         .child(ui.icon.of(.close, 12, t.text_muted)));
-    var action = w.textAction(t, .solid, if (comp != null) "Import selected" else "Analyze theme").id("theme-import-action")
+    var action = w.textAction(t, .solid, if (comp != null) "Import selected" else "Analyze theme").id("theme-import-action").role(.button)
         .h(px(34)).px(px(14)).py(px(0)).flex().itemsCenter();
     action = if (comp != null and !ready) action.opacity(0.45) else action.onClick(cx.listener(onAction));
     const footer = div().borderT1().borderColor(hairline).bg(t.surface_raised.opacity(0.18)).px(px(20)).py(px(12))
@@ -661,7 +661,7 @@ pub fn reviewDialog(v: *SettingsView, window: *Window, cx: *Context(SettingsView
         if (e.report(variant.id)) |r| card = card.child(reportPanel(t, r));
     }
     card = card.child(div().mt(px(16)).flex().justifyEnd()
-        .child(w.textAction(t, .solid, "Done").id("theme-review-close").onClick(cx.listener(onReviewDone))));
+        .child(w.textAction(t, .solid, "Done").id("theme-review-close").role(.button).onClick(cx.listener(onReviewDone))));
     return modal("theme-review-dialog", window, card);
 }
 
@@ -697,7 +697,7 @@ fn groupLabel(t: *const Theme, label: []const u8) zpui.Div {
 pub fn libraryCard(v: *SettingsView, t: *const Theme, cx: *Context(SettingsView)) zpui.Div {
     var c = w.sectionCard(t).mt(px(32))
         .child(w.cardRow(t, true).child(div().flex1().minW(px(160)).child(w.rowTitle(t, "Theme library")))
-        .child(w.textAction(t, .solid, "Add theme").id("theme-library-add").onClick(cx.listener(onAdd))));
+        .child(w.textAction(t, .solid, "Add theme").id("theme-library-add").role(.button).onClick(cx.listener(onAdd))));
     const list = entries(cx.app);
     var any_imported = false;
     var any_linked = false;

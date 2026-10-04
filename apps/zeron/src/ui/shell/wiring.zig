@@ -7,8 +7,8 @@
 //! - `shell::ArchiveSession` (`archive_selected_chat`), `shell::OpenModelPicker`
 //!   (`open_model_menu`);
 //! - composer events: workspace slash commands (`execute_workspace_command`),
-//!   the paperclip (the composer opens its own picker), dictation (no capture
-//!   yet: a no-op hook);
+//!   the paperclip (the composer opens its own picker); dictation runs inside
+//!   the composer (voice.zig) on the app's `dictation.Service` (voice/service.zig);
 //! - explorer "Add to chat" → a file reference in the composer
 //!   (`attach_workspace_drag` → `add_workspace_path`);
 //! - transcript links → the right pane's editor (`activate_session_link` →
@@ -109,6 +109,22 @@ fn installEditorBindings(app: *App) anyerror!void {
     try editor.actions.bindDefaults(app);
 }
 
+/// `code_fences_fit_content`: the fences' shared "Fit content" setting.
+fn codeFencesFit(app: *App) bool {
+    const s = model.settings_store.current(app) orelse return false;
+    return s.codeFencesFitContent;
+}
+
+fn setCodeFencesFit(app: *App, fit: bool) void {
+    const W = struct {
+        fn f(v: bool, s: *model.UiSettings, _: std.mem.Allocator) void {
+            s.codeFencesFitContent = v;
+        }
+    };
+    _ = model.settings_store.update(app, .immediate, fit, W.f);
+    app.refreshWindows();
+}
+
 /// Called from `Shell.init`: subscribe to every routed source.
 pub fn attach(self: *Shell, cx: *Ctx) !void {
     // The file editor's keymap rides every keymap rebuild (settings edits too).
@@ -118,11 +134,13 @@ pub fn attach(self: *Shell, cx: *Ctx) !void {
     }
     shell_ref = .{ .id = cx.entityId() };
     md.rich_text.registry.handler = onLink;
+    md.code_state.fit_hooks = .{ .get = codeFencesFit, .set = setCodeFencesFit };
     background.wallpaper.open_appearance = openAppearance;
 
     const gpa = cx.gpa();
     const slots = &self.main.read(cx).slots;
     try self.subs.add(gpa, try cx.subscribe(slots.composer_view, onComposerEvent));
+    try self.subs.add(gpa, try cx.subscribe(slots.composer_view, onWorktreeSetup));
     try self.subs.add(gpa, try cx.subscribe(slots.transcript_view, onOpenSubagent));
     try self.subs.add(gpa, try cx.subscribe(self.sidebar, onDeleteChat));
     try self.subs.add(gpa, try cx.subscribe(self.sidebar, onEnableSync));
@@ -273,8 +291,6 @@ fn onComposerEvent(self: *Shell, _: Entity(composer_mod.ComposerView), ev: *cons
         },
         // The composer opens its own native picker; nothing to route.
         .attach_requested => {},
-        // Hook for voice capture (not ported): the mic state is UI-only.
-        .dictation_toggled => {},
         else => {},
     }
 }
@@ -315,6 +331,12 @@ pub fn executeWorkspaceCommand(self: *Shell, cmd: composer_mod.slash.WorkspaceCo
         .stop => {},
     }
     cx.notify();
+}
+
+/// `ComposerEvent::WorktreeSetup` → `attach_worktree_setup`.
+fn onWorktreeSetup(self: *Shell, _: Entity(composer_mod.ComposerView), ev: *const composer_mod.extras.WorktreeSetup, cx: *Ctx) void {
+    const run: ?project_actions.Run = if (ev.setup_action) |r| .{ .actionId = r.actionId, .actionName = r.actionName, .terminal = r.terminal } else null;
+    project_actions.attachWorktreeSetup(self, ev.chat_id, run, ev.setup_error, ev.target_device_id, cx);
 }
 
 fn onAddToChat(self: *Shell, _: Entity(right_pane_mod.RightPane), ev: *const right_pane_mod.AddToChat, cx: *Ctx) void {
@@ -533,8 +555,8 @@ fn deleteDialog(self: *Shell, window: *Window, theme_in: *const ui.Theme, cx: *C
         .child(dialog.title(theme, "Delete session?"))
         .child(div().mt(px(6)).child(dialog.body(theme, zpui.fmt("\u{201C}{s}\u{201D} will be permanently deleted. This can\u{2019}t be undone.", .{title}))))
         .child(div().mt(px(16)).flex().flexRow().justifyEnd().gap(px(8))
-        .child(dialog.btnGhost(theme, "Cancel").id("delete-chat-cancel").onClick(cx.listener(onDeleteCancel)))
-        .child(dialog.btnDanger(theme, "Delete").id("delete-chat-confirm").onClick(cx.listener(onDeleteConfirm))));
+        .child(dialog.btnGhost(theme, "Cancel").id("delete-chat-cancel").role(.button).onClick(cx.listener(onDeleteCancel)))
+        .child(dialog.btnDanger(theme, "Delete").id("delete-chat-confirm").role(.button).onClick(cx.listener(onDeleteConfirm))));
     return dialog.modal(window, card, cx.listener(onDeleteScrim));
 }
 
@@ -635,8 +657,8 @@ fn syncDialog(self: *Shell, window: *Window, theme_in: *const ui.Theme, cx: *Ctx
             .child(dialog.title(theme, "Enable sync"))
             .child(div().mt(px(6)).child(dialog.body(theme, "Finish signing in in your browser. Zeron will keep using this local workspace until you quit and reopen.")))
             .child(div().mt(px(16)).flex().flexRow().justifyEnd().gap(px(8))
-            .child(dialog.btnGhost(theme, "Cancel").id("sync-enable-cancel").onClick(cx.listener(onSyncCancel)))
-            .child(dialog.btnPrimary(theme, "Open browser again").id("sync-enable-open-browser").onClick(cx.listener(onSyncReopen)))),
+            .child(dialog.btnGhost(theme, "Cancel").id("sync-enable-cancel").role(.button).onClick(cx.listener(onSyncCancel)))
+            .child(dialog.btnPrimary(theme, "Open browser again").id("sync-enable-open-browser").role(.button).onClick(cx.listener(onSyncReopen)))),
         .canceling => dialog.card(theme)
             .child(dialog.title(theme, "Canceling sync setup…"))
             .child(div().mt(px(6)).child(dialog.body(theme, "Removing the partial sign-in before returning to your local workspace."))),
@@ -766,8 +788,8 @@ fn spaceDialogs(self: *Shell, window: *Window, theme_in: *const ui.Theme, cx: *C
             .child(div().mt(px(12)).h(px(36)).px(px(12)).flex().itemsCenter().rounded(px(8)).border1().borderColor(theme.border)
                 .bg(theme.bg).child(div().flex1().minW0().child(r.input)))
             .child(div().mt(px(16)).flex().flexRow().justifyEnd().gap(px(8))
-            .child(dialog.btnGhost(theme, "Cancel").id("rename-space-cancel").onClick(cx.listener(onRenameSpaceCancel)))
-            .child(dialog.btnPrimary(theme, "Rename").id("rename-space-save").onClick(cx.listener(onRenameSpaceSave))));
+            .child(dialog.btnGhost(theme, "Cancel").id("rename-space-cancel").role(.button).onClick(cx.listener(onRenameSpaceCancel)))
+            .child(dialog.btnPrimary(theme, "Rename").id("rename-space-save").role(.button).onClick(cx.listener(onRenameSpaceSave))));
         return dialog.modal(window, card, cx.listener(onRenameSpaceScrim));
     }
     const id = self.wiring.delete_space orelse return null;
@@ -788,8 +810,8 @@ fn spaceDialogs(self: *Shell, window: *Window, theme_in: *const ui.Theme, cx: *C
         .child(dialog.title(theme, "Remove project?"))
         .child(div().mt(px(6)).child(dialog.body(theme, copy)))
         .child(div().mt(px(16)).flex().flexRow().justifyEnd().gap(px(8))
-        .child(dialog.btnGhost(theme, "Cancel").id("delete-space-cancel").onClick(cx.listener(onDeleteSpaceCancel)))
-        .child(dialog.btnDanger(theme, "Remove").id("delete-space-confirm").onClick(cx.listener(onDeleteSpaceConfirm))));
+        .child(dialog.btnGhost(theme, "Cancel").id("delete-space-cancel").role(.button).onClick(cx.listener(onDeleteSpaceCancel)))
+        .child(dialog.btnDanger(theme, "Remove").id("delete-space-confirm").role(.button).onClick(cx.listener(onDeleteSpaceConfirm))));
     return dialog.modal(window, card, cx.listener(onDeleteSpaceScrim));
 }
 

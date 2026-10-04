@@ -124,6 +124,8 @@ pub const HistoryPane = struct {
     built_key: u64 = std.math.maxInt(u64),
     geometry: graph.Geometry = .natural(1),
     target_geometry: graph.Geometry = .natural(1),
+    /// The compact ⇄ full graph morph (`graph_geometry_morph`, COLLAPSE).
+    morph: ?struct { from: graph.Geometry, to: graph.Geometry, started: u64 } = null,
 
     hovered_color: ?usize = null,
     copied_sha: ?[]u8 = null,
@@ -510,7 +512,7 @@ pub const HistoryPane = struct {
     }
 
     fn headerButtonTinted(id: []const u8, i: Icon, label: []const u8, tint: Hsla, theme: *const Theme, cx: *Context(HistoryPane)) zpui.StatefulDiv {
-        return div().id(id).size(px(control_size)).flexNone().flex().itemsCenter().justifyCenter()
+        return div().id(id).role(.button).ariaLabel(label).size(px(control_size)).flexNone().flex().itemsCenter().justifyCenter()
             .rounded(px(control_radius)).cursorPointer()
             .bg(ui.hover.blend(cx, id, theme.wash(0), theme.wash(0.14)))
             .onHover(cx.listenerWith(id, onHoverKey))
@@ -570,7 +572,7 @@ pub const HistoryPane = struct {
             .rounded(px(control_radius)).bg(theme.ink(0.035))
             .child(div().size(px(14)).flexNone().flex().itemsCenter().justifyCenter().child(status))
             .child(div().h(px(14)).flex1().minW0().flex().itemsCenter().overflowHidden().child(search))
-            .child(div().id("history-search-close").size(px(16)).flexNone().flex().itemsCenter().justifyCenter()
+            .child(div().id("history-search-close").role(.button).ariaLabel("Close search").size(px(16)).flexNone().flex().itemsCenter().justifyCenter()
                 .rounded(px(3.5)).cursorPointer().hover(sb.bg(theme.ink(0.08)))
                 .onMouseDown(.left, preventDefault)
                 .onClick(cx.listener(onSearchClose))
@@ -581,7 +583,7 @@ pub const HistoryPane = struct {
     fn fetchButton(self: *HistoryPane, theme: *const Theme, window: *Window, cx: *Context(HistoryPane)) zpui.StatefulDiv {
         const fetching = self.store.read(cx).fetching_all;
         const key = "history-fetch-all";
-        var b = div().id(key).h(px(control_size)).px(px(8)).flexNone().flex().itemsCenter().justifyCenter().gap(px(6))
+        var b = div().id(key).role(.button).ariaDisabled(fetching).h(px(control_size)).px(px(8)).flexNone().flex().itemsCenter().justifyCenter().gap(px(6))
             .rounded(px(control_radius))
             .bg(if (fetching) theme.wash(0.05) else ui.hover.blend(cx, key, theme.wash(0), theme.wash(0.14)))
             .occlude().onMouseDown(.left, preventDefault);
@@ -597,7 +599,7 @@ pub const HistoryPane = struct {
     fn viewButton(self: *HistoryPane, theme: *const Theme, cx: *Context(HistoryPane)) zpui.StatefulDiv {
         const tips = self.view_mode == .branch_tips;
         const key = "history-view-trigger";
-        return div().id(key).size(px(control_size)).flexNone().flex().itemsCenter().justifyCenter()
+        return div().id(key).role(.button).ariaLabel(if (tips) "Show all commits" else "Show branch tips").ariaToggled(tips).size(px(control_size)).flexNone().flex().itemsCenter().justifyCenter()
             .rounded(px(control_radius)).cursorPointer()
             .bg(if (tips) theme.accent.opacity(0.12) else ui.hover.blend(cx, key, theme.wash(0), theme.wash(0.14)))
             .onHover(cx.listenerWith(@as([]const u8, key), onHoverKey))
@@ -667,7 +669,7 @@ pub const HistoryPane = struct {
                     (if (hidden == 0) zpui.fmt("Expand {s}", .{ref.label}) else zpui.fmt("Expand {s} ({d} hidden)", .{ ref.label, hidden }))
                 else
                     zpui.fmt("Collapse {s}", .{ref.label});
-                var knob = div().id(.{ "history-graph-fold", ix }).absolute().left(px(x + graph.node_radius + 3)).top(px((h - 16) / 2))
+                var knob = div().id(.{ "history-graph-fold", ix }).role(.button).ariaLabel(tip).ariaExpanded(!is_collapsed).absolute().left(px(x + graph.node_radius + 3)).top(px((h - 16) / 2))
                     .size(px(16)).flex().itemsCenter().justifyCenter().roundedFull()
                     .border1().borderColor(color.opacity(0.32)).bg(theme.bg.opacity(0.96)).cursorPointer()
                     .onMouseDown(.left, preventDefault)
@@ -758,7 +760,7 @@ pub const HistoryPane = struct {
         const focused = if (focus) |f| f.color_id == grow.node_color_id else false;
         const content_opacity: f32 = if (focus) |f| (if (!focused) 1 - (1 - graph.row_unfocused_opacity) * f.amount else 1) else 1;
         const a = frame();
-        var row = div().id(.{ "history-row", ix }).h(px(graph.row_height)).wFull().flexNone().flex().flexRow().itemsCenter()
+        var row = div().id(.{ "history-row", ix }).role(.button).ariaLabel(c.subject).h(px(graph.row_height)).wFull().flexNone().flex().flexRow().itemsCenter()
             .textSize(px(11)).cursorPointer()
             .hover(sb.bg(theme.ink(0.025)))
             .onHover(cx.listenerWith(ix, onRowHover))
@@ -791,7 +793,7 @@ pub const HistoryPane = struct {
         if (self.show_sha) {
             const copied = if (self.copied_sha) |s| std.mem.eql(u8, s, c.sha) else false;
             cells = cells.child(div().w(px(self.sha_w)).minW(px(graph.sha_min)).hFull().pr(px(6)).flexShrink(1).flex().itemsCenter().opacity(content_opacity)
-                .child(div().id(.{ "history-sha", ix }).wFull().h(px(24)).flex().itemsCenter().rounded(px(4)).cursorPointer()
+                .child(div().id(.{ "history-sha", ix }).role(.button).ariaLabel(if (copied) "Copied" else zpui.fmt("Copy {s}", .{c.sha[0..@min(7, c.sha.len)]})).wFull().h(px(24)).flex().itemsCenter().rounded(px(4)).cursorPointer()
                     .hover(sb.bg(theme.ink(0.07))).fontFamily(theme.font_mono).textSize(px(10.5))
                     .textColor(if (copied) theme.accent else theme.text_muted)
                     .onClick(cx.listenerWith(ix, onShaClick))
@@ -892,7 +894,7 @@ pub const HistoryPane = struct {
     // ---- menus --------------------------------------------------------------------
 
     fn menuOption(theme: *const Theme, id: anytype, label: []const u8, checked: bool) zpui.StatefulDiv {
-        return ui.popover.menuRow(theme, false).id(id).gap(px(0)).px(px(7)).py(px(4)).rounded(px(9 - ui.popover.card_inset)).textSize(px(11.5))
+        return ui.popover.menuRow(theme, false).id(id).role(.menu_item).gap(px(0)).px(px(7)).py(px(4)).rounded(px(9 - ui.popover.card_inset)).textSize(px(11.5))
             .child(div().flex1().child(label))
             .child(div().w(px(12)).flexNone().flex().justifyEnd().child(if (checked) ui.icon.of(.check, 10, theme.text_muted) else null));
     }
@@ -932,7 +934,7 @@ pub const HistoryPane = struct {
         }
         if (self.show_sha) cols = cols.child(div().relative().w(px(self.sha_w)).minW(px(graph.sha_min)).hFull().flexShrink(1).flex().itemsCenter().child("SHA")
             .child(self.resizeHandle(left, .sha, theme, cx)));
-        var button = div().id("history-columns-button").absolute().right(px(3)).top(px(2)).size(px(20)).flex().itemsCenter().justifyCenter()
+        var button = div().id("history-columns-button").role(.button).ariaLabel("Columns").absolute().right(px(3)).top(px(2)).size(px(20)).flex().itemsCenter().justifyCenter()
             .rounded(px(5)).cursorPointer().hover(sb.bg(theme.ink(0.08)))
             .onMouseDown(.left, cx.listener(onColumnsButton))
             .tooltipWith(@as([]const u8, "Columns"), ui.tooltip.build).tooltipShowDelay(350 * std.time.ns_per_ms)
@@ -948,7 +950,7 @@ pub const HistoryPane = struct {
     fn resizeHandle(self: *HistoryPane, left: DataColumn, right: DataColumn, theme: *const Theme, cx: *Context(HistoryPane)) zpui.StatefulDiv {
         _ = self;
         const pair: [2]DataColumn = .{ left, right };
-        return div().id(.{ "history-resize", @as(usize, @intFromEnum(left)) * 4 + @intFromEnum(right) })
+        return div().id(.{ "history-resize", @as(usize, @intFromEnum(left)) * 4 + @intFromEnum(right) }).role(.separator).ariaLabel("Resize column").ariaOrientation(.vertical)
             .absolute().left(px(-3)).top(px(0)).bottom(px(0)).w(px(6)).cursorColResize()
             .hover(sb.bg(theme.border_strong.opacity(0.7)))
             .onMouseDown(.left, cx.listenerWith(pair, onResizeDown))
@@ -1019,11 +1021,32 @@ pub const HistoryPane = struct {
         _ = model.settings_store.update(cx.app, .debounced, [3]f32{ self.author_w, self.date_w, self.sha_w }, Set.set);
     }
 
-    fn updateGeometry(self: *HistoryPane, width: f32, scale: f32) void {
+    /// `container_query` → geometry: a compactness flip morphs the graph
+    /// (width + lane spacing) over COLLAPSE; other changes apply at once.
+    fn updateGeometry(self: *HistoryPane, width: f32, scale: f32, window: *Window, cx: *Context(HistoryPane)) void {
         const opt = self.optionalColumnsWidth();
+        const previous = self.target_geometry;
         const responsive = graph.responsiveGeometry(self.lane_capacity, width, opt);
-        const compact = graph.shouldUseCompact(responsive, self.target_geometry, width, opt);
-        const target = graph.stabilizedGeometry(responsive, self.target_geometry, scale, compact);
+        const compact = graph.shouldUseCompact(responsive, previous, width, opt);
+        const target = graph.stabilizedGeometry(responsive, previous, scale, compact);
+        const now = cx.app.executor.now();
+        if (self.morph) |m| if (std.meta.eql(self.geometry, m.to)) {
+            self.morph = null;
+        };
+        const reduced = if (model.settings_store.current(cx.app)) |st| st.theme.reduce_motion == .on else false;
+        if (self.morph) |m| {
+            if (m.to.compact != target.compact) self.morph = null;
+        }
+        if (self.morph == null and target.compact != previous.compact and !reduced) {
+            self.morph = .{ .from = self.geometry, .to = target, .started = now };
+            self.target_geometry = target;
+        }
+        if (self.morph) |m| {
+            const t = zt.motion.collapse.progressAt(now -| m.started, 1);
+            self.geometry = if (t >= 1) m.to else graph.interpolate(m.from, m.to, t);
+            if (t >= 1) self.morph = null else window.requestAnimationFrame();
+            return;
+        }
         self.target_geometry = target;
         self.geometry = target;
     }
@@ -1095,7 +1118,7 @@ pub const HistoryPane = struct {
     };
 
     fn renderMain(self: *HistoryPane, theme: *const Theme, width: f32, window: *Window, cx: *Context(HistoryPane)) AnyElement {
-        self.updateGeometry(width, window.scaleFactor());
+        self.updateGeometry(width, window.scaleFactor(), window, cx);
         var main = div().sizeFull().flex().flexCol();
         if (self.visible.len > 0) main = main.child(self.columnHeader(theme, cx));
         return zpui.intoAnyElement(main.child(self.renderBodyArea(theme, window, cx)));

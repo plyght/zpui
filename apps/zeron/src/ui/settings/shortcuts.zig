@@ -91,11 +91,11 @@ pub fn bindingControl(v: *SettingsView, id: ShortcutId, t: *const Theme, cx: *Co
     const non_default = !std.mem.eql(u8, combo, id.defaultCombo());
     var ctl = div().flex().flexNone().itemsCenter().gap(px(20));
     if (non_default and !recording) {
-        ctl = ctl.child(div().id(.{ "shortcut-reset", ix }).minH(px(24)).flex().itemsCenter()
+        ctl = ctl.child(div().id(.{ "shortcut-reset", ix }).role(.button).ariaLabel(zpui.fmt("Reset {s} shortcut", .{id.label()})).minH(px(24)).flex().itemsCenter()
             .textSize(rems(11)).textColor(t.text_muted).cursorPointer().hover(sb.textColor(t.text))
             .onClick(cx.listenerWith(ix, SettingsView.onResetShortcut)).child("Reset"));
     }
-    var chip = div().id(.{ "shortcut-combo", ix }).minW(px(96)).h(px(w.select_height)).px(px(12)).rounded(px(8))
+    var chip = div().id(.{ "shortcut-combo", ix }).role(.button).ariaLabel(zpui.fmt("Change {s} shortcut: {s}", .{ id.label(), display(combo) })).minW(px(96)).h(px(w.select_height)).px(px(12)).rounded(px(8))
         .border1().flex().itemsCenter().justifyCenter()
         .fontFamily(t.font_mono).textSize(rems(12)).cursorPointer()
         .onClick(cx.listenerWith(ix, SettingsView.onRecord));
@@ -134,7 +134,7 @@ pub fn render(v: *SettingsView, t: *const Theme, _: *zpui.Window, cx: *Context(S
     const customized = !settings.deepEql(s.keymap, default_keymap) or s.escapeStopsActiveAgent or s.composerSendBehavior != .enter;
     const disabled = !customized or v.recording != null;
 
-    var restore = w.actionButton(t, .quiet).id("shortcuts-restore-defaults").flexNone()
+    var restore = w.actionButton(t, .quiet).id("shortcuts-restore-defaults").role(.button).flexNone()
         .child(ui.icon.of(.restart, 14, t.text_muted)).child("Restore defaults");
     if (disabled) restore = restore.opacity(0.35) else restore = restore.onClick(cx.listener(SettingsView.onRestoreDefaults));
 

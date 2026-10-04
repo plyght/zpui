@@ -120,7 +120,7 @@ fn surfaceHelper(s: zt.SurfacePreference, resolved: zt.SurfaceTreatment) []const
 
 
 fn compactAction(t: *const Theme, label: []const u8, id: []const u8) zpui.StatefulDiv {
-    return w.textAction(t, .outlined, label).id(id);
+    return w.textAction(t, .outlined, label).id(id).role(.button).ariaLabel(label);
 }
 
 pub fn render(v: *SettingsView, t: *const Theme, window: *zpui.Window, cx: *Context(SettingsView)) zpui.Div {
@@ -135,7 +135,7 @@ pub fn render(v: *SettingsView, t: *const Theme, window: *zpui.Window, cx: *Cont
         const selected = mode == ts.appearance;
         const sel_t = v.travel(cx, 0x30000 | @as(u32, @intFromEnum(mode)), if (selected) 1 else 0, 150);
         cards = cards.child(w.optionCard(t, modeIcon(mode), mode.label(), selected, sel_t, preview(mode, s))
-            .id(.{ "appearance-mode", @intFromEnum(mode) })
+            .id(.{ "appearance-mode", @intFromEnum(mode) }).role(.button).ariaLabel(mode.label()).ariaSelected(selected)
             .onClick(cx.listenerWith(mode, onMode)));
     }
 
@@ -144,11 +144,13 @@ pub fn render(v: *SettingsView, t: *const Theme, window: *zpui.Window, cx: *Cont
     {
         const choice: zt.AccentSelection = .theme_default;
         swatches = swatches.child(accentSwatch(t, choice, ts.accent == .theme_default).id("accent-default")
+            .role(.button).ariaLabel(choice.label()).ariaSelected(ts.accent == .theme_default)
             .onClick(cx.listenerWith(@as(u8, 255), onAccent)));
     }
     for (zt.AccentPreset.all, 0..) |p, i| {
         const choice: zt.AccentSelection = .{ .preset = p };
         swatches = swatches.child(accentSwatch(t, choice, ts.accent.eql(choice)).id(.{ "accent", i })
+            .role(.button).ariaLabel(choice.label()).ariaSelected(ts.accent.eql(choice))
             .onClick(cx.listenerWith(@as(u8, @intCast(i)), onAccent)));
     }
 
@@ -216,7 +218,7 @@ fn widthRow(v: *SettingsView, t: *const Theme, s: *const UiSettings, cx: *Contex
         .child(div().absolute().left(zpui.relative(fraction)).ml(px(-7)).top(px(-5)).size(px(14)).roundedFull().bg(t.accent)));
     var value_row = div().flex().justifyBetween().textSize(rems(12)).lineHeight(px(16))
         .child(zpui.fmt("{d:.0} px", .{width}))
-        .child(div().id("reset-transcript-width").cursorPointer().textColor(t.text_muted)
+        .child(div().id("reset-transcript-width").role(.button).cursorPointer().textColor(t.text_muted)
         .hover(sb.textColor(t.text)).onClick(cx.listener(SettingsView.onWidthReset)).child("Reset"));
     var range_row = div().flex().justifyBetween().textSize(rems(11)).lineHeight(px(14)).textColor(t.text_muted)
         .child("560 px").child("1,200 px");

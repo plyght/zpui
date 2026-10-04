@@ -287,6 +287,26 @@ pub const ModelPicker = struct {
         cx.notify();
     }
 
+    /// Assistive technology moved the reasoning slider (set value / increment / decrement).
+    fn onA11yEffort(self: *ModelPicker, req: *const zpui.a11y.ActionRequest, _: *Window, cx: *Context(ModelPicker)) void {
+        const in = self.inputs(cx);
+        const ladder = rc.traitLadder(&in);
+        if (ladder.len == 0) return;
+        const effort = rc.effectiveReasoning(&in);
+        var cur: usize = 0;
+        for (ladder, 0..) |l, i| if (effort == l) {
+            cur = i;
+        };
+        const next: usize = switch (req.action) {
+            .increment => @min(cur + 1, ladder.len - 1),
+            .decrement => cur -| 1,
+            else => @intFromFloat(std.math.clamp(@round(req.numeric orelse return), 0, @as(f64, @floatFromInt(ladder.len - 1)))),
+        };
+        self.draft.reasoning = ladder[next];
+        cx.emit(Picked{});
+        cx.notify();
+    }
+
     fn showModels(self: *ModelPicker, window: *Window, cx: *Context(ModelPicker)) void {
         self.page = .models;
         self.favorites_view = false;
@@ -480,7 +500,7 @@ pub const ModelPicker = struct {
         const customized = effort != null and effort != rc.defaultReasoning(ladder);
         const loading = catalog.harnesses == null;
 
-        var chip = div().id("picker-model").relative()
+        var chip = div().id("picker-model").role(.button).ariaLabel(zpui.fmt("Model: {s}", .{label orelse if (loading) "Loading" else "No agents available"})).ariaExpanded(self.open).relative()
             .h(px(metrics.model_chip_height)).maxW(px(metrics.model_chip_max_width)).minW0()
             .flex().flexRow().itemsCenter().gap(px(6)).px(px(6)).rounded(px(8))
             .textSize(rems(12)).fontWeight(500)
@@ -561,7 +581,7 @@ pub const ModelPicker = struct {
     fn listHeader(self: *ModelPicker, theme: *const Theme, cx: *Context(ModelPicker)) zpui.Div {
         return div().h(px(list_header)).flexNone().px(px(chrome.card_inset)).borderB1().borderColor(theme.hairline(0.08))
             .flex().itemsCenter().gap(px(4))
-            .child(chrome.menuRow(theme, "compact-list-back", false).flexNone().onClick(cx.listener(ModelPicker.onBack))
+            .child(chrome.menuRow(theme, "compact-list-back", false).role(.button).ariaLabel("Back").flexNone().onClick(cx.listener(ModelPicker.onBack))
                 .child(chrome.icon(.alt_arrow_left, 14, theme.text_muted)))
             .child(div().flex1().minW0().textSize(rems(13)).child(self.search));
     }
@@ -589,13 +609,14 @@ pub const ModelPicker = struct {
             const hovered = ix == self.active;
             const fav = if (self.defaults) |d| d.isFavorite(r.harness, r.model.id) else false;
             const mark, const tint = chrome.harnessMark(r.harness);
-            var row = div().id(.{ "model-row", ix }).h(px(compact_row_height)).flexNone().pl(px(8)).pr(px(4))
+            var row = div().id(.{ "model-row", ix }).role(.list_box_option).ariaLabel(zpui.fmt("{s} · {s}", .{ r.model.label, chrome.harnessName(r.harness) })).ariaSelected(is_selected).h(px(compact_row_height)).flexNone().pl(px(8)).pr(px(4))
                 .rounded(px(chrome.menu_item_radius)).flex().itemsCenter().gap(px(8)).cursorPointer()
                 .textColor(theme.text)
                 .onClick(cx.listenerWith(ix, ModelPicker.onModelRow))
                 .onHover(cx.listenerWith(ix, ModelPicker.onHoverRow));
             row = if (is_selected) chrome.lightPlate(theme, 1).apply(row) else row.border1().borderColor(zpui.hsla(0, 0, 0, 0));
             if (!is_selected and hovered) row = row.bg(theme.ink(0.05));
+            if (hovered) row = row.ariaActiveDescendant();
             row = row.child(chrome.icon(mark, 14, tint orelse theme.text_muted))
                 .child(div().flex1().minW0().flex().itemsBaseline().gap(px(6)).textSize(rems(12))
                     .child(div().flexNone().maxWFull().truncate().fontWeight(500).child(r.model.label)))
@@ -618,7 +639,7 @@ pub const ModelPicker = struct {
             const is_star = ix == 0;
             const sel = !is_star and effective == offered[ix - 1].id;
             const mark, const tint = if (is_star) .{ chrome.Icon.star_bold, @as(?zpui.Hsla, null) } else chrome.harnessMark(offered[ix - 1].id);
-            var row = div().id(.{ "compact-provider", ix }).h(px(compact_row_height)).flexNone().px(px(8))
+            var row = div().id(.{ "compact-provider", ix }).role(.list_box_option).ariaLabel(if (is_star) "Starred" else offered[ix - 1].name).ariaSelected(sel).h(px(compact_row_height)).flexNone().px(px(8))
                 .rounded(px(chrome.menu_item_radius)).flex().itemsCenter().gap(px(8)).cursorPointer().textColor(theme.text)
                 .onClick(cx.listenerWith(ix, ModelPicker.onProviderRow))
                 .onHover(cx.listenerWith(ix, ModelPicker.onHoverRow));
@@ -633,7 +654,7 @@ pub const ModelPicker = struct {
         return div().flex().flexCol()
             .child(div().h(px(list_header)).flexNone().px(px(chrome.card_inset)).borderB1().borderColor(theme.hairline(0.08))
                 .flex().itemsCenter().gap(px(4))
-                .child(chrome.menuRow(theme, "compact-provider-back", false).flexNone().onClick(cx.listener(ModelPicker.onBack))
+                .child(chrome.menuRow(theme, "compact-provider-back", false).role(.button).ariaLabel("Back").flexNone().onClick(cx.listener(ModelPicker.onBack))
                     .child(chrome.icon(.alt_arrow_left, 14, theme.text_muted)))
                 .child(div().textSize(rems(13)).textColor(theme.text_muted).child("Providers")))
             .child(col);
@@ -665,7 +686,7 @@ pub const ModelPicker = struct {
             selected_ix = i;
         };
         // Header: provider button, title (effort over model name), fast mode.
-        var title = div().id("compact-select-model").flex1().minW0().hFull().px(px(8)).rounded(px(chrome.menu_item_radius))
+        var title = div().id("compact-select-model").role(.button).ariaLabel(zpui.fmt("{s} · {s} · Change model", .{ if (ladder.len > 0) rc.reasoningLabel(ladder[selected_ix]) else "Default", label })).flex1().minW0().hFull().px(px(8)).rounded(px(chrome.menu_item_radius))
             .flex().flexCol().itemsStart().justifyCenter().cursorPointer()
             .hover(sb.bg(theme.ink(0.05)))
             .onClick(cx.listener(ModelPicker.onShowModels));
@@ -682,7 +703,7 @@ pub const ModelPicker = struct {
         var header = div().h(px(if (ladder.len > 0) header_height else header_height_single)).flexNone().flex().gap(px(chrome.card_inset));
         if (harness) |h| {
             const mark, const tint = chrome.harnessMark(h);
-            header = header.child(div().id("compact-select-provider").w(px(fast_button_width)).hFull().flexNone()
+            header = header.child(div().id("compact-select-provider").role(.button).ariaLabel(zpui.fmt("{s} · Change provider", .{chrome.harnessName(h)})).w(px(fast_button_width)).hFull().flexNone()
                 .rounded(px(chrome.menu_item_radius)).flex().itemsCenter().justifyCenter().cursorPointer()
                 .hover(sb.bg(theme.ink(0.05)))
                 .tooltipWith(chrome.TipData{ .text = chrome.harnessName(h), .dark = theme.appearance.isDark() }, chrome.buildTooltip)
@@ -696,7 +717,7 @@ pub const ModelPicker = struct {
         };
         if (fast_option) |o| {
             const on = std.mem.eql(u8, self.optionChoice(o), "on");
-            header = header.child(div().id("compact-fast").w(px(fast_button_width)).hFull().flexNone()
+            header = header.child(div().id("compact-fast").role(.button).ariaLabel("Fast mode").ariaToggled(on).w(px(fast_button_width)).hFull().flexNone()
                 .rounded(px(chrome.menu_item_radius)).flex().itemsCenter().justifyCenter().cursorPointer()
                 .hover(sb.bg(theme.ink(0.05)))
                 .tooltipWith(chrome.TipData{ .text = if (on) "Fast mode on · Turn off" else "Fast mode off · Turn on", .dark = theme.appearance.isDark() }, chrome.buildTooltip)
@@ -708,9 +729,13 @@ pub const ModelPicker = struct {
             const fraction: f32 = if (ladder.len > 1) @as(f32, @floatFromInt(selected_ix)) / @as(f32, @floatFromInt(ladder.len - 1)) else 0;
             var hits = div().absolute().inset0().flex().flexRow();
             for (ladder, 0..) |level, i| {
-                hits = hits.child(div().id(.{ "effort-stop", i }).flex1().hFull().cursorPointer().onClick(cx.listenerWith(level, ModelPicker.onReasoning)));
+                hits = hits.child(div().id(.{ "effort-stop", i }).role(.button).ariaLabel(rc.reasoningLabel(level)).ariaSelected(i == selected_ix).flex1().hFull().cursorPointer().onClick(cx.listenerWith(level, ModelPicker.onReasoning)));
             }
-            const slider = div().id("compact-effort-slider").relative().h(px(slider_height))
+            const slider = div().id("compact-effort-slider").role(.slider).ariaLabel("Reasoning effort").ariaValue(rc.reasoningLabel(ladder[selected_ix]))
+                .ariaNumericValue(@floatFromInt(selected_ix)).ariaMinNumericValue(0).ariaMaxNumericValue(@floatFromInt(ladder.len - 1)).ariaNumericValueStep(1)
+                .ariaOrientation(.horizontal).ariaDescription("Use Left and Right to adjust reasoning; Home and End select the first and last levels")
+                .onA11yAction(.set_value, cx.listener(ModelPicker.onA11yEffort)).onA11yAction(.increment, cx.listener(ModelPicker.onA11yEffort)).onA11yAction(.decrement, cx.listener(ModelPicker.onA11yEffort))
+                .relative().h(px(slider_height))
                 .child(chrome.lightPlate(theme, 1).apply(div().absolute().left0().right0().top(px((slider_height - rail_height) / 2)).h(px(rail_height)).roundedFull()))
                 // The accent fill runs a rail radius past the thumb centre.
                 .child(chrome.accentPlate(theme, 1, 0).apply(div().absolute().left0().top(px((slider_height - rail_height) / 2)).h(px(rail_height)).roundedFull()
@@ -732,7 +757,7 @@ pub const ModelPicker = struct {
                 for (o.choices) |c| if (std.mem.eql(u8, c.id, cur)) {
                     cur_label = c.label;
                 };
-                opts = opts.child(div().id(.{ "compact-option", ix }).h(px(26)).px(px(8)).rounded(px(chrome.menu_item_radius))
+                opts = opts.child(div().id(.{ "compact-option", ix }).role(.button).ariaLabel(zpui.fmt("{s}: {s}", .{ o.label, cur_label })).h(px(26)).px(px(8)).rounded(px(chrome.menu_item_radius))
                     .flex().itemsCenter().gap(px(8)).cursorPointer().hover(sb.bg(theme.ink(0.05)))
                     .onClick(cx.listenerWith(ix, ModelPicker.onCycleOption))
                     .child(div().flex1().minW0().truncate().textSize(rems(13)).fontWeight(500).textColor(theme.text).child(o.label))

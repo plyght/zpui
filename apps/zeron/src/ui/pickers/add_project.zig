@@ -725,7 +725,7 @@ pub const AddProject = struct {
     }
 
     fn row(self: *AddProject, ix: usize, theme: *const Theme, cx: *Context(AddProject)) zpui.StatefulDiv {
-        return ui.popover.menuRow(theme, ix == self.active).id(.{ "project-result", ix })
+        return ui.popover.menuRow(theme, ix == self.active).id(.{ "project-result", ix }).role(.menu_item)
             .rounded(px(ui.popover.palette_item_radius)).minH(px(30)).py(px(4))
             .onMouseMove(cx.listenerWith(ix, onRowHover))
             .onClick(cx.listenerWith(ix, onRow));
@@ -828,10 +828,10 @@ pub const AddProject = struct {
             if (more and self.crumb_menu_open) el = el.bg(theme.element_hover);
             if (spec.glyph) |g| el = el.child(ui.icon.of(g, 14, color));
             el = el.child(div().maxW(px(180)).truncate().whitespaceNowrap().child(spec.name));
-            if (!spec.current) el = el.cursorPointer().hover(sb.bg(theme.element_hover).textColor(theme.text)).onClick(cx.listenerWith(ix, onCrumb));
+            if (!spec.current) el = el.role(.button).ariaLabel(if (more) "Show hidden folders" else spec.name).cursorPointer().hover(sb.bg(theme.element_hover).textColor(theme.text)).onClick(cx.listenerWith(ix, onCrumb));
             if (more and self.crumb_menu_open) {
                 var card = ui.popover.card(theme).minW(px(180)).maxW(px(280)).onMouseDownOut(cx.listener(onCrumbMenuOut));
-                for (cr.hidden, 0..) |h, hi| card = card.child(ui.popover.menuRow(theme, false).id(.{ "project-crumb-menu", hi })
+                for (cr.hidden, 0..) |h, hi| card = card.child(ui.popover.menuRow(theme, false).id(.{ "project-crumb-menu", hi }).role(.menu_item)
                     .onClick(cx.listenerWith(hi, onHiddenCrumb))
                     .child(ui.icon.of(.folder, 16, theme.text_muted))
                     .child(div().minW0().truncate().whitespaceNowrap().child(h.label)));
@@ -845,7 +845,7 @@ pub const AddProject = struct {
         const back_label: []const u8 = if (self.step == .devices) "Back to commands" else "Back";
         const crumb_row = div().h(px(36)).flexNone().px(px(12)).flex().itemsCenter().gap(px(6))
             .borderB1().borderColor(theme.hairline(0.06)).textSize(ui.rems(12))
-            .child(div().id("project-crumb-back").group("project-crumb-back").size(px(24)).flexNone().flex().itemsCenter().justifyCenter()
+            .child(div().id("project-crumb-back").role(.button).ariaLabel(back_label).group("project-crumb-back").size(px(24)).flexNone().flex().itemsCenter().justifyCenter()
                 .rounded(px(6)).cursorPointer().hover(sb.bg(theme.element_hover))
                 .tooltipWith(back_label, ui.tooltip.build)
                 .onClick(cx.listener(onBack))
@@ -860,7 +860,7 @@ pub const AddProject = struct {
         if (self.step != .devices) footer = footer.child(keyHint(theme, "←", "Back"));
         footer = footer.child(keyHint(theme, "Esc", "Close"));
         if (self.step == .folders) {
-            var add = div().id("project-add").flex().itemsCenter().gap(px(6)).pl(px(3)).pr(px(8)).py(px(3)).my(px(-3)).mr(px(-8)).rounded(px(8))
+            var add = div().id("project-add").role(.button).ariaLabel("Add project").flex().itemsCenter().gap(px(6)).pl(px(3)).pr(px(8)).py(px(3)).my(px(-3)).mr(px(-8)).rounded(px(8))
                 .child(ui.popover.kbdHint(theme, zpui.fmt("{s}Enter", .{mod()})))
                 .child(div().textSize(ui.rems(10)).fontWeight(500).textColor(theme.text).child(if (self.busy) "Adding…" else "Add project"));
             add = if (can_add) add.cursorPointer().hover(sb.bg(ui.theme.cardSelectedBg(theme))).onClick(cx.listener(onAdd)) else add.opacity(0.5);

@@ -269,7 +269,7 @@ test "queue rows reorder optimistically and edit under the host's lease" {
         l.value.ext.edit_pending = try testing.allocator.dupe(u8, "q-c");
     }
     try f.ok(extras.onBeginEdit,
-        \\{"outcome":"acquired","leaseId":"L2","baseTextHash":"H2","text":"third"}
+        \\{"outcome":"acquired","leaseId":"L2","baseTextHash":"H2","text":"third","attachments":[]}
     );
     f.app.advanceClock(20_100 * std.time.ns_per_ms);
     try expectCall(.RenewQueuedMessageEdit, &.{"\"leaseId\":\"L2\""});

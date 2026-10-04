@@ -26,6 +26,7 @@ const view_mod = @import("view.zig");
 const background = @import("../background/root.zig");
 const motion = @import("motion.zig");
 const thread_naming = @import("thread_naming.zig");
+const voice_service = @import("../../voice/service.zig"); // [dictation]
 
 const SettingsView = view_mod.SettingsView;
 const Context = zpui.Context;
@@ -57,6 +58,8 @@ pub const SelectId = enum(u8) {
     update_policy,
     /// Appearance → Background effect (only while an image is available).
     background_effect,
+    /// [dictation] Voice → Microphone (once dictation is on and ready).
+    microphone,
 };
 
 /// `UPDATE_POLICIES`: (policy, menu label, explanation).
@@ -256,6 +259,14 @@ pub fn spec(v: *SettingsView, id: SelectId, cx: anytype) Spec {
             const sel = std.mem.indexOfScalar(model.settings.AppshotDestination, &all, s.appshotDestination) orelse 0;
             return .{ .label = "Destination", .options = list.items, .selected = sel, .width = 148 };
         },
+        .microphone => {
+            // [dictation] `VoiceCard::input_options`.
+            const app = if (@TypeOf(cx) == *zpui.App) cx else cx.app;
+            const vm = voice_service.voiceModel(app) orelse return .{ .label = "Microphone", .options = &.{}, .selected = 0 };
+            const opts, const sel = vm.read(cx).inputOptions(a, s.dictationInput);
+            for (opts) |o| list.append(a, .{ .label = o.label, .detail = o.detail }) catch {};
+            return .{ .label = "Microphone", .options = list.items, .selected = sel, .width = 200 };
+        },
         .provider_device => {
             const ws = v.state.read(cx).workspace.read(cx);
             const pt = ui.theme.get(cx);
@@ -415,6 +426,18 @@ pub fn commit(v: *SettingsView, id: SelectId, ix: usize, cx: *Context(SettingsVi
         },
         .thread_naming => thread_naming.commit(v, ix, cx),
         .provider_device => {},
+        .microphone => {
+            // [dictation] the chosen device id; null records from the system default.
+            const vm = voice_service.voiceModel(cx.app) orelse return;
+            const saved = store.current(cx).dictationInput;
+            const mic_id = vm.read(cx).inputIdAt(ix, saved);
+            const Mic = struct {
+                fn set(v_: ?[]const u8, st: *UiSettings, arena: std.mem.Allocator) void {
+                    st.dictationInput = if (v_) |x| arena.dupe(u8, x) catch null else null;
+                }
+            };
+            store.update(cx, .immediate, mic_id, Mic.set);
+        },
     }
 }
 
@@ -445,6 +468,12 @@ pub fn flip(v: *SettingsView, which: Toggle, cx: *Context(SettingsView)) void {
         }
     };
     _ = v;
+    // [dictation] The Dictation switch is `VoiceCard::primary`: it downloads
+    // the model first, cancels a download, then toggles dictation.
+    if (which == .dictation) if (voice_service.voiceModel(cx.app)) |vm| {
+        vm.update(cx, voice_service.VoiceModel.primary, .{});
+        return;
+    };
     const immediate = which == .dictation or which == .escape_stops or which == .pause_animations;
     store.update(cx, if (immediate) .immediate else .debounced, which, F.f);
     if (which == .match_wallpaper) {
@@ -466,6 +495,7 @@ pub fn render(v: *SettingsView, id: SelectId, t: *const Theme, cx: *Context(Sett
     const fill = if (open) w.selectFill(t, true) else ui.hover.blend(cx, key, w.selectFill(t, false), w.selectFill(t, true));
     const current: ?Option = if (sp.selected < sp.options.len) sp.options[sp.selected] else null;
     var trigger = w.selectTrigger(t, fill).id(.{ "settings-select", @intFromEnum(id) })
+        .role(.button).ariaExpanded(open).ariaLabel(zpui.fmt("{s}: {s}", .{ sp.label, if (current) |c| c.label else "" }))
         .onHover(cx.listenerWith(id, SettingsView.onSelectHover))
         .onClick(cx.listenerWith(id, SettingsView.onSelectTrigger));
     if (sp.width) |wd| trigger = trigger.w(px(wd));
@@ -494,6 +524,7 @@ fn menu(v: *SettingsView, sp: Spec, t: *const Theme, cx: *Context(SettingsView))
     for (sp.options, 0..) |o, ix| {
         const active = ix == sp.selected or ix == v.highlighted;
         var row = ui.popover.menuRow(t, active).id(.{ "settings-select-option", ix })
+            .role(.menu_item_radio).ariaLabel(o.label).ariaToggled(ix == sp.selected)
             .onClick(cx.listenerWith(ix, SettingsView.onSelectOption));
         if (o.leading.element()) |el| row = row.child(el);
         row = row.child(div().flex1().minW0().truncate().child(o.label));

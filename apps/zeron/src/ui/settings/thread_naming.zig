@@ -182,7 +182,7 @@ pub fn control(v: *SettingsView, t: *const Theme, cx: *Context(SettingsView)) zp
     if (v.title.phase == .loading and v.title.value == null) return div().textColor(t.text_muted).child("Loading…");
     const s = v.title.settings();
     var row = div().flexNone().flex().flexRow().itemsCenter().gap(px(4));
-    if (s.harness != null) row = row.child(w.textAction(t, .quiet, "Reset").id("thread-naming-reset").onClick(cx.listener(onReset)));
+    if (s.harness != null) row = row.child(w.textAction(t, .quiet, "Reset").id("thread-naming-reset").role(.button).ariaLabel("Name threads with the session agent").onClick(cx.listener(onReset)));
     return row.child(chip(v, t, cx));
 }
 
@@ -199,7 +199,7 @@ fn chip(v: *SettingsView, t: *const Theme, cx: *Context(SettingsView)) zpui.Stat
         const mark, const tint = ui.icon.harnessMark(h);
         break :blk ui.icon.of(mark, 16, tint orelse t.text_muted);
     } else ui.icon.of(.chat_round_line, 16, t.text_muted);
-    var c = div().id("thread-naming-picker").relative().flexNone().h(px(28)).px(px(6)).rounded(px(8))
+    var c = div().id("thread-naming-picker").role(.button).ariaExpanded(open).ariaLabel("Thread naming").relative().flexNone().h(px(28)).px(px(6)).rounded(px(8))
         .flex().flexRow().itemsCenter().gap(px(6)).cursorPointer().bg(bg)
         .textSize(ui.rems(12.5)).textColor(t.text)
         .onHover(cx.listenerWith(select.SelectId.thread_naming, SettingsView.onSelectHover))

@@ -10,7 +10,7 @@ external samples — see zeron `docs/sound-design/README.md` and
 | `done.wav` | completion, settling rounded pair | an agent turn completed |
 | `request.wav` | agent question, rising rounded pair | the agent waits on input |
 | `attention.wav` | failure / durable disconnection, downward pair | a run failed, or connectivity went `Offline`/`Reconnecting` |
-| `appshot.wav` | soft shutter + chime | Appshot capture confirmation (Appshots are not ported yet; kept for parity) |
+| `appshot.wav` | soft shutter + chime | Appshot capture confirmation |
 
-The app embeds `done`, `request` and `attention` through the `zeron_sounds` module
+The app embeds `done`, `request`, `attention` and `appshot` through the `zeron_sounds` module
 (build.zig `addZeronLifecycle`).

@@ -46,10 +46,12 @@ const prefs_mod = @import("ui/shell/prefs.zig");
 const fixtures_mod = @import("ui/shell/fixtures.zig");
 const shell_mod = @import("ui/shell/shell.zig");
 const settings_ui = @import("ui/settings/root.zig");
+const voice_service = @import("voice/service.zig"); // [dictation]
 const smoke = @import("smoke.zig");
 const glass_lab = @import("glass_lab.zig"); // [glass-lab]
 const lifecycle = @import("lifecycle/root.zig"); // [lifecycle] menus, quit/reopen, deep links, updates, logs
 const engine_bin = @import("engine_bin.zig");
+const appshot_service = @import("appshots/service.zig"); // [appshots] global hotkey + capture delivery
 
 const App = zpui.App;
 const log = std.log.scoped(.zeron);
@@ -135,6 +137,8 @@ fn onLaunch(l: *Launch, app: *App) void {
         settings_ui.theme_library.init(app, l.io, dir, false);
     }
     actions.keymap.applyKeymap(app, &keymap_cfg, send) catch |err| log.err("keymap: {t}", .{err});
+    // [dictation] the voice model + the composer's dictation service (voice/service.zig).
+    voice_service.install(app, l.io, l.environ, if (l.fixtures_dir == null) l.data_dir else null);
 
     if (l.fixtures_dir) |dir| {
         l.fixtures = fixtures_mod.load(l.gpa, l.io, dir) catch |err| blk: {
@@ -228,6 +232,12 @@ fn onLaunch(l: *Launch, app: *App) void {
         .open_main = openMainWindow,
         .persist_geometry = l.fixtures == null and !l.size_set,
     }) catch |err| log.err("lifecycle: {t}", .{err});
+    // [appshots] Global capture shortcut + `zeron appshot` activation (not in fixture runs).
+    if (l.fixtures == null) appshot_service.install(app, .{
+        .io = l.io,
+        .data_dir = l.data_dir,
+        .sound_disabled = l.environ.get("ZERON_DISABLE_SOUND") != null,
+    }) catch |err| log.err("appshots: {t}", .{err});
     const window = lifecycle.openMainWindow(app) orelse {
         app.quit();
         return;
@@ -315,6 +325,19 @@ pub fn main(init: std.process.Init) !void {
         var out_buf: [64]u8 = undefined;
         const line = std.fmt.bufPrint(&out_buf, "zeron {s}\n", .{lifecycle.build_info.version}) catch unreachable;
         _ = std.c.write(1, line.ptr, line.len);
+        return;
+    }
+    // [appshots] `zeron appshot`: ask the running headed Zeron to capture (Linux
+    // desktops bind it in their Keyboard Shortcuts when there is no portal).
+    if (argv.len > 1 and std.mem.eql(u8, argv[1], "appshot")) {
+        const dir = model.settings.dataDir(arena, init.environ_map, init.io) catch {
+            std.debug.print("zeron: could not resolve the data directory\n", .{});
+            std.process.exit(1);
+        };
+        if (appshot_service.requestRunningAppshot(dir)) |msg| {
+            std.debug.print("zeron: {s}\n", .{msg});
+            std.process.exit(1);
+        }
         return;
     }
     var launch: Launch = .{ .gpa = gpa, .io = init.io, .environ = init.environ_map };
@@ -410,6 +433,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test {
+    _ = @import("appshots/tests.zig"); // [appshots]
     _ = @import("lifecycle/root.zig");
     _ = @import("smoke.zig");
     _ = @import("glass_lab.zig");
@@ -422,5 +446,9 @@ test {
     _ = @import("ui/background/root.zig");
     _ = @import("ui/pickers/root.zig");
     _ = @import("ui/shell/right_pane.zig");
+    _ = @import("ui/shell/terminal_panel.zig");
     _ = @import("ui/sidebar/project_icon.zig");
+    _ = @import("voice/service.zig"); // [dictation]
+    _ = @import("ui/shell/dictation_test.zig"); // [dictation]
+    _ = @import("ui/sidebar/sections_ui.zig");
 }

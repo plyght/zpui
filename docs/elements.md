@@ -397,7 +397,11 @@ div().id(.{ "opt", ix }).role(.list_box_option).ariaSelected(sel).ariaActiveDesc
 
 Also `ariaDescription ariaKeyshortcuts ariaExpanded ariaDisabled ariaReadOnly ariaNumericValue
 ariaMin/MaxNumericValue ariaNumericValueStep ariaOrientation ariaLevel ariaPositionInSet ariaSizeOfSet
-ariaRow/ColumnIndex ariaRow/ColumnCount` (and `role`/`ariaLabel`/… on `svg()` with an id).
+ariaRow/ColumnIndex ariaRow/ColumnCount`, `ariaUrl(url)` (links: AT-SPI Hyperlink `GetURI`,
+AXURL) and `ariaTextSelection(anchor, focus)` (text fields, UTF-8 byte offsets; with an
+`onA11yAction(.set_text_selection, …)` listener ATs can move the caret: AT-SPI
+`SetCaretOffset`/`SetSelection`, `setAccessibilitySelectedTextRange:`) (and `role`/`ariaLabel`/… on
+`svg()` with an id).
 Text elements inside a node name it when it has no label (buttons, tabs, menu items, …), become
 the value of a text field, or appear as static-text children of other nodes. `click` is implied by
 `onClick`, `focus` by a focus handle; requests without an `onA11yAction` listener fall back to a
@@ -407,6 +411,9 @@ The tree is only built while assistive technology is connected (`window.a11yActi
 platform activates it, tests call `window.setA11yActive(true)` or
 `TestWindow.simulateA11yActivation(true)`). `window.a11yTree()` is the last frame's tree
 (`dump` prints it), `window.a11yChanges()` the diff the bridges turn into notifications.
+`tree.unroled` lists the interactive elements (click listeners or a tab-stop focus handle) that
+declared no role and so are invisible to ATs — an audit for app tests (zeron's
+`ui/settings/a11y_tests.zig` walks the whole shell with it).
 Linux: `ZPUI_A11Y=1` forces the AT-SPI bridge on, `ZPUI_NO_A11Y=1` / `NO_AT_BRIDGE=1` off.
 
 ## 5b. Native child views and the overlay plane

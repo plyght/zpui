@@ -796,7 +796,7 @@ fn accountRow(v: *SettingsView, a: *const Account, ix: usize, first: bool, t: *c
         .child(div().size(px(25)).roundedFull().bg(t.wash(0.09)).flex().itemsCenter().justifyCenter()
         .textSize(rems(11.5)).fontWeight(500).textColor(if (a.active) t.text else t.text_muted).child(initial));
     const menu_open = if (v.accounts.row_menu) |m| std.mem.eql(u8, m, a.id) else false;
-    var more = w.actionButton(t, .quiet).id(.{ "account-more", ix }).w(px(28)).px(px(0)).justifyCenter().relative()
+    var more = w.actionButton(t, .quiet).id(.{ "account-more", ix }).role(.button).ariaLabel(zpui.fmt("Actions for {s}", .{email})).ariaExpanded(menu_open).w(px(28)).px(px(0)).justifyCenter().relative()
         .onClick(cx.listenerWith(ix, onMore))
         .child(ui.icon.of(.more_horizontal, 16, t.text_muted));
     if (menu_open) {
@@ -804,9 +804,9 @@ fn accountRow(v: *SettingsView, a: *const Account, ix: usize, first: bool, t: *c
         const pt = &pt_val;
         var menu = ui.popover.card(pt).w(px(208)).flex().flexCol().onMouseDownOut(cx.listener(onMenuOutside));
         const i: u16 = @intCast(ix);
-        if (can_switch) menu = menu.child(ui.popover.menuRow(pt, false).id(.{ "account-menu-switch", ix })
+        if (can_switch) menu = menu.child(ui.popover.menuRow(pt, false).id(.{ "account-menu-switch", ix }).role(.menu_item)
             .onClick(cx.listenerWith(MenuPick{ .ix = i, .activate = true }, onMenuPick)).child("Switch to this account"));
-        if (a.switchable) menu = menu.child(ui.popover.menuRow(pt, false).id(.{ "account-menu-remove", ix }).textColor(pt.danger_muted)
+        if (a.switchable) menu = menu.child(ui.popover.menuRow(pt, false).id(.{ "account-menu-remove", ix }).role(.menu_item).textColor(pt.danger_muted)
             .onClick(cx.listenerWith(MenuPick{ .ix = i, .activate = false }, onMenuPick)).child("Remove account"));
         more = more.bg(t.glassHover()).child(div().absolute().top(zpui.relative(1)).right(px(0)).child(zpui.deferred(
             zpui.anchored().anchorCorner(.top_right).snapToWindowWithMargin(.all(8))
@@ -859,7 +859,7 @@ pub fn embedded(v: *SettingsView, h: HarnessId, t: *const Theme, now_s: i64, cx:
     const refreshing = st.refreshing or st.phase == .loading;
     const content: zpui.AnyElement = switch (st.phase) {
         .idle, .loading => zpui.intoAnyElement(skeleton(t)),
-        .failed => zpui.intoAnyElement(w.errorStrip(t, st.load_error orelse "Couldn't load accounts").mt(px(4)).id("accounts-inline-retry").cursorPointer()
+        .failed => zpui.intoAnyElement(w.errorStrip(t, st.load_error orelse "Couldn't load accounts").mt(px(4)).id("accounts-inline-retry").role(.button).ariaLabel("Retry loading accounts").cursorPointer()
             .onClick(cx.listener(onRetryLoad)).child(div().flex1()).child(div().flexNone().textColor(t.text_muted).child("Retry"))),
         .ready => blk: {
             var col = div().flex().flexCol();
@@ -873,7 +873,7 @@ pub fn embedded(v: *SettingsView, h: HarnessId, t: *const Theme, now_s: i64, cx:
                 var adds = div().py(px(8)).flex().flexRow().flexWrap().gap(px(4));
                 if (!empty) adds = adds.borderT1().borderColor(w.rowDivider(t));
                 for (loginOptions(h), 0..) |o, i| {
-                    var b = w.actionButton(t, .quiet).id(.{ "accounts-add", i }).onClick(cx.listenerWith(AddPick{ .option = @intCast(i) }, onAdd))
+                    var b = w.actionButton(t, .quiet).id(.{ "accounts-add", i }).role(.button).onClick(cx.listenerWith(AddPick{ .option = @intCast(i) }, onAdd))
                         .child(ui.icon.of(.plus, 14, t.text_muted)).child(addOptionLabel(fa, h, o, empty));
                     if (i == 0) b = b.ml(px(-10));
                     adds = adds.child(b);
@@ -883,7 +883,7 @@ pub fn embedded(v: *SettingsView, h: HarnessId, t: *const Theme, now_s: i64, cx:
             break :blk zpui.intoAnyElement(col);
         },
     };
-    var refresh = w.actionButton(t, .quiet).id("accounts-refresh").mr(px(-8)).w(px(32)).px(px(0)).justifyCenter()
+    var refresh = w.actionButton(t, .quiet).id("accounts-refresh").role(.button).ariaLabel("Refresh accounts").mr(px(-8)).w(px(32)).px(px(0)).justifyCenter()
         .onClick(cx.listener(onRefresh)).child(ui.icon.of(.refresh, 14, t.text_muted));
     if (refreshing) refresh = refresh.opacity(0.5);
     var header = div().flex().flexRow().itemsCenter().gap(px(4))
@@ -891,7 +891,7 @@ pub fn embedded(v: *SettingsView, h: HarnessId, t: *const Theme, now_s: i64, cx:
     if (st.refreshing and st.phase == .ready) header = header.child(div().ml(px(6)).flexNone().child(ui.loaders.miniGlyphSpinner(1.5, t.glyph.rows(), ui.loaders.phaseOf(cx, @import("zeron_theme").motion.gradient_spin))));
     header = header.child(div().flex1()).child(refresh);
     var block = div().id("accounts-embedded").wFull().minW0().flex().flexCol().child(header);
-    if (st.err) |e| block = block.child(w.errorStrip(t, e).mt(px(4)).id("accounts-action-error").cursorPointer().onClick(cx.listener(onDismissError)));
+    if (st.err) |e| block = block.child(w.errorStrip(t, e).mt(px(4)).id("accounts-action-error").role(.button).ariaLabel("Dismiss account error").cursorPointer().onClick(cx.listener(onDismissError)));
     if (st.phase == .ready) if (st.snapshot) |snap| for (snap.value.warnings) |warn| if (warn.harness == h) {
         block = block.child(div().mt(px(4)).px(px(16)).py(px(10)).rounded(px(12)).border1().borderColor(t.warning.opacity(0.2)).bg(t.warning.opacity(0.06))
             .textSize(rems(12.5)).textColor(t.warning).child(warn.message));
@@ -912,10 +912,10 @@ pub fn loginDialog(v: *SettingsView, window: *Window, cx: *Context(SettingsView)
         "Your browser opened Claude's sign-in page. Approve access, then paste the code Anthropic shows you below. Your current login is untouched until you switch."
     else
         loginCopy(l.harness, l.provider);
-    var card = dialog.card(t).id("add-account-card")
+    var card = dialog.card(t).id("add-account-card").role(.dialog).ariaLabel(l.title(fa))
         .child(dialog.title(t, l.title(fa)))
         .child(div().mt(px(8)).child(dialog.body(t, copy)));
-    if (l.url != null and !failed) card = card.child(div().id("login-open-url").mt(px(6)).textSize(rems(12)).textColor(t.text_muted).truncate()
+    if (l.url != null and !failed) card = card.child(div().id("login-open-url").role(.button).mt(px(6)).textSize(rems(12)).textColor(t.text_muted).truncate()
         .cursorPointer().hover(sb.textColor(t.text)).onClick(cx.listener(onReopen)).child("Reopen the sign-in page"));
     switch (l.step) {
         .browser => {
@@ -935,14 +935,14 @@ pub fn loginDialog(v: *SettingsView, window: *Window, cx: *Context(SettingsView)
     }
     var buttons = div().mt(px(16)).flex().flexRow().justifyEnd().gap(px(8));
     switch (l.step) {
-        .browser => buttons = buttons.child(w.textAction(t, .quiet, "Cancel").id("login-cancel").onClick(cx.listener(onCancel))),
+        .browser => buttons = buttons.child(w.textAction(t, .quiet, "Cancel").id("login-cancel").role(.button).onClick(cx.listener(onCancel))),
         .paste_code => |p| {
-            var submit = w.textAction(t, .solid, if (p.submitting) "Verifying…" else "Add account").id("login-submit-code").onClick(cx.listener(onSubmitCode));
+            var submit = w.textAction(t, .solid, if (p.submitting) "Verifying…" else "Add account").id("login-submit-code").role(.button).onClick(cx.listener(onSubmitCode));
             if (p.submitting) submit = submit.opacity(0.5);
-            buttons = buttons.child(w.textAction(t, .quiet, "Cancel").id("login-cancel").onClick(cx.listener(onCancel))).child(submit);
+            buttons = buttons.child(w.textAction(t, .quiet, "Cancel").id("login-cancel").role(.button).onClick(cx.listener(onCancel))).child(submit);
         },
-        .failed => buttons = buttons.child(w.textAction(t, .quiet, "Close").id("login-cancel").onClick(cx.listener(onCancel)))
-            .child(w.textAction(t, .solid, "Retry").id("login-retry").onClick(cx.listener(onRetryLogin))),
+        .failed => buttons = buttons.child(w.textAction(t, .quiet, "Close").id("login-cancel").role(.button).onClick(cx.listener(onCancel)))
+            .child(w.textAction(t, .solid, "Retry").id("login-retry").role(.button).onClick(cx.listener(onRetryLogin))),
     }
     card = card.child(buttons);
     const vp = window.viewportSize();

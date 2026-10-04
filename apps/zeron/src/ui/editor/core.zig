@@ -739,6 +739,15 @@ pub const EditorCore = struct {
         return true;
     }
 
+    /// Replace `range` as one undo step, keeping the selection where it was
+    /// (a same-length edit, e.g. a Markdown task marker toggled from the preview).
+    pub fn replaceKeepingSelection(self: *EditorCore, range: Range, text: []const u8, now: u64) Allocator.Error!bool {
+        if (self.read_only) return false;
+        const keep = self.sel;
+        try self.edit(range, text, .atomic, keep, now);
+        return true;
+    }
+
     // ---- search --------------------------------------------------------------------
 
     pub fn setSearchQuery(self: *EditorCore, query: []const u8) void {

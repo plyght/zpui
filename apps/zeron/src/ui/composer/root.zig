@@ -38,4 +38,5 @@ test {
     _ = @import("tests.zig");
     _ = @import("extras_test.zig"); // [wiring]
     _ = @import("attachments_test.zig");
+    _ = @import("dictation_test.zig"); // [dictation]
 }

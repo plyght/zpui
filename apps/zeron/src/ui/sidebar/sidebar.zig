@@ -348,28 +348,17 @@ pub const Sidebar = struct {
         const order = self.gpa.alloc([]const u8, n) catch return;
         defer self.gpa.free(order);
         for (0..n) |i| order[i] = self.row_ids.items[i];
+        // Row ids are rebuilt by the next render: keep copies for the change.
+        for (order) |*o| o.* = self.gpa.dupe(u8, o.*) catch "";
+        defer for (order) |o| if (o.len > 0) self.gpa.free(o);
         movePin(order, from, to);
-        const p = prefs_mod.mut(cx);
-        // Visible pins take the new order; hidden pins (other filters) keep theirs after.
-        var rest: std.ArrayList([]u8) = .empty;
-        defer rest.deinit(self.gpa);
-        for (p.pins.items) |id| {
-            var visible = false;
-            for (order) |o| if (std.mem.eql(u8, o, id)) {
-                visible = true;
-            };
-            if (!visible) rest.append(self.gpa, id) catch {} else self.gpa.free(id);
-        }
-        p.pins.clearRetainingCapacity();
-        for (order) |id| p.pins.append(self.gpa, self.gpa.dupe(u8, id) catch continue) catch {};
-        for (rest.items) |id| p.pins.append(self.gpa, id) catch self.gpa.free(id);
-        const moved = order[to];
-        const ws = self.state.read(cx).workspace;
-        ws.update(cx, model.WorkspaceStore.mutate, .{engine.protocol.Mutate{ .changeSidebarPin = .{ .change = .{ .move = .{
-            .sessionId = moved,
+        // `changeSidebarPin` move with the new neighbours (synced, local or
+        // device-local, through the shared write queue).
+        _ = sections_ui.changePin(self, .{ .move = .{
+            .sessionId = order[to],
             .after = if (to > 0) order[to - 1] else null,
             .before = if (to + 1 < order.len) order[to + 1] else null,
-        } } } }}) catch {};
+        } }, cx);
     }
 
     pub fn rowId(self: *Sidebar, ix: usize) ?[]const u8 {
@@ -573,12 +562,10 @@ pub const Sidebar = struct {
         const m = self.ctx_menu orelse return;
         self.ctx_menu = null;
         const id = self.rowId(m.ix) orelse return;
-        const p = prefs_mod.mut(cx);
-        const pin = !p.isPinned(id);
+        const pin = !prefs_mod.get(cx).isPinned(id);
         const copy = self.gpa.dupe(u8, id) catch return;
         defer self.gpa.free(copy);
-        p.setPinned(copy, pin);
-        sections_ui.onPinned(self, copy, pin, cx);
+        sections_ui.setChatPinned(self, copy, pin, cx);
         cx.notify();
     }
 
@@ -603,33 +590,33 @@ pub const Sidebar = struct {
         var card = ui.popover.card(theme).w(px(216)).onMouseDownOut(cx.listener(Sidebar.onCtxDismiss));
         if (self.ctx_page == .copy) {
             const c = self.state.read(cx).workspace.read(cx).chat(id);
-            card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-back").onClick(cx.listenerWith(chat_menu.Page.root, Sidebar.onCtxCopyPage))
+            card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-back").role(.menu_item).onClick(cx.listenerWith(chat_menu.Page.root, Sidebar.onCtxCopyPage))
                 .child(icon.of(.alt_arrow_left, 16, theme.text_muted)).child("Back"))
                 .child(ui.popover.separator(theme));
-            if (c != null and chat_menu.chatCopyPath(c.?) != null) card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-path").onClick(cx.listenerWith(@as(u8, 0), Sidebar.onCtxCopy))
+            if (c != null and chat_menu.chatCopyPath(c.?) != null) card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-path").role(.menu_item).onClick(cx.listenerWith(@as(u8, 0), Sidebar.onCtxCopy))
                 .child(icon.of(.copy, 16, theme.text_muted)).child("Path"));
-            card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-zeron").onClick(cx.listenerWith(@as(u8, 1), Sidebar.onCtxCopy))
+            card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-zeron").role(.menu_item).onClick(cx.listenerWith(@as(u8, 1), Sidebar.onCtxCopy))
                 .child(icon.of(.copy, 16, theme.text_muted)).child("Zeron conversation link"));
             if (c) |chat| if (chat.config) |cfg| if (cfg.harness == .codex and chat_menu.harnessSessionId(chat) != null) {
-                card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-harness").onClick(cx.listenerWith(@as(u8, 2), Sidebar.onCtxCopy))
+                card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-harness").role(.menu_item).onClick(cx.listenerWith(@as(u8, 2), Sidebar.onCtxCopy))
                     .child(icon.of(.copy, 16, theme.text_muted)).child("Codex conversation link"));
             };
-            if (c != null and chat_menu.harnessSessionId(c.?) != null) card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-session").onClick(cx.listenerWith(@as(u8, 3), Sidebar.onCtxCopy))
+            if (c != null and chat_menu.harnessSessionId(c.?) != null) card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-session").role(.menu_item).onClick(cx.listenerWith(@as(u8, 3), Sidebar.onCtxCopy))
                 .child(icon.of(.copy, 16, theme.text_muted)).child("Harness session ID"));
             return ui.popover.anchoredAt(m.pos, card);
         }
         card = card
-            .child(ui.popover.menuRow(theme, false).id("chat-menu-rename").onClick(cx.listener(Sidebar.onCtxRename))
+            .child(ui.popover.menuRow(theme, false).id("chat-menu-rename").role(.menu_item).onClick(cx.listener(Sidebar.onCtxRename))
                 .child(icon.of(.pen, 16, theme.text_muted)).child("Rename"))
-            .child(ui.popover.menuRow(theme, false).id("chat-menu-pin").onClick(cx.listener(Sidebar.onCtxPin))
+            .child(ui.popover.menuRow(theme, false).id("chat-menu-pin").role(.menu_item).onClick(cx.listener(Sidebar.onCtxPin))
                 .child(icon.of(.pin, 16, theme.text_muted)).child(if (pinned) "Unpin" else "Pin"))
-            .child(ui.popover.menuRow(theme, false).id("chat-menu-archive").onClick(cx.listener(Sidebar.onCtxArchive))
+            .child(ui.popover.menuRow(theme, false).id("chat-menu-archive").role(.menu_item).onClick(cx.listener(Sidebar.onCtxArchive))
                 .child(icon.of(.archive_minimalistic, 16, theme.text_muted)).child("Archive"))
-            .child(ui.popover.menuRow(theme, false).id("chat-menu-copy").onClick(cx.listenerWith(chat_menu.Page.copy, Sidebar.onCtxCopyPage))
+            .child(ui.popover.menuRow(theme, false).id("chat-menu-copy").role(.menu_item).onClick(cx.listenerWith(chat_menu.Page.copy, Sidebar.onCtxCopyPage))
                 .child(icon.of(.copy, 16, theme.text_muted)).child(div().flex1().child("Copy"))
                 .child(icon.of(.alt_arrow_right, 14, theme.text_muted)))
             .child(ui.popover.separator(theme))
-            .child(ui.popover.menuRow(theme, false).id("chat-menu-delete").textColor(theme.danger).onClick(cx.listener(Sidebar.onCtxDelete))
+            .child(ui.popover.menuRow(theme, false).id("chat-menu-delete").role(.menu_item).textColor(theme.danger).onClick(cx.listener(Sidebar.onCtxDelete))
                 .child(icon.of(.trash_bin_minimalistic, 16, theme.danger)).child("Delete…"));
         return ui.popover.anchoredAt(m.pos, card);
     }
@@ -637,7 +624,7 @@ pub const Sidebar = struct {
     /// [wiring] `sidebar-notice`: the inline mutation / copy notice.
     fn renderNotice(self: *Sidebar, theme: *const Theme, cx: *Context(Sidebar)) ?zpui.StatefulDiv {
         const n = self.notice orelse return null;
-        return div().id("sidebar-notice").mx(px(zt.layout.space_sm)).mb(px(zt.layout.space_sm)).px(px(zt.layout.space_sm)).py(px(4))
+        return div().id("sidebar-notice").role(.button).mx(px(zt.layout.space_sm)).mb(px(zt.layout.space_sm)).px(px(zt.layout.space_sm)).py(px(4))
             .rounded(px(zt.layout.control_radius)).border1().borderColor(theme.danger)
             .textSize(rems(11)).textColor(theme.danger).cursorPointer()
             .onClick(cx.listener(Sidebar.onNoticeClick))
@@ -852,6 +839,9 @@ pub const Sidebar = struct {
         if (self.pin_drag != null and !cx.app.hasActiveDrag()) self.pin_drag = null;
         sections_ui.migrate(self, cx);
         const secs = sections_ui.active(self, arena, cx);
+        // Pins follow the account (synced snapshot + queued writes) or this
+        // device's settings for a local workspace (`active_sidebar_pins`).
+        sections_ui.syncPins(self, secs, cx);
         sections_ui.beginFrame(self, secs);
         const transfer = sections_ui.transferActive(self);
         self.moving = null;
@@ -913,7 +903,7 @@ pub const Sidebar = struct {
                     self.pin_slots.append(self.gpa, h + list_gap) catch {};
                     const row = self.activeRow(r, h, pi, theme, prefs, cx).onDrop(SessionDrag, cx.listener(Sidebar.onPinDrop));
                     if (sections_ui.isMoving(self, r.chat.id)) {
-                        body = body.child(div().h(px(h)).flexNone());
+                        body = body.child(sections_ui.sourceSlot(self, h, if (pinned.items.len > 1) list_gap else 0));
                         continue;
                     }
                     if (self.pin_drag) |d| {
@@ -946,11 +936,17 @@ pub const Sidebar = struct {
             for (secs, 0..) |sec, si| {
                 var body = div().flex().flexCol().gap(px(list_gap));
                 const rows = if (si < section_rows.len) section_rows[si].items else &.{};
-                if (!sec.collapsed) for (rows) |*r| {
+                // A collapsing section keeps its rows until the height tween ends.
+                const show_rows = !sec.collapsed or sections_ui.sectionAnimating(self, sec.id, cx.app.executor.now());
+                var rows_height: f32 = 0;
+                for (rows, 0..) |*r, ri| {
+                    rows_height += rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null) + (if (ri > 0) list_gap else 0);
+                    if (!show_rows) continue;
                     any_working = any_working or r.status == .working;
-                    body = body.child(self.placedRow(r, theme, prefs, cx));
-                };
-                list = list.child(sections_ui.renderSection(self, si, sec, body, rows.len == 0, sections_ui.extraGap(self, .{ .section = si }), theme, cx));
+                    body = body.child(self.placedRow(r, rows.len > 1, theme, prefs, cx));
+                }
+                const extra = sections_ui.extraHeight(self, .{ .section = si });
+                list = list.child(sections_ui.renderSection(self, si, sec, body, rows.len == 0, rows_height, sections_ui.extraGap(self, .{ .section = si }), if (extra > 0) extra + list_gap else 0, theme, cx));
             }
             const follows = show_pinned or secs.len > 0;
             if (regular.items.len > 0 and prefs.organization != .in_one_list) {
@@ -961,7 +957,7 @@ pub const Sidebar = struct {
                     .textColor(theme.text_muted).textSize(rems(12)).child("Drop here to unpin"));
                 for (regular.items) |*r| {
                     any_working = any_working or r.status == .working;
-                    body = body.child(self.placedRow(r, theme, prefs, cx));
+                    body = body.child(self.placedRow(r, regular.items.len > 1, theme, prefs, cx));
                 }
                 body = body.child(sections_ui.extraGap(self, .regular));
                 list = list.child(self.dropRegion(div().flex().flexCol().pt(px(if (follows) section_gap else 0))
@@ -981,7 +977,7 @@ pub const Sidebar = struct {
                     body = body.child(self.renderRow(r, theme, prefs, cx));
                 }
                 if (archived.items.len > self.archived_shown) {
-                    body = body.child(div().id("archived-more").h(px(if (prefs.sidebar_compact) 29 else 36))
+                    body = body.child(div().id("archived-more").role(.button).h(px(if (prefs.sidebar_compact) 29 else 36))
                         .flex().itemsCenter().px(px(8)).rounded(px(8)).cursorPointer()
                         .textSize(rems(12)).textColor(theme.text_muted.opacity(0.7))
                         .hover(sb.bg(theme.glassHover()).textColor(theme.text))
@@ -1039,10 +1035,12 @@ pub const Sidebar = struct {
 
     /// An active (draggable) row: rendered in place, or — while it moves —
     /// an empty slot here and the row in the movement layer.
-    fn placedRow(self: *Sidebar, r: *const RowData, theme: *const Theme, prefs: *const prefs_mod.Prefs, cx: *Context(Sidebar)) zpui.AnyElement {
+    /// `multi`: the row shares its group with others (a collapsing source
+    /// slot also gives back its list gap).
+    fn placedRow(self: *Sidebar, r: *const RowData, multi: bool, theme: *const Theme, prefs: *const prefs_mod.Prefs, cx: *Context(Sidebar)) zpui.AnyElement {
         const h = rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null);
         const row = self.activeRow(r, h, null, theme, prefs, cx);
-        if (sections_ui.isMoving(self, r.chat.id)) return zpui.intoAnyElement(div().h(px(h)).flexNone());
+        if (sections_ui.isMoving(self, r.chat.id)) return sections_ui.sourceSlot(self, h, if (multi) list_gap else 0);
         return zpui.intoAnyElement(row);
     }
 
@@ -1090,13 +1088,13 @@ pub const Sidebar = struct {
             const open = !self.isCollapsed(g.key);
             const label = if (open) g.label else zpui.fmt("{s} ({d})", .{ g.label, g.rows.items.len });
             const tone = theme.text_muted.opacity(0.5);
-            const header = div().id(.{ "sidebar-group", gi })
+            const header = div().id(.{ "sidebar-group", gi }).role(.button).ariaLabel(g.label).ariaExpanded(open)
                 .flex().flexRow().itemsCenter().gap(px(8)).h(px(disclosure_header_height)).px(px(zt.layout.space_sm)).cursorPointer()
                 .onClick(cx.listenerWith(gi, Sidebar.toggleGroup))
                 .child(div().minW0().flex().textSize(rems(12)).fontWeight(500).textColor(tone).child(ui.effects.fadedText(label, .{})))
                 .child(div().flex1())
                 .child(if (prefs.organization == .by_project and !std.mem.eql(u8, g.key, "~"))
-                    div().id(.{ "group-new-chat", gi }).size(px(20)).flexNone().flex().itemsCenter().justifyCenter()
+                    div().id(.{ "group-new-chat", gi }).role(.button).ariaLabel("New chat in project").size(px(20)).flexNone().flex().itemsCenter().justifyCenter()
                         .rounded(px(6)).cursorPointer().hover(sb.bg(theme.glassHover()))
                         .onClick(cx.listenerWith(gi, Sidebar.onGroupNewChat))
                         .tooltipWith(@as([]const u8, "New session in this project"), ui.tooltip.build)
@@ -1109,7 +1107,7 @@ pub const Sidebar = struct {
                 var body = div().flex().flexCol().gap(px(list_gap)).pt(px(disclosure_body_inset));
                 for (g.rows.items) |r| {
                     any_working.* = any_working.* or r.status == .working;
-                    body = body.child(self.placedRow(r, theme, prefs, cx));
+                    body = body.child(self.placedRow(r, g.rows.items.len > 1, theme, prefs, cx));
                 }
                 body = body.child(sections_ui.extraGap(self, .regular));
                 sec = sec.child(body);
@@ -1150,7 +1148,7 @@ pub const Sidebar = struct {
     fn sectionHeader(self: *Sidebar, which: u8, label: []const u8, open: bool, theme: *const Theme, cx: *Context(Sidebar)) zpui.StatefulDiv {
         _ = self;
         const tone = theme.text_muted.opacity(0.5);
-        return div().id(.{ "sidebar-disclosure", which })
+        return div().id(.{ "sidebar-disclosure", which }).role(.button).ariaLabel(label).ariaExpanded(open)
             .flex().flexRow().itemsCenter().gap(px(8))
             .h(px(disclosure_header_height)).px(px(zt.layout.space_sm))
             .cursorPointer()
@@ -1220,7 +1218,8 @@ pub const Sidebar = struct {
         };
         var corner = div().id(.{ "row-corner", ix }).flexNone().h(px(14)).flex().itemsCenter().textColor(subline).cursorPointer();
         if (compact) corner = corner.w(px(18)).justifyCenter();
-        if (hovered) corner = corner.onClick(cx.listenerWith(ix, Sidebar.onArchiveClick))
+        // zeron `{row}-corner` aria label: Archive / Unarchive while it is the pill.
+        if (hovered) corner = corner.role(.button).ariaLabel(if (r.archived) "Unarchive" else "Archive").onClick(cx.listenerWith(ix, Sidebar.onArchiveClick))
             .tooltipWith(@as([]const u8, if (r.archived) "Unarchive session" else "Archive session"), ui.tooltip.buildAbove);
         corner = corner.child(corner_body);
 
@@ -1231,7 +1230,7 @@ pub const Sidebar = struct {
         else
             null;
 
-        var row = div().id(.{ "chat-row", ix }).group(row_group)
+        var row = div().id(.{ "chat-row", ix }).role(.button).ariaLabel(r.title).ariaSelected(r.selected).group(row_group)
             .h(px(height)).flexNone().flex().flexCol().gap(px(2))
             .rounded(px(8)).px(px(zt.layout.space_sm)).py(px(6))
             .textColor(ui.hover.blend(cx, hover_key, rest_text, theme.text))
@@ -1302,7 +1301,7 @@ pub const Sidebar = struct {
             name_group = name_group.child(div().minW0().flexShrink1().flex().textSize(rems(10)).fontWeight(400).textColor(theme.text_muted.opacity(0.45)).child(ui.effects.fadedText(t, .{})));
             if (offline) name_group = name_group.child(icon.of(.wifi_off, 12, theme.warning.opacity(0.8)));
         }
-        var trigger = div().id("spaces-filter")
+        var trigger = div().id("spaces-filter").role(.button).ariaLabel(label).ariaExpanded(self.spaces_menu_open)
             .relative().flex1().minW0().h(px(29)).flex().flexRow().itemsCenter().gap(px(zt.layout.space_sm))
             .rounded(px(8)).px(px(zt.layout.space_sm))
             .textSize(rems(13)).fontWeight(500).lineHeight(px(17))
@@ -1316,7 +1315,7 @@ pub const Sidebar = struct {
             .child(icon.of(.alt_arrow_down, 14, theme.text_muted.opacity(0.6)));
         if (self.spaces_menu_open) trigger = trigger.child(ui.popover.anchoredBelow(self.renderSpacesMenu(theme, prefs, ws, cx)));
 
-        var view_trigger = div().id("sidebar-view-options")
+        var view_trigger = div().id("sidebar-view-options").role(.button).ariaLabel("Sidebar view options").ariaExpanded(self.view_menu_open)
             .relative().size(px(29)).flexNone().flex().itemsCenter().justifyCenter()
             .rounded(px(8)).cursorPointer()
             .bg(if (self.view_menu_open) theme.glassHover() else theme.glassHover().opacity(0))
@@ -1338,7 +1337,7 @@ pub const Sidebar = struct {
         const arena = zpui.window.arena_mod.frameAllocator();
         const width = prefs.sidebar_width - 2 * zt.layout.space_sm;
         var card = ui.popover.card(theme).w(px(width)).onMouseDownOut(cx.listener(Sidebar.onCloseMenus));
-        card = card.child(ui.popover.menuRow(theme, prefs.space_filter == null).id("spaces-all")
+        card = card.child(ui.popover.menuRow(theme, prefs.space_filter == null).id("spaces-all").role(.menu_item)
             .onClick(cx.listenerWith(@as(usize, std.math.maxInt(usize)), Sidebar.onPickSpace))
             .child(icon.of(.folder, 16, theme.text_muted))
             .child(div().flex1().child("All projects"))
@@ -1349,7 +1348,7 @@ pub const Sidebar = struct {
             self.menu_space_ids.append(self.gpa, self.gpa.dupe(u8, s.id) catch continue) catch {};
             const active = if (prefs.space_filter) |f| std.mem.eql(u8, f, s.id) else false;
             const tag, _ = ws.spaceDeviceTag(&buf, s, prefs.now(ws.io));
-            card = card.child(ui.popover.menuRow(theme, active).id(.{ "spaces-row", i })
+            card = card.child(ui.popover.menuRow(theme, active).id(.{ "spaces-row", i }).role(.menu_item)
                 .onClick(cx.listenerWith(i, Sidebar.onPickSpace))
                 .onMouseDown(.right, cx.listenerWith(i, Sidebar.onSpaceContext)) // [wiring]
                 .child(ui.badge.monogram(view.spaceDisplayName(s), s.path, 16, false, null, theme))
@@ -1359,7 +1358,7 @@ pub const Sidebar = struct {
                 .child(if (active) icon.of(.check, 14, theme.text_muted) else null));
         }
         card = card.child(ui.popover.separator(theme));
-        card = card.child(ui.popover.menuRow(theme, false).id("spaces-new")
+        card = card.child(ui.popover.menuRow(theme, false).id("spaces-new").role(.menu_item)
             .onClick(cx.listener(Sidebar.onNewProject))
             .child(icon.of(.add_circle, 16, theme.text_muted))
             .child("New project…"));
@@ -1403,10 +1402,10 @@ pub const Sidebar = struct {
         // frosted spaces card composites above a later deferred overlay).
         const theme = zpui.window.arena_mod.current().create(Theme, theme_in.forPopup());
         const card = ui.popover.card(theme).w(px(170)).onMouseDownOut(cx.listener(Sidebar.onSpaceCtxDismiss))
-            .child(ui.popover.menuRow(theme, false).id("space-menu-rename").onClick(cx.listenerWith(false, Sidebar.onSpaceCtxAction))
+            .child(ui.popover.menuRow(theme, false).id("space-menu-rename").role(.menu_item).onClick(cx.listenerWith(false, Sidebar.onSpaceCtxAction))
                 .child(icon.of(.pen, 16, theme.text_muted)).child("Rename…"))
             .child(ui.popover.separator(theme))
-            .child(ui.popover.menuRow(theme, false).id("space-menu-delete").textColor(theme.danger).onClick(cx.listenerWith(true, Sidebar.onSpaceCtxAction))
+            .child(ui.popover.menuRow(theme, false).id("space-menu-delete").role(.menu_item).textColor(theme.danger).onClick(cx.listenerWith(true, Sidebar.onSpaceCtxAction))
                 .child(icon.of(.trash_bin_minimalistic, 16, theme.danger)).child("Remove…"));
         return zpui.intoAnyElement(zpui.deferred(zpui.anchored().position(.{ .x = @max(m.pos.x, prefs_mod.get(cx).sidebar_width - zt.layout.space_sm + 4), .y = m.pos.y }).snapToWindowWithMargin(.all(8))
             .child(div().occlude().child(ui.popover.frostedCard(card)))).withPriority(2));
@@ -1432,7 +1431,7 @@ pub const Sidebar = struct {
         for (groups, 0..) |g, gi| {
             if (gi == 2) card = card.child(ui.popover.separator(theme));
             const open = self.view_submenu == @as(u8, @intCast(gi));
-            var row = ui.popover.menuRow(theme, open).id(.{ "sidebar-view-group", gi })
+            var row = ui.popover.menuRow(theme, open).id(.{ "sidebar-view-group", gi }).role(.menu_item)
                 .relative().h(px(30)).py(px(0))
                 .onHover(cx.listenerWith(@as(u8, @intCast(gi)), Sidebar.onViewGroupHover))
                 .child(div().flex1().child(g[0]));
@@ -1442,7 +1441,7 @@ pub const Sidebar = struct {
                 var child = ui.popover.card(theme).w(px(232)).child(ui.popover.heading(theme, if (gi == 0) "ORGANIZE" else if (gi == 1) "SORT" else "SHOW"));
                 var ix = g[1];
                 while (ix < g[2]) : (ix += 1) {
-                    child = child.child(ui.popover.menuRow(theme, false).id(.{ "sidebar-view-row", ix })
+                    child = child.child(ui.popover.menuRow(theme, false).id(.{ "sidebar-view-row", ix }).role(.menu_item)
                         .onClick(cx.listenerWith(ix, Sidebar.onToggleView))
                         .child(icon.of(icons[ix], 15, theme.text_muted))
                         .child(div().flex1().child(labels[ix]))
@@ -1455,13 +1454,13 @@ pub const Sidebar = struct {
             card = card.child(row);
         }
         card = card.child(ui.popover.separator(theme));
-        card = card.child(ui.popover.menuRow(theme, false).id("sidebar-view-compact").h(px(30)).py(px(0))
+        card = card.child(ui.popover.menuRow(theme, false).id("sidebar-view-compact").role(.menu_item).h(px(30)).py(px(0))
             .onHover(cx.listenerWith(@as(u8, 3), Sidebar.onViewGroupHover))
             .onClick(cx.listenerWith(@as(u8, 10), Sidebar.onToggleView))
             .child(div().flex1().child("Compact"))
             .child(ui.switch_.toggle(theme, prefs.sidebar_compact)));
         card = card.child(ui.popover.separator(theme));
-        card = card.child(ui.popover.menuRow(theme, false).id("sidebar-create-section")
+        card = card.child(ui.popover.menuRow(theme, false).id("sidebar-create-section").role(.menu_item)
             .onHover(cx.listenerWith(@as(u8, 4), Sidebar.onViewGroupHover))
             .onClick(cx.listener(Sidebar.onCreateSection))
             .child(icon.of(.plus, 14, theme.text_muted)).child("Create Section"));
@@ -1487,7 +1486,7 @@ pub const Sidebar = struct {
             // Glyphs sit below the line box's optical center: nudge the star.
             .child(icon.of(.star_bold, 12, tone).relative().top(px(0.5)))
             .child(div().flex1().minW0().truncate().child("Star on GitHub"))
-            .child(div().id("github-star-banner-dismiss").flexNone().size(px(18)).rounded(px(4))
+            .child(div().id("github-star-banner-dismiss").role(.button).ariaLabel("Dismiss").flexNone().size(px(18)).rounded(px(4))
             .flex().itemsCenter().justifyCenter().cursorPointer()
             .hover(sb.bg(theme.accent.opacity(0.22)))
             .onClick(cx.listener(Sidebar.onStarDismiss))
@@ -1575,7 +1574,7 @@ pub const Sidebar = struct {
             if (t.len == 0) break :blk "?";
             break :blk zpui.fmt("{c}", .{std.ascii.toUpper(t[0])});
         };
-        var trigger = div().id("user-menu")
+        var trigger = div().id("user-menu").role(.button).ariaLabel(zpui.fmt("Account menu: {s}", .{user_line})).ariaExpanded(self.user_menu_open)
             .relative().h(px(footer_button_size)).minW0().flexShrink1()
             .rounded(px(8)).px(px(zt.layout.space_sm))
             .flex().flexRow().itemsCenter().gap(px(zt.layout.space_sm))
@@ -1604,10 +1603,10 @@ pub const Sidebar = struct {
                     .restart_pending => base.id("user-menu-sync-restart").child(icon.of(.restart, 16, theme.text_muted)).child("Finish sync setup"),
                     .sign_out => base.id("user-menu-signout").child(icon.of(.logout_2, 16, theme.text_muted)).child("Sign out"),
                 };
-                menu = menu.child(row.onClick(cx.listenerWith(action, Sidebar.onAccountAction)));
+                menu = menu.child(row.role(.menu_item).ariaDisabled(action == .sync_in_progress).onClick(cx.listenerWith(action, Sidebar.onAccountAction)));
             }
             if (@import("builtin").os.tag != .macos) {
-                menu = menu.child(ui.popover.menuRow(theme, false).id("user-menu-check-updates")
+                menu = menu.child(ui.popover.menuRow(theme, false).id("user-menu-check-updates").role(.menu_item)
                     .onClick(cx.listener(Sidebar.onCheckUpdates)) // [lifecycle]
                     .child(icon.of(.refresh, 16, theme.text_muted)).child("Check for updates"));
             }
@@ -1616,7 +1615,7 @@ pub const Sidebar = struct {
         const mac = @import("builtin").os.tag == .macos;
         return div().wFull().flex().itemsCenter().justifyBetween().gap(px(4))
             .child(trigger)
-            .child(div().id("settings-trigger")
+            .child(div().id("settings-trigger").role(.button).ariaLabel("Settings").ariaToggled(false)
                 .size(px(footer_button_size)).flexNone().rounded(px(8))
                 .flex().itemsCenter().justifyCenter().cursorPointer()
                 .hover(sb.bg(theme.glassHover()))

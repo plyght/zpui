@@ -32,8 +32,12 @@
 //!
 //! The question wizard, todo tray, queue drag / leased edit, `@` file
 //! mentions and provider slash commands / skills live in `extras.zig`.
-//! Not ported (yet): mention chip projection in the input, dictation
-//! capture (the mic button morphs and emits `dictation_toggled`), the dock
+//! Dictation (`voice.zig`): hold the microphone or the shortcut to talk —
+//! the mic morphs into Stop, a waveform track unrolls over the action row
+//! (the paperclip becomes Cancel), the transcript lands in the draft, and
+//! outcomes (no speech, errors) show under the pill.
+//!
+//! Not ported (yet): mention chip projection in the input, the dock
 //! choreography between canvas and thread positions.
 
 const std = @import("std");
@@ -51,8 +55,11 @@ const picker_mod = @import("model_picker.zig");
 const mentions = @import("mentions.zig"); // [wiring]
 const extras = @import("extras.zig"); // [wiring] wizard, todo tray, queue drag/lease, @ mentions, provider commands
 const review_chip = @import("review_chip.zig"); // [review-comments]
+const voice = @import("voice.zig"); // [dictation]
 const media = @import("zeron_media");
 const att = model.attachments;
+const appshots = model.appshots;
+const Captured = appshots.Captured;
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -80,8 +87,6 @@ pub const ComposerEvent = union(enum) {
     workspace_command: slash.WorkspaceCommand,
     /// The paperclip was pressed (the shell owns the native file picker).
     attach_requested,
-    /// The microphone button / shortcut toggled dictation (UI only).
-    dictation_toggled: bool,
 };
 
 /// An in-flight send whose attachments are uploading (Rust `send_task`).
@@ -96,7 +101,12 @@ const Upload = struct {
     key: []u8,
     /// The user's own words (restored on failure).
     typed: []u8,
+    /// Ordinary attachments first, then one screenshot clone per Appshot.
     staged: std.ArrayList(att.Staged),
+    /// [appshots] The Appshots sent (restored on failure).
+    appshots: std.ArrayList(Captured) = .empty,
+    /// [appshots] How many of `staged` are ordinary attachments.
+    n_ordinary: usize = 0,
     upload_ids: [][36]u8,
     echo_paths: [][]u8,
     /// Device the transcript reads attachments from (chat / target device).
@@ -144,6 +154,9 @@ const PendingNew = struct {
     transfers: []protocol.AttachmentTransfer = &.{},
 };
 
+/// [appshots] Tile entrance (240 ms ease-out expo).
+const appshot_entrance_ns: u64 = 240 * std.time.ns_per_ms;
+
 pub const ComposerView = struct {
     gpa: std.mem.Allocator,
     state: Entity(AppState),
@@ -176,14 +189,18 @@ pub const ComposerView = struct {
     failure_warning: bool = false,
     /// Staged images per draft key ("" = the new-thread canvas).
     staged_by_key: std.StringHashMapUnmanaged(std.ArrayList(att.Staged)) = .empty,
+    /// [appshots] Staged Appshots per draft key (Rust `appshots`).
+    appshots_by_key: std.StringHashMapUnmanaged(std.ArrayList(Captured)) = .empty,
+    /// [appshots] Entrance start (executor ns) per Appshot id (`appshot_entrances`).
+    appshot_entrances: std.AutoHashMapUnmanaged([36]u8, u64) = .empty,
     /// The full-size preview (lightbox) of a staged image.
     lightbox: ?Entity(media.Lightbox) = null,
     lightbox_sub: ?zpui.Subscription = null,
     /// A send waiting on its attachment upload.
     upload: ?Upload = null,
     upload_task: zpui.Task(att.UploadResult) = .none,
-    dictation_available: bool = false,
-    dictating: bool = false,
+    /// [dictation] Hold-to-talk bookkeeping and the voice morph (voice.zig).
+    voice: voice.State = .{},
     sending: bool = false,
     slash_active: usize = 0,
     /// A dismissed completion token start (Escape) stays closed until edited.
@@ -203,7 +220,7 @@ pub const ComposerView = struct {
     /// [wiring] Run-time surfaces + completions state (extras.zig).
     ext: extras.Extras = .{},
 
-    pub const Events = .{ComposerEvent};
+    pub const Events = .{ ComposerEvent, extras.WorktreeSetup };
 
     /// `ComposerView.init(app_state, cx)` — the contract the shell mounts.
     pub fn init(state: Entity(AppState), cx: *Context(ComposerView)) !ComposerView {
@@ -238,11 +255,13 @@ pub const ComposerView = struct {
         try self.subs.add(cx.gpa(), try cx.observe(st.review_comments, ComposerView.onObserved(model.ReviewCommentStore))); // [review-comments]
         self.syncKey(cx);
         extras.onStoresChanged(&self, cx); // [wiring] the selected chat's transcript (question wizard)
+        voice.observeSettings(&self, model.SettingsStore, cx); // [dictation] Voice off stops a session
         return self;
     }
 
     pub fn deinit(self: *ComposerView, cx: *App) void {
         self.ext.deinit(self.gpa, cx); // [wiring]
+        self.voice.deinit(cx); // [dictation]
         self.subs.deinit(self.gpa);
         self.settle_task.cancel();
         self.input.release(cx);
@@ -256,6 +275,14 @@ pub const ComposerView = struct {
             self.gpa.free(e.key_ptr.*);
         }
         self.staged_by_key.deinit(self.gpa);
+        var ait = self.appshots_by_key.iterator(); // [appshots]
+        while (ait.next()) |e| {
+            for (e.value_ptr.items) |*shot| shot.deinit(self.gpa, cx);
+            e.value_ptr.deinit(self.gpa);
+            self.gpa.free(e.key_ptr.*);
+        }
+        self.appshots_by_key.deinit(self.gpa);
+        self.appshot_entrances.deinit(self.gpa);
         self.closeLightbox(cx);
         self.upload_task.cancel();
         if (self.upload) |*u| self.freeUpload(u, cx);
@@ -316,12 +343,6 @@ pub const ComposerView = struct {
         self.picker.update(cx, ModelPicker.setDefaults, .{defaults});
     }
 
-    /// Show the microphone (Settings → Voice ready).
-    pub fn setDictationAvailable(self: *ComposerView, available: bool, cx: *Context(ComposerView)) void {
-        self.dictation_available = available;
-        cx.notify();
-    }
-
     pub fn focusInput(self: *ComposerView, window: *Window, cx: *Context(ComposerView)) void {
         window.focus(self.input.read(cx).focus);
     }
@@ -374,7 +395,7 @@ pub const ComposerView = struct {
         cx.notify();
     }
 
-    fn stagedList(self: *ComposerView, key: []const u8) *std.ArrayList(att.Staged) {
+    pub fn stagedList(self: *ComposerView, key: []const u8) *std.ArrayList(att.Staged) {
         const gop = self.staged_by_key.getOrPut(self.gpa, key) catch @panic("OOM");
         if (!gop.found_existing) {
             gop.key_ptr.* = self.gpa.dupe(u8, key) catch @panic("OOM");
@@ -390,7 +411,7 @@ pub const ComposerView = struct {
     }
 
     /// Move the staged list of `key` out (`takeAttachments`).
-    fn takeStaged(self: *ComposerView, key: []const u8) std.ArrayList(att.Staged) {
+    pub fn takeStaged(self: *ComposerView, key: []const u8) std.ArrayList(att.Staged) {
         const kv = self.staged_by_key.fetchRemove(key) orelse return .empty;
         self.gpa.free(kv.key);
         return kv.value;
@@ -406,6 +427,109 @@ pub const ComposerView = struct {
             l.deinit(self.gpa);
         }
         cx.notify();
+    }
+
+    // ---- [appshots] staged captures (Rust `stage_appshot_for` & co.) ----
+
+    /// Appshots staged on the draft the composer is showing.
+    pub fn stagedAppshots(self: *const ComposerView) []const Captured {
+        const list = self.appshots_by_key.getPtr(self.current_key.items) orelse return &.{};
+        return list.items;
+    }
+
+    pub fn appshotsFor(self: *const ComposerView, key: []const u8) []const Captured {
+        const list = self.appshots_by_key.getPtr(key) orelse return &.{};
+        return list.items;
+    }
+
+    fn appshotList(self: *ComposerView, key: []const u8) *std.ArrayList(Captured) {
+        const gop = self.appshots_by_key.getOrPut(self.gpa, key) catch @panic("OOM");
+        if (!gop.found_existing) {
+            gop.key_ptr.* = self.gpa.dupe(u8, key) catch @panic("OOM");
+            gop.value_ptr.* = .empty;
+        }
+        return gop.value_ptr;
+    }
+
+    /// Move the Appshots of `key` out.
+    pub fn takeAppshots(self: *ComposerView, key: []const u8) std.ArrayList(Captured) {
+        const kv = self.appshots_by_key.fetchRemove(key) orelse return .empty;
+        self.gpa.free(kv.key);
+        return kv.value;
+    }
+
+    pub fn stageAppshot(self: *ComposerView, shot: Captured, cx: *Context(ComposerView)) bool {
+        const key = self.gpa.dupe(u8, self.current_key.items) catch @panic("OOM");
+        defer self.gpa.free(key);
+        return self.stageAppshotFor(key, shot, cx);
+    }
+
+    /// Stage a completed capture on draft `key` (takes `shot`). Refused past the
+    /// 96 MB staged budget, with Rust's notice.
+    pub fn stageAppshotFor(self: *ComposerView, key: []const u8, shot: Captured, cx: *Context(ComposerView)) bool {
+        var s = shot;
+        const incoming: u64 = s.bytes().len;
+        const staged_bytes = appshots.stagedBytes(self.appshotsFor(key));
+        if (incoming > att.max_attachment_bytes or staged_bytes +| incoming > appshots.max_staged_appshot_bytes) {
+            s.deinit(self.gpa, cx.app);
+            self.setFailure(appshots.staged_limit_message, false, cx);
+            return false;
+        }
+        // Entrance tweens older than their duration are dropped.
+        const now = cx.app.executor.now();
+        var stale: std.ArrayList([36]u8) = .empty;
+        defer stale.deinit(self.gpa);
+        var it = self.appshot_entrances.iterator();
+        while (it.next()) |e| if (now -| e.value_ptr.* > appshot_entrance_ns) stale.append(self.gpa, e.key_ptr.*) catch {};
+        for (stale.items) |id| _ = self.appshot_entrances.remove(id);
+        self.appshot_entrances.put(self.gpa, s.id, now) catch {};
+        self.appshotList(key).append(self.gpa, s) catch {
+            s.deinit(self.gpa, cx.app);
+            return false;
+        };
+        self.failure.clearRetainingCapacity();
+        cx.notify();
+        return true;
+    }
+
+    pub fn showAppshotError(self: *ComposerView, message: []const u8, cx: *Context(ComposerView)) void {
+        self.showError(message, cx);
+    }
+
+    pub fn removeAppshot(self: *ComposerView, id: [36]u8, cx: *Context(ComposerView)) void {
+        const list = self.appshots_by_key.getPtr(self.current_key.items) orelse return;
+        var i: usize = 0;
+        while (i < list.items.len) {
+            if (std.mem.eql(u8, &list.items[i].id, &id)) {
+                var shot = list.orderedRemove(i);
+                shot.deinit(self.gpa, cx.app);
+            } else i += 1;
+        }
+        if (list.items.len == 0) {
+            var l = self.takeAppshots(self.current_key.items);
+            l.deinit(self.gpa);
+        }
+        cx.notify();
+    }
+
+    /// `restore_failed_appshots`: hand `sent` back to `restore_key`, merging (by id)
+    /// what `failed_key` / `restore_key` gained meanwhile. Takes `sent`.
+    pub fn restoreFailedAppshots(self: *ComposerView, sent: *std.ArrayList(Captured), failed_key: []const u8, restore_key: []const u8, app: *App) void {
+        if (sent.items.len == 0) return;
+        var merged = sent.*;
+        sent.* = .empty;
+        for ([_][]const u8{ failed_key, restore_key }) |key| {
+            var l = self.takeAppshots(key);
+            defer l.deinit(self.gpa);
+            for (l.items) |*shot| {
+                var dup = false;
+                for (merged.items) |e| dup = dup or std.mem.eql(u8, &e.id, &shot.id);
+                if (dup) shot.deinit(self.gpa, app) else merged.append(self.gpa, shot.*) catch shot.deinit(self.gpa, app);
+            }
+        }
+        const list = self.appshotList(restore_key);
+        list.deinit(self.gpa);
+        list.* = merged;
     }
 
     // ---- lightbox ----
@@ -449,7 +573,7 @@ pub const ComposerView = struct {
     const PickerCtx = struct { app: *App, id: zpui.EntityId };
 
     /// Paperclip: the native image picker (`prompt_for_paths`, multiple files).
-    fn openFilePicker(self: *ComposerView, cx: *Context(ComposerView)) void {
+    pub fn openFilePicker(self: *ComposerView, cx: *Context(ComposerView)) void {
         const ctx = self.gpa.create(PickerCtx) catch return;
         ctx.* = .{ .app = cx.app, .id = cx.entityId() };
         cx.app.platform.promptForPaths(.{ .files = true, .directories = false, .multiple = true, .prompt = "Attach", .title = "Attach images" }, .{ .ctx = ctx, .func = onPickedPaths });
@@ -505,6 +629,9 @@ pub const ComposerView = struct {
             self.gpa.free(kv.key);
             self.gpa.free(kv.value);
         }
+        var shots = self.takeAppshots(chat_id); // [appshots]
+        for (shots.items) |*shot| shot.deinit(self.gpa, cx.app);
+        shots.deinit(self.gpa);
         cx.notify();
     }
 
@@ -574,11 +701,11 @@ pub const ComposerView = struct {
     }
 
     fn hasContent(self: *const ComposerView, cx: anytype) bool {
-        return m.composerHasContent(self.input.read(cx).text(), self.staged().len, review_chip.count(self.state, self.current_key.items, cx));
+        return m.composerHasContent(self.input.read(cx).text(), self.staged().len + self.stagedAppshots().len, review_chip.count(self.state, self.current_key.items, cx));
     }
 
     pub fn buttonMode(self: *const ComposerView, cx: anytype) m.SendButtonMode {
-        return m.sendButtonMode(self.runLive(cx), self.dictating or self.hasContent(cx));
+        return m.sendButtonMode(self.runLive(cx), self.input.read(cx).dictation.phase.active() or self.hasContent(cx));
     }
 
     /// New-chat canvas with nothing runnable blocks sends.
@@ -622,7 +749,12 @@ pub const ComposerView = struct {
                 l.end();
                 if (img) |i| self.addClipboardImage(i, cx);
             },
-            .toggle_dictation => self.toggleDictation(cx),
+            // [dictation] hold to talk (voice.zig); a completed dictation
+            // with a pending send submits once, for the same session only.
+            .dictation_press, .dictation_release, .dictation_changed => voice.onInputEvent(self, ev.*, cx),
+            .dictation_submit => |generation| {
+                if (self.input.read(cx).dictation.generation == generation and self.hasContent(cx)) self.onSubmit(cx);
+            },
             else => {},
         }
     }
@@ -711,11 +843,10 @@ pub const ComposerView = struct {
     // ---- submit / send ------------------------------------------------------------------
 
     fn onSubmit(self: *ComposerView, cx: *Context(ComposerView)) void {
+        // [dictation] Send while dictating stops capture and sends once the
+        // final transcript lands.
+        if (self.input.update(cx, TextInput.finishDictation, .{true})) return;
         if (extras.onSubmit(self, cx)) return; // [wiring] wizard advance / queue edit commit
-        if (self.dictating) {
-            self.dictating = false;
-            cx.emit(ComposerEvent{ .dictation_toggled = false });
-        }
         const txt = self.input.read(cx).text();
         if (slash.commandForText(txt, self.selectedChat(cx) != null)) |cmd| {
             self.input.update(cx, TextInput.setText, .{""});
@@ -731,6 +862,7 @@ pub const ComposerView = struct {
     }
 
     fn onModifiedSubmit(self: *ComposerView, cx: *Context(ComposerView)) void {
+        if (self.input.update(cx, TextInput.finishDictation, .{true})) return; // [dictation]
         switch (m.modifiedSubmitTarget(self.hasContent(cx))) {
             .submit_content => self.onSubmit(cx),
             .activate_latest_queued => self.activateLatestQueued(cx),
@@ -761,7 +893,7 @@ pub const ComposerView = struct {
         }
         // One upload at a time; the button shows Stop meanwhile.
         if (self.upload != null) return;
-        if (self.staged().len > 0) return self.sendWithAttachments(queue, cx);
+        if (self.staged().len > 0 or self.stagedAppshots().len > 0) return self.sendWithAttachments(queue, cx);
         const typed = self.input.read(cx).text();
         // [review-comments] staged comments fold into the prompt (`with_comments`).
         const prompt = model.review_comments.foldPrompt(self.gpa, self.state.read(cx).review_comments.read(cx), self.current_key.items, typed) catch @panic("OOM");
@@ -897,12 +1029,17 @@ pub const ComposerView = struct {
         const host_is_remote = if (host) |h| !(local != null and std.mem.eql(u8, local.?, h)) else false;
         // Queued-attachment flow: commit to the LOCAL engine and let it deliver
         // the bytes; needs every engine involved to understand `pending://`.
-        const queued_flow = !queue and local != null and ws.deviceVersionAtLeast(local.?, att.queued_attachments_min) and
+        // Appshot XML needs escaped final paths, which the engine's plain `pending://`
+        // rewrite cannot produce: captures keep the upload-before-send path.
+        const queued_flow = !queue and self.stagedAppshots().len == 0 and local != null and ws.deviceVersionAtLeast(local.?, att.queued_attachments_min) and
             (!host_is_remote or ws.deviceVersionAtLeast(host.?, att.queued_attachments_min));
 
-        const staged_list = self.takeStaged(self.current_key.items);
-        const n = staged_list.items.len;
         const gpa = self.gpa;
+        var staged_list = self.takeStaged(self.current_key.items);
+        const n_ordinary = staged_list.items.len;
+        const sent_shots = self.takeAppshots(self.current_key.items); // [appshots]
+        for (sent_shots.items) |*shot| staged_list.append(gpa, shot.screenshot.clone(gpa) catch @panic("OOM")) catch @panic("OOM");
+        const n = staged_list.items.len;
         var u: Upload = .{
             .is_new = is_new,
             .queue = queue,
@@ -913,6 +1050,8 @@ pub const ComposerView = struct {
             .key = gpa.dupe(u8, self.current_key.items) catch @panic("OOM"),
             .typed = gpa.dupe(u8, self.input.read(cx).text()) catch @panic("OOM"),
             .staged = staged_list,
+            .appshots = sent_shots,
+            .n_ordinary = n_ordinary,
             .upload_ids = gpa.alloc([36]u8, n) catch @panic("OOM"),
             .echo_paths = gpa.alloc([]u8, n) catch @panic("OOM"),
             .device_id = gpa.dupe(u8, device_id) catch @panic("OOM"),
@@ -952,7 +1091,9 @@ pub const ComposerView = struct {
         // message is represented by the queue panel instead).
         if (!is_new and !queue) if (st.transcript) |t| {
             const echo_paths: []const []const u8 = @ptrCast(u.echo_paths);
-            const echo_text = att.withAttachments(gpa, u.typed, echo_paths) catch @panic("OOM");
+            const with_shots = withShots(gpa, u.typed, &u, echo_paths);
+            defer gpa.free(with_shots);
+            const echo_text = att.withAttachments(gpa, with_shots, echo_paths) catch @panic("OOM");
             defer gpa.free(echo_text);
             self.pushEchoFor(t, &u.message_id, echo_text, cx);
             t.update(cx, model.TranscriptStore.beginPendingSend, .{@as([]const u8, &u.message_id)}) catch {};
@@ -1033,7 +1174,9 @@ pub const ComposerView = struct {
         // [review-comments] comments fold before the attachment trailer; cleared once sent.
         const folded = model.review_comments.foldPrompt(gpa, st.review_comments.read(cx), u.key, u.typed) catch @panic("OOM");
         defer gpa.free(folded);
-        const content = att.withAttachments(gpa, folded, refs) catch @panic("OOM");
+        const folded_shots = withShots(gpa, folded, &u, refs); // [appshots]
+        defer gpa.free(folded_shots);
+        const content = att.withAttachments(gpa, folded_shots, refs) catch @panic("OOM");
         defer gpa.free(content);
         const resolved = self.picker.read(cx).resolved(cx);
 
@@ -1042,7 +1185,9 @@ pub const ComposerView = struct {
             // A queue row stays free of the attachment-path trailer when the
             // engine rebuilds it (`message-queue-clean-attachment-text-v1`).
             const clean = st.engine.read(cx).supports(protocol.capabilities.message_queue_clean_attachment_text_v1);
-            const queue_text: []const u8 = if (!clean) content else if (std.mem.trim(u8, u.typed, " \t\r\n").len == 0) att.attachment_only_text else u.typed;
+            const queue_body = withShots(gpa, u.typed, &u, refs); // [appshots]
+            defer gpa.free(queue_body);
+            const queue_text: []const u8 = if (!clean) content else if (std.mem.trim(u8, queue_body, " \t\r\n").len == 0) att.attachment_only_text else queue_body;
             q.update(cx, model.QueueStore.queueMessage, .{ queue_text, refs, true }) catch {
                 return self.restoreFailedSend(&u, "Send failed", cx);
             };
@@ -1086,6 +1231,12 @@ pub const ComposerView = struct {
             const v = self.gpa.dupe(u8, u.typed) catch @panic("OOM");
             self.drafts.put(self.gpa, k, v) catch @panic("OOM");
         }
+        // [appshots] The screenshot clones go back with their Appshots, not as files.
+        while (u.staged.items.len > u.n_ordinary) {
+            var clone = u.staged.pop().?;
+            clone.deinit(self.gpa, cx.app);
+        }
+        self.restoreFailedAppshots(&u.appshots, u.chatId(), u.key, cx.app);
         // Merge by id: files staged while the send was in flight survive.
         const list = self.stagedList(u.key);
         var merged: std.ArrayList(att.Staged) = .empty;
@@ -1111,6 +1262,8 @@ pub const ComposerView = struct {
         gpa.free(u.typed);
         for (u.staged.items) |*a| a.deinit(gpa, app);
         u.staged.deinit(gpa);
+        for (u.appshots.items) |*shot| shot.deinit(gpa, app); // [appshots]
+        u.appshots.deinit(gpa);
         gpa.free(u.upload_ids);
         for (u.echo_paths) |p| gpa.free(p);
         gpa.free(u.echo_paths);
@@ -1118,6 +1271,15 @@ pub const ComposerView = struct {
         if (u.host_device_id) |h| gpa.free(h);
         if (u.local_device_id) |l| gpa.free(l);
         u.progress.release();
+    }
+
+    /// [appshots] `with_appshots` over the send's staged screenshots, whose final
+    /// refs are `paths[n_ordinary..]` (owned).
+    fn withShots(gpa: std.mem.Allocator, text_: []const u8, u: *const Upload, paths: []const []const u8) []u8 {
+        const ids = gpa.alloc([]const u8, u.staged.items.len) catch @panic("OOM");
+        defer gpa.free(ids);
+        for (u.staged.items, 0..) |*a, i| ids[i] = &a.id;
+        return appshots.withAppshots(gpa, text_, u.appshots.items, .{ .ids = ids, .paths = paths[0..@min(paths.len, ids.len)] }) catch @panic("OOM");
     }
 
     fn dupePaths(gpa: std.mem.Allocator, paths: []const []const u8) [][]u8 {
@@ -1151,7 +1313,11 @@ pub const ComposerView = struct {
             t.update(cx, model.TranscriptStore.beginPendingSend, .{message_id}) catch {};
         }
         const cmd = rc.runCommand(resolved, .{ .prompt = prompt, .cwd = cwd, .message_id = message_id, .attachments = attachment_paths, .worktree = worktree });
-        const queued = if (transfers.len > 0)
+        // A worktree in a project hands its setup action off after the run is
+        // queued (`TakeProjectActionSetup`), keyed by the command id.
+        const queued = if (worktree != null and worktree.?.spaceId != null)
+            extras.queueWorktreeRun(self, t, cmd, transfers, message_id, cx)
+        else if (transfers.len > 0)
             t.update(cx, model.TranscriptStore.queueCommandWithTransfers, .{ cmd, transfers })
         else
             t.update(cx, model.TranscriptStore.queueCommand, .{cmd});
@@ -1213,13 +1379,6 @@ pub const ComposerView = struct {
         q.update(cx, model.QueueStore.sendQueuedMessageNow, .{id}) catch {};
     }
 
-    fn toggleDictation(self: *ComposerView, cx: *Context(ComposerView)) void {
-        if (!self.dictation_available) return;
-        self.dictating = !self.dictating;
-        cx.emit(ComposerEvent{ .dictation_toggled = self.dictating });
-        cx.notify();
-    }
-
     // ---- button handlers ----------------------------------------------------------------
 
     fn onSendClick(self: *ComposerView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ComposerView)) void {
@@ -1231,17 +1390,10 @@ pub const ComposerView = struct {
     }
 
     fn onAttachClick(self: *ComposerView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ComposerView)) void {
-        if (self.dictating) {
-            self.dictating = false;
-            cx.emit(ComposerEvent{ .dictation_toggled = false });
-            return cx.notify();
-        }
+        // [dictation] While dictating the attachment slot is Cancel.
+        if (self.input.read(cx).dictation.phase.active()) return voice.dismiss(self, cx);
         cx.emit(ComposerEvent{ .attach_requested = {} });
         self.openFilePicker(cx);
-    }
-
-    fn onMicClick(self: *ComposerView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ComposerView)) void {
-        self.toggleDictation(cx);
     }
 
     fn onFailureClick(self: *ComposerView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ComposerView)) void {
@@ -1304,6 +1456,7 @@ pub const ComposerView = struct {
     }
 
     pub fn render(self: *ComposerView, window: *Window, cx: *Context(ComposerView)) zpui.Div {
+        voice.beforeRender(self, window, cx); // [dictation] focus tracking, refocus, window deactivation
         const theme = &self.theme;
         const mode = self.buttonMode(cx);
         // Shape the current draft before sizing the pill.
@@ -1352,7 +1505,7 @@ pub const ComposerView = struct {
         // Heights.
         const strip_width_hint = (self.available_width orelse m.composer_max_width) - 2.0 * zt.layout.space_lg - 2.0;
         const comment_count = review_chip.count(self.state, self.current_key.items, cx); // [review-comments]
-        const strip_h = m.attachmentStripHeight(self.staged().len, strip_width_hint) + model.review_comments.stripHeight(comment_count);
+        const strip_h = m.attachmentStripHeight(self.staged().len, strip_width_hint) + model.review_comments.stripHeight(comment_count) + m.appshotStripHeight(self.stagedAppshots().len); // [appshots]
         const base_height = if (expanded) m.composerTotalHeight(content_height) else m.compact_total_height;
         const target_height = base_height + strip_h;
         self.height_morph = m.flipMorphStep(self.height_morph, @abs(target_height - self.last_target_height) > 0.5, self.last_rendered_height, now_ms, reduced, false);
@@ -1380,14 +1533,28 @@ pub const ComposerView = struct {
 
         // Controls.
         const send_button = self.renderSendButton(mode, cx);
-        const attach = self.renderAttach(cx);
-        const mic = if (self.dictation_available) self.renderMic(cx) else null;
+        // [dictation] the morph progress and the frame the voice track draws.
+        const voice_t, const voice_frame = voice.update(self, window, cx);
+        const attach = self.renderAttach(voice_t, cx);
+        const mic = voice.renderButton(self, voice_t, voice_frame, cx);
         const cluster_dy = m.morphClusterDy(morph_t);
         const action_inset = m.morphClusterInset(expanded, morph_t);
         const surface_width = if (self.available_width) |w| @max(w - 2.0 * zt.layout.space_lg, 0) else strip_width_hint + m.pill_border_v;
+        // The model chip already contributes 6px of trailing padding. Remove
+        // that from its gap to the narrow microphone glyph.
         const model_action_gap: f32 = if (mic != null) m.action_primary_gap - 6 else m.action_primary_gap;
-        const model_picker = div().minW0().maxW(px(surface_width * 0.45)).relative().child(self.picker);
+        // The voice track spans from the attachment slot to Stop, over the
+        // model selector (and, compact, the text), which fade beneath it.
+        const beneath_voice = 1 - std.math.clamp(voice_t, 0, 1);
+        const voice_track: ?zpui.StatefulDiv = if (voice_frame != null and voice_t > 0 and mic != null) blk: {
+            // Expanded: the row's 2px top pad; compact: centred in the 47px
+            // line, riding the same cluster glide as the buttons.
+            const top: f32 = if (expanded) 2 else (m.compact_total_height - m.pill_border_v - voice.track_height) / 2 - cluster_dy;
+            break :blk voice.renderTrack(self, voice_t, voice_frame.?, action_inset + m.action_button_size + voice.track_gap, action_inset + m.action_button_size + m.action_primary_gap + m.action_button_size + voice.track_gap, top, window, cx);
+        } else null;
+        const model_picker = div().minW0().maxW(px(surface_width * 0.45)).relative().opacity(beneath_voice).child(self.picker);
         const strip = self.renderAttachmentStrip(cx);
+        const appshot_strip = self.renderAppshotStrip(strip_width_hint, reduced, window, cx); // [appshots]
         const comments_chip = review_chip.render(comment_count, theme); // [review-comments]
 
         var pill = div()
@@ -1399,24 +1566,29 @@ pub const ComposerView = struct {
         const body = if (expanded)
             pill.h(px(pill_height)).overflowHidden().relative().flex().flexCol()
                 .child(comments_chip)
+                .child(appshot_strip)
                 .child(strip)
                 .child(div().h(px(textarea_height)).flexNone().overflowHidden().px(px(16)).pt(px(text_pt)).pb(px(4)).child(self.input))
                 .child(div().absolute().left0().right0().bottom(px(-cluster_dy)).h(px(m.actions_row_height))
                     .flex().flexRow().itemsCenter().gap(px(model_action_gap)).px(px(action_inset)).pt(px(2)).pb(px(m.actions_bottom_pad))
                     .child(div().flex1().minW0().flex().flexRow().itemsCenter().gap(px(m.action_utility_gap)).child(attach))
                     .child(model_picker)
-                    .child(primaryGroup(mic, send_button)))
+                    .child(primaryGroup(mic, send_button))
+                    .when(voice_track != null, zpui.Div.child, .{voice_track}))
         else blk: {
             const glide: f32 = if (self.flip_morph) |fm| (if (morphing) m.collapseTextGlide(fm.from, morph_t) else 0) else 0;
             break :blk pill.h(px(pill_height)).overflowHidden().flex().flexCol().justifyEnd()
                 .child(comments_chip)
+                .child(appshot_strip)
                 .child(strip)
                 .child(div().h(px(m.compact_total_height - m.pill_border_v)).relative().flex().flexRow().itemsCenter()
                     .child(div().flexNone().pl(px(action_inset)).relative().top(px(-cluster_dy)).flex().itemsCenter().gap(px(m.action_utility_gap)).child(attach))
-                    .child(div().flex1().minW0().px(px(8)).relative().top(px(-glide)).child(self.input))
+                    // The draft waits under the voice track and fades back as the transcript lands in it.
+                    .child(div().flex1().minW0().px(px(8)).relative().top(px(-glide)).opacity(beneath_voice).child(self.input))
                     .child(div().minW0().maxW(px(surface_width * 0.45)).relative().top(px(-cluster_dy)).child(model_picker))
                     .child(div().flexNone().pl(px(model_action_gap)).pr(px(action_inset)).relative().top(px(-cluster_dy))
-                        .flex().itemsCenter().gap(px(m.action_primary_gap)).child(primaryGroup(mic, send_button))));
+                        .flex().itemsCenter().gap(px(m.action_primary_gap)).child(primaryGroup(mic, send_button)))
+                    .when(voice_track != null, zpui.Div.child, .{voice_track}));
         };
 
         // [wiring] a pending question replaces the pill; completions float above it.
@@ -1435,7 +1607,11 @@ pub const ComposerView = struct {
             container = container.child(div().mx(px(m.queue_side_inset)).mb(px(-(zt.layout.space_sm + m.queue_composer_overlap))).child(q));
         }
         if (new_chat) container = container.child(self.renderTargetSelectors(cx));
-        container = container.child(pill_surface);
+        // [dictation] Only leaving the pill + status region cancels capture;
+        // outcomes (no speech, errors) read below the pill.
+        var region = voice.focusRegion(self, cx).child(pill_surface);
+        if (voice.renderStatus(self, cx)) |st| region = region.child(st);
+        container = container.child(region);
         container = container.child(self.renderFooter(new_chat, cx));
         if (self.lightbox) |lb| container = container.child(lb);
         return container;
@@ -1456,14 +1632,14 @@ pub const ComposerView = struct {
     fn renderSendButton(self: *ComposerView, mode: m.SendButtonMode, cx: *Context(ComposerView)) zpui.StatefulDiv {
         const theme = &self.theme;
         switch (mode) {
-            .stop => return circle("composer-stop").bg(theme.text).cursorPointer()
+            .stop => return circle("composer-stop").role(.button).ariaLabel("Stop").bg(theme.text).cursorPointer()
                 .hover(sb.opacity(0.85))
                 .onClick(cx.listener(ComposerView.onStopClick))
                 .tooltipWith(chrome.TipData{ .text = "Stop", .dark = theme.appearance.isDark() }, chrome.buildTooltip)
                 .child(div().size(px(11)).rounded(px(3)).bg(theme.bg)),
             .send, .queue => {
                 const blocked = self.sendBlocked(cx);
-                var b = circle("composer-send").bg(theme.text)
+                var b = circle("composer-send").role(.button).ariaLabel(if (mode == .queue) "Queue message" else "Send message").ariaDisabled(blocked).bg(theme.text)
                     .tooltipWith(chrome.TipData{ .text = if (mode == .queue) "Queue message" else "Send message", .dark = theme.appearance.isDark() }, chrome.buildTooltip)
                     .child(chrome.icon(.arrow_up, 14, theme.bg));
                 b = if (blocked) b.opacity(0.35) else b.cursorPointer().hover(sb.opacity(0.85)).onClick(cx.listener(ComposerView.onSendClick));
@@ -1472,28 +1648,13 @@ pub const ComposerView = struct {
         }
     }
 
-    fn renderAttach(self: *ComposerView, cx: *Context(ComposerView)) zpui.StatefulDiv {
+    /// The paperclip; while dictating, Cancel (voice.zig `decorateAttach`).
+    fn renderAttach(self: *ComposerView, voice_t: f32, cx: *Context(ComposerView)) zpui.StatefulDiv {
         const theme = &self.theme;
-        return circle("composer-attach").relative().cursorPointer()
+        const b = circle("composer-attach").relative().cursorPointer()
             .hover(sb.bg(chrome.actionWash(theme)))
-            .onClick(cx.listener(ComposerView.onAttachClick))
-            .tooltipWith(chrome.TipData{ .text = if (self.dictating) "Cancel dictation" else "Attach images", .dark = theme.appearance.isDark() }, chrome.buildTooltip)
-            .child(if (self.dictating) chrome.icon(.close, 16, theme.text_muted) else chrome.icon(.paperclip, 18, theme.text_muted));
-    }
-
-    fn renderMic(self: *ComposerView, cx: *Context(ComposerView)) zpui.StatefulDiv {
-        const theme = &self.theme;
-        var b = circle("composer-dictation").relative().cursorPointer()
-            .onClick(cx.listener(ComposerView.onMicClick))
-            .tooltipWith(chrome.TipData{ .text = if (self.dictating) "Stop dictation" else "Hold to dictate", .dark = theme.appearance.isDark() }, chrome.buildTooltip);
-        if (self.dictating) {
-            // Live: the accent plate with the stop square.
-            b = b.bg(theme.accent_strong).hover(sb.opacity(0.85))
-                .child(div().size(px(9)).rounded(px(2.5)).bg(theme.on_accent));
-        } else {
-            b = b.hover(sb.bg(chrome.actionWash(theme))).child(chrome.icon(.microphone, 18, theme.text_muted));
-        }
-        return b;
+            .onClick(cx.listener(ComposerView.onAttachClick));
+        return voice.decorateAttach(self, b, voice_t, cx);
     }
 
     /// The staged-thumbnail strip (attachment-ui.tsx AttachmentStrip):
@@ -1506,7 +1667,7 @@ pub const ComposerView = struct {
         var strip = div().wFull().flexNone().flex().flexRow().flexWrap().gap(px(m.strip_gap)).px(px(m.strip_pad_x)).pt(px(m.strip_pad_top));
         for (list, 0..) |a, ix| {
             const group = zpui.fmt("composer-att-{s}", .{&a.id});
-            var thumb = div().id(.{ "composer-att-thumb", ix }).size(px(m.strip_thumb)).rounded(px(8)).overflowHidden()
+            var thumb = div().id(.{ "composer-att-thumb", ix }).role(.button).ariaLabel(zpui.fmt("Preview {s}", .{a.name})).size(px(m.strip_thumb)).rounded(px(8)).overflowHidden()
                 .border1().borderColor(theme.hairline(0.10)).cursorPointer()
                 .onClick(cx.listenerWith(ix, ComposerView.onThumbClick));
             thumb = if (a.image) |r|
@@ -1515,7 +1676,7 @@ pub const ComposerView = struct {
                 thumb.bg(theme.ink(0.05)).flex().itemsCenter().justifyCenter().child(chrome.icon(.file_image, 18, theme.text_muted));
             strip = strip.child(div().group(group).flexNone().relative()
                 .child(thumb)
-                .child(zpui.layered(div().id(.{ "composer-att-remove", ix }).absolute().top(px(-6)).right(px(-6)).size(px(18)).roundedFull()
+                .child(zpui.layered(div().id(.{ "composer-att-remove", ix }).role(.button).ariaLabel(zpui.fmt("Remove {s}", .{a.name})).absolute().top(px(-6)).right(px(-6)).size(px(18)).roundedFull()
                     .bg(theme.bg).flex().itemsCenter().justifyCenter().cursorPointer().shadowSm().opacity(0)
                     .groupHover(group, sb.opacity(1))
                     .onClick(cx.listenerWith(ix, ComposerView.onRemoveAttachment))
@@ -1525,11 +1686,87 @@ pub const ComposerView = struct {
         return strip;
     }
 
+    /// [appshots] `render_appshot_strip`: one scrolling row of capture tiles (window
+    /// title or app name, app icon badge, hover remove, click to preview).
+    fn renderAppshotStrip(self: *ComposerView, strip_width_hint: f32, reduced: bool, window: *Window, cx: *Context(ComposerView)) ?zpui.StatefulDiv {
+        const shots = self.stagedAppshots();
+        if (shots.len == 0) return null;
+        const theme = &self.theme;
+        var strip = div().id("composer-appshots-strip").flexNone().flex().flexRow().gap(px(m.strip_gap)).px(px(m.strip_pad_x)).pt(px(m.strip_pad_top)).overflowXScroll();
+        const max_image_width = strip_width_hint - 2.0 * m.strip_pad_x - 2.0 * m.appshot_image_inset;
+        const now = cx.app.executor.now();
+        for (shots, 0..) |*shot, ix| {
+            const source: []const u8 = if (shot.window_title) |t| (if (std.mem.trim(u8, t, " \t\r\n").len > 0) t else shot.app_name) else shot.app_name;
+            const size = m.appshotContainedSize(shot.dimensions, max_image_width);
+            const tile_width = @max(size[0] + 2.0 * m.appshot_image_inset, m.appshot_tile_min_width);
+            const group = zpui.fmt("composer-appshot-{s}", .{&shot.id});
+            var image_box = div().w(px(size[0])).h(px(size[1])).flexNone().overflowHidden().rounded(px(4)).shadowSm();
+            image_box = if (shot.screenshot.image) |r|
+                image_box.child(zpui.img(r).w(px(size[0])).h(px(size[1])).objectFit(.contain))
+            else
+                image_box.bg(theme.ink(0.05));
+            var card = div().id(.{ "composer-appshot", ix }).group(group).relative().w(px(tile_width)).h(px(m.appshot_tile_height))
+                .flexNone().flex().flexCol().itemsCenter().rounded(px(14)).overflowHidden().cursorPointer()
+                .hover(sb.bg(theme.ink(0.045)))
+                .role(.button).ariaLabel(zpui.fmt("Preview {s}", .{source}))
+                .tooltipWith(chrome.TipData{ .text = zpui.fmt("Preview {s}", .{source}), .dark = theme.appearance.isDark() }, chrome.buildTooltip)
+                .onClick(cx.listenerWith(ix, ComposerView.onAppshotClick))
+                .child(div().w(px(tile_width)).h(px(m.appshot_preview_height)).relative().flexNone().flex().itemsEnd().justifyCenter().overflowHidden().rounded(px(12)).child(image_box))
+                .child(div().mt(px(20)).maxW(px(tile_width - 20)).truncate().textCenter().textSize(px(12.5)).fontWeight(500).textColor(theme.text).child(source));
+            if (shot.icon) |icon| {
+                card = card.child(zpui.layered(div().absolute().top(px(m.appshot_preview_height - 22)).left(px((tile_width - 28) / 2)).size(px(28)).rounded(px(7))
+                    .bg(theme.bg).border1().borderColor(theme.border).flex().itemsCenter().justifyCenter()
+                    .child(zpui.img(icon).size(px(24)).rounded(px(5)).objectFit(.contain))));
+            }
+            card = card.child(zpui.layered(div().id(.{ "composer-appshot-remove", ix }).absolute().top(px(6)).right(px(6)).size(px(22)).roundedFull()
+                .bg(theme.bg.opacity(0.92)).flex().itemsCenter().justifyCenter().cursorPointer().shadowSm().opacity(0)
+                .groupHover(group, sb.opacity(1))
+                .role(.button).ariaLabel(zpui.fmt("Remove {s}", .{source}))
+                .tooltipWith(chrome.TipData{ .text = zpui.fmt("Remove {s}", .{source}), .dark = theme.appearance.isDark() }, chrome.buildTooltip)
+                .onClick(cx.listenerWith(ix, ComposerView.onRemoveAppshot))
+                .child(chrome.icon(.close_circle, 15, theme.text_muted))));
+            // Entity-owned timestamps keep the entrance from replaying on remount.
+            if (self.appshot_entrances.get(shot.id)) |start| if (!reduced) {
+                const raw = std.math.clamp(@as(f32, @floatFromInt(now -| start)) / @as(f32, @floatFromInt(appshot_entrance_ns)), 0, 1);
+                if (raw < 1) {
+                    const p = 1 - std.math.pow(f32, 2, -10 * raw); // ease-out expo
+                    card = card.opacity(p).top(px(8 * (1 - p)));
+                    window.requestAnimationFrame();
+                }
+            };
+            strip = strip.child(card);
+        }
+        return strip;
+    }
+
+    fn onAppshotClick(self: *ComposerView, ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(ComposerView)) void {
+        const shots = self.stagedAppshots();
+        if (ix >= shots.len) return;
+        const img = shots[ix].screenshot.image orelse return;
+        self.closeLightbox(cx.app);
+        const lb = cx.newWith(media.Lightbox, media.Lightbox.init, .{ media.LightboxOptions{
+            .image = img,
+            .name = shots[ix].screenshot.name,
+            .release = att.releaseImage,
+            .appearance = self.theme.appearance,
+        }, window }) catch return;
+        self.lightbox = lb;
+        self.lightbox_sub = cx.subscribe(lb, ComposerView.onLightboxClosed) catch null;
+        cx.notify();
+    }
+
+    fn onRemoveAppshot(self: *ComposerView, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ComposerView)) void {
+        cx.stopPropagation();
+        const shots = self.stagedAppshots();
+        if (ix >= shots.len) return;
+        self.removeAppshot(shots[ix].id, cx);
+    }
+
     fn renderFailure(self: *ComposerView, cx: *Context(ComposerView)) zpui.StatefulDiv {
         const theme = &self.theme;
         const accent = if (self.failure_warning) theme.warning else theme.danger;
         const muted = if (self.failure_warning) theme.warning_muted else theme.danger_muted;
-        return div().id("composer-failure").mx(px(4)).mt(px(6)).cursorPointer()
+        return div().id("composer-failure").role(.alert).mx(px(4)).mt(px(6)).cursorPointer()
             .onClick(cx.listener(ComposerView.onFailureClick))
             .flex().flexCol().gap(px(6)).rounded(px(12)).border1().borderColor(accent.opacity(0.16)).bg(accent.opacity(0.05))
             .px(px(12)).py(px(8)).textSize(rems(12)).lineHeight(px(16)).textColor(muted.opacity(0.9))
@@ -1579,7 +1816,7 @@ pub const ComposerView = struct {
             const label: []const u8 = if (item.deliveryGate) |g| switch (g) {
                 .editing => "Editing on another device",
                 .reviewRequired => "Needs review",
-            } else item.text;
+            } else att.queueVisibleText(zpui.window.arena_mod.frameAllocator(), item.text, item.attachments) catch item.text;
             var row = div().id(.{ "queue-row", ix }).h(px(36)).flexNone().px(px(4)).flex().flexRow().itemsCenter().gap(px(8))
                 .rounded(px(8)).hover(sb.bg(theme.ink(0.04)))
                 .child(div().w(px(14)).h(px(22)).flexNone().flex().itemsCenter().justifyCenter().rounded(px(4))
@@ -1589,7 +1826,7 @@ pub const ComposerView = struct {
                 .child(div().flexNone().flex().flexRow().itemsCenter().gap(px(3))
                     .child(queueAction(theme, .{ "queue-drop", ix }, .trash_bin_minimalistic, "Remove").onClick(cx.listenerWith(ix, ComposerView.onQueueRemove)))
                     .child(queueAction(theme, .{ "queue-edit", ix }, .pen, "Edit").onClick(cx.listenerWith(ix, ComposerView.onQueueEdit)))
-                    .child(div().id(.{ "queue-primary", ix }).w(px(72)).h(px(28)).flexNone().flex().itemsCenter().justifyCenter().rounded(px(5))
+                    .child(div().id(.{ "queue-primary", ix }).role(.button).ariaLabel("Send now (interrupt)").w(px(72)).h(px(28)).flexNone().flex().itemsCenter().justifyCenter().rounded(px(5))
                         .textSize(px(11.5)).textColor(theme.text_muted).cursorPointer()
                         .hover(sb.bg(theme.ink(0.07)).textColor(theme.text))
                         .tooltipWith(chrome.TipData{ .text = "Send now (interrupt)", .dark = theme.appearance.isDark() }, chrome.buildTooltip)
@@ -1601,7 +1838,7 @@ pub const ComposerView = struct {
     }
 
     fn queueAction(theme: *const Theme, id: anytype, i: chrome.Icon, label: []const u8) zpui.StatefulDiv {
-        return div().id(id).size(px(28)).flexNone().flex().itemsCenter().justifyCenter().rounded(px(5)).opacity(0.72).cursorPointer()
+        return div().id(id).role(.button).ariaLabel(label).size(px(28)).flexNone().flex().itemsCenter().justifyCenter().rounded(px(5)).opacity(0.72).cursorPointer()
             .hover(sb.opacity(1).bg(theme.ink(0.07)))
             .tooltipWith(chrome.TipData{ .text = label, .dark = theme.appearance.isDark() }, chrome.buildTooltip)
             .child(chrome.icon(i, 13, theme.text_muted.opacity(0.8)));

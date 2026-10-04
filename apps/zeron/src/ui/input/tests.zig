@@ -364,3 +364,317 @@ test "pure viewport helpers match Rust" {
     try testing.expectEqual(ti.PressIntent.word, ti.pressIntent(2, true));
     try testing.expectEqual(ti.PressIntent.extend_selection, ti.pressIntent(1, true));
 }
+
+// ---- dictation (Rust composer_dictation_tests.rs, ComposerInput half) ------------------
+
+const dict = @import("dictation.zig");
+
+/// A scripted transcriber; the test owns it (drops count `deinit`s).
+const FakeTranscriber = struct {
+    events: [16]dict.Event = undefined,
+    len: usize = 0,
+    head: usize = 0,
+    finishes: usize = 0,
+    drops: usize = 0,
+
+    const vtable: dict.Transcriber.VTable = .{ .poll = poll, .finish = finish, .level = level, .deinit = drop };
+
+    fn transcriber(self: *FakeTranscriber) dict.Transcriber {
+        return .{ .ctx = self, .vtable = &vtable };
+    }
+    fn push(self: *FakeTranscriber, evs: []const dict.Event) void {
+        for (evs) |e| {
+            self.events[self.len] = e;
+            self.len += 1;
+        }
+    }
+    fn poll(ctx: *anyopaque) ?dict.Event {
+        const self: *FakeTranscriber = @ptrCast(@alignCast(ctx));
+        if (self.head == self.len) return null;
+        self.head += 1;
+        return self.events[self.head - 1];
+    }
+    fn finish(ctx: *anyopaque) void {
+        const self: *FakeTranscriber = @ptrCast(@alignCast(ctx));
+        self.finishes += 1;
+    }
+    fn level(_: *anyopaque) f32 {
+        return 0.05;
+    }
+    fn drop(ctx: *anyopaque) void {
+        const self: *FakeTranscriber = @ptrCast(@alignCast(ctx));
+        self.drops += 1;
+    }
+};
+
+const DictOps = struct {
+    fn begin(in: *TextInput, fake: *FakeTranscriber, cx: *Context(TextInput)) void {
+        in.beginDictation(fake.transcriber(), cx);
+    }
+    fn poll(in: *TextInput, cx: *Context(TextInput)) bool {
+        return in.pollDictation(in.dictation.generation, cx);
+    }
+    fn pollGen(in: *TextInput, generation: u64, cx: *Context(TextInput)) bool {
+        return in.pollDictation(generation, cx);
+    }
+    fn finish(in: *TextInput, send: bool, cx: *Context(TextInput)) bool {
+        return in.finishDictation(send, cx);
+    }
+    fn select(in: *TextInput, start: usize, end: usize, _: *Context(TextInput)) void {
+        in.state.selectRange(.{ .start = start, .end = end });
+    }
+};
+
+fn dictFixture() !Fixture {
+    var opts = test_opts;
+    opts.key_context = actions.keymap.message_composer_context;
+    return Fixture.init(opts, 300);
+}
+
+fn deliver(f: *Fixture, fake: *FakeTranscriber, evs: []const dict.Event) bool {
+    fake.push(evs);
+    return f.host().input.update(f.app, DictOps.poll, .{});
+}
+
+test "dictation replaces a unicode selection and undoes as one edit" {
+    var f = try dictFixture();
+    defer f.deinit();
+    f.update(TextInput.setText, .{"👩🏽‍💻 replace café"});
+    const begin = std.mem.indexOf(u8, f.input().text(), "replace").?;
+    f.update(DictOps.select, .{ begin, begin + "replace".len });
+    var fake: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&fake});
+    _ = deliver(&f, &fake, &.{ .listening, .{ .partial = "你好" }, .{ .partial = "bonjour 🌍" } });
+    try testing.expectEqualStrings("👩🏽‍💻 bonjour 🌍 café", f.input().text());
+    try testing.expectEqual(@as(usize, 1), f.input().state.undo_stack.items.len);
+    try testing.expect(f.input().dictation.phase == .listening);
+    _ = f.host().input.update(f.app, DictOps.finish, .{false});
+    _ = deliver(&f, &fake, &.{.{ .final = "salut 🌍" }});
+    try testing.expectEqualStrings("👩🏽‍💻 salut 🌍 café", f.input().text());
+    try testing.expectEqual(@as(usize, 1), fake.drops);
+    f.key("ctrl-z");
+    try testing.expectEqualStrings("👩🏽‍💻 replace café", f.input().text());
+    try testing.expect(f.input().state.selected.eql(.{ .start = begin, .end = begin + 7 }));
+    f.key("shift-ctrl-z");
+    try testing.expectEqualStrings("👩🏽‍💻 salut 🌍 café", f.input().text());
+}
+
+test "dictation: a manual edit stops it before replacing the partial" {
+    var f = try dictFixture();
+    defer f.deinit();
+    f.update(TextInput.setText, .{"before after"});
+    f.update(DictOps.select, .{ 7, 7 });
+    var fake: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&fake});
+    const old = f.input().dictation.generation;
+    _ = deliver(&f, &fake, &.{.{ .partial = "speech " }});
+    try testing.expectEqualStrings("before speech after", f.input().text());
+    f.update(TextInput.replaceRange, .{ 7, 13, "typed" });
+    try testing.expectEqualStrings("before typed after", f.input().text());
+    try testing.expectEqual(@as(usize, 1), fake.drops);
+    fake.push(&.{.{ .final = "stale" }});
+    try testing.expect(!f.host().input.update(f.app, DictOps.pollGen, .{old}));
+    try testing.expectEqualStrings("before typed after", f.input().text());
+    f.key("ctrl-z");
+    try testing.expectEqualStrings("before speech after", f.input().text());
+    f.key("ctrl-z");
+    try testing.expectEqualStrings("before after", f.input().text());
+}
+
+test "dictation: IME composition cancels it and keeps history" {
+    var f = try dictFixture();
+    defer f.deinit();
+    var fake: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&fake});
+    _ = deliver(&f, &fake, &.{.{ .partial = "Hello " }});
+    const h = f.tw.input_handler.?;
+    h.vtable.replaceAndMarkTextInRange(h.ptr, null, "に", null);
+    try testing.expectEqual(@as(usize, 1), fake.drops);
+    h.vtable.replaceAndMarkTextInRange(h.ptr, null, "日本", null);
+    h.vtable.replaceTextInRange(h.ptr, null, "日本語");
+    try testing.expectEqualStrings("Hello 日本語", f.input().text());
+    f.key("ctrl-z");
+    try testing.expectEqualStrings("Hello ", f.input().text());
+    f.key("ctrl-z");
+    try testing.expectEqualStrings("", f.input().text());
+}
+
+test "dictation: moving the selection or undo while waiting cancels it" {
+    var f = try dictFixture();
+    defer f.deinit();
+    f.update(TextInput.setText, .{"draft"});
+    var first: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&first});
+    f.key("ctrl-z"); // No history is still a deliberate cancellation.
+    try testing.expectEqual(@as(usize, 1), first.drops);
+    var second: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&second});
+    _ = deliver(&f, &second, &.{.{ .partial = " words" }});
+    f.key("home");
+    try testing.expectEqual(@as(usize, 1), second.drops);
+    try testing.expectEqualStrings("draft words", f.input().text());
+    try testing.expect(f.input().state.selected.eql(.collapsed(0)));
+}
+
+test "dictation: send finalizes once and keeps the latest final" {
+    var f = try dictFixture();
+    defer f.deinit();
+    var fake: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&fake});
+    _ = deliver(&f, &fake, &.{ .listening, .{ .partial = "hel" } });
+    try testing.expect(f.host().input.update(f.app, DictOps.finish, .{true}));
+    try testing.expect(f.host().input.update(f.app, DictOps.finish, .{true}));
+    try testing.expect(f.host().input.update(f.app, DictOps.finish, .{false}));
+    try testing.expectEqual(@as(usize, 1), fake.finishes);
+    _ = deliver(&f, &fake, &.{ .{ .final = "hello" }, .{ .final = "duplicate" } });
+    try testing.expectEqualStrings("hello", f.input().text());
+    try testing.expect(f.input().dictation.phase == .idle);
+    try testing.expectEqual(@as(usize, 1), fake.drops);
+    try testing.expectEqual(@as(usize, 1), f.host().count(.dictation_submit));
+}
+
+test "dictation: failure cancels the send; retries preserve the draft" {
+    var f = try dictFixture();
+    defer f.deinit();
+    var fake: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&fake});
+    _ = deliver(&f, &fake, &.{.{ .partial = "keep me" }});
+    _ = f.host().input.update(f.app, DictOps.finish, .{true});
+    _ = deliver(&f, &fake, &.{.{ .failed = "Disconnected" }});
+    try testing.expectEqualStrings("keep me", f.input().text());
+    try testing.expectEqualStrings("Disconnected", f.input().dictation.phase.failed);
+    try testing.expectEqual(@as(usize, 1), fake.drops);
+    for ([_]dict.Event{ .{ .denied = "Permission denied" }, .{ .unavailable = "Locale unavailable" } }) |err| {
+        var retry: FakeTranscriber = .{};
+        f.update(DictOps.begin, .{&retry});
+        _ = deliver(&f, &retry, &.{err});
+        try testing.expectEqualStrings("keep me", f.input().text());
+        try testing.expect(!f.input().dictation.phase.active());
+        try testing.expectEqual(@as(usize, 1), retry.drops);
+    }
+    var again: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&again});
+    _ = deliver(&f, &again, &.{ .{ .partial = " again" }, .{ .final = " again" } });
+    try testing.expectEqualStrings("keep me again", f.input().text());
+    try testing.expectEqual(@as(usize, 0), f.host().count(.dictation_submit));
+}
+
+test "dictation: an empty final keeps the selection or the latest partial" {
+    var f = try dictFixture();
+    defer f.deinit();
+    for ([_]?[]const u8{ null, "replacement" }) |partial| {
+        f.update(TextInput.setText, .{"selected"});
+        f.update(DictOps.select, .{ 0, 8 });
+        var fake: FakeTranscriber = .{};
+        f.update(DictOps.begin, .{&fake});
+        if (partial) |p| _ = deliver(&f, &fake, &.{.{ .partial = p }});
+        _ = f.host().input.update(f.app, DictOps.finish, .{false});
+        _ = deliver(&f, &fake, &.{.{ .final = "" }});
+        try testing.expectEqualStrings(partial orelse "selected", f.input().text());
+        try testing.expectEqual(@as(usize, @intFromBool(partial != null)), f.input().state.undo_stack.items.len);
+        // Silence with nothing written explains itself.
+        if (partial == null) try testing.expect(f.input().dictation.phase == .no_speech);
+    }
+}
+
+test "dictation: a draft swap invalidates finalization and stale results" {
+    var f = try dictFixture();
+    defer f.deinit();
+    for ([_]bool{ false, true }) |finalizing| {
+        f.update(TextInput.setText, .{"original"});
+        var fake: FakeTranscriber = .{};
+        f.update(DictOps.begin, .{&fake});
+        const generation = f.input().dictation.generation;
+        if (finalizing) _ = f.host().input.update(f.app, DictOps.finish, .{true});
+        f.update(TextInput.setText, .{"different chat / queued draft"});
+        fake.push(&.{ .listening, .{ .final = "late" } });
+        try testing.expect(!f.host().input.update(f.app, DictOps.pollGen, .{generation}));
+        try testing.expectEqual(@as(usize, 1), fake.drops);
+        try testing.expectEqualStrings("different chat / queued draft", f.input().text());
+        try testing.expectEqual(@as(usize, 0), f.input().state.undo_stack.items.len);
+    }
+    try testing.expectEqual(@as(usize, 0), f.host().count(.dictation_submit));
+}
+
+test "dictation: cancelled native capture drops the pending send" {
+    var f = try dictFixture();
+    defer f.deinit();
+    var fake: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&fake});
+    _ = deliver(&f, &fake, &.{.{ .partial = "keep draft" }});
+    _ = f.host().input.update(f.app, DictOps.finish, .{true});
+    _ = deliver(&f, &fake, &.{.cancelled});
+    try testing.expectEqual(@as(usize, 1), fake.drops);
+    try testing.expectEqualStrings("keep draft", f.input().text());
+    try testing.expect(f.input().dictation.phase == .idle);
+    try testing.expectEqual(@as(usize, 0), f.host().count(.dictation_submit));
+}
+
+test "dictation: the finalize deadline keeps the latest partial without sending" {
+    var f = try dictFixture();
+    defer f.deinit();
+    var fake: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&fake});
+    _ = deliver(&f, &fake, &.{ .listening, .{ .partial = "latest" } });
+    _ = f.host().input.update(f.app, DictOps.finish, .{true});
+    // The 40 ms poll keeps running on the app clock; nothing answers.
+    f.app.advanceClock(dict.finalize_timeout_ns + 100 * std.time.ns_per_ms);
+    try testing.expectEqualStrings("latest", f.input().text());
+    try testing.expectEqual(@as(usize, 1), fake.drops);
+    try testing.expect(f.input().dictation.phase == .failed);
+    try testing.expectEqual(@as(usize, 0), f.host().count(.dictation_submit));
+}
+
+test "dictation: Escape cancels and keeps what was written; releasing the input releases the microphone" {
+    var f = try dictFixture();
+    var fake: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&fake});
+    _ = deliver(&f, &fake, &.{.{ .partial = "spoken" }});
+    f.key("escape");
+    try testing.expectEqual(@as(usize, 1), fake.drops);
+    try testing.expect(f.input().dictation.phase == .idle);
+    try testing.expectEqualStrings("spoken", f.input().text());
+    var live: FakeTranscriber = .{};
+    f.update(DictOps.begin, .{&live});
+    f.deinit();
+    try testing.expectEqual(@as(usize, 1), live.drops);
+}
+
+fn fakeEnabled(_: ?*anyopaque, _: *App) bool {
+    return true;
+}
+fn fakeStart(_: ?*anyopaque, _: *App) ?dict.Transcriber {
+    return null;
+}
+fn fakePending(_: ?*anyopaque) bool {
+    return false;
+}
+fn fakeBinding(_: ?*anyopaque, _: *App, buf: []u8) []const u8 {
+    const combo = if (@import("builtin").os.tag == .macos) "cmd-d" else "ctrl-d";
+    @memcpy(buf[0..combo.len], combo);
+    return buf[0..combo.len];
+}
+
+test "dictation shortcut: held until its key or modifier is released" {
+    var f = try dictFixture();
+    defer f.deinit();
+    // Off (no service): the chord does nothing here.
+    f.key("ctrl-d");
+    try testing.expectEqual(@as(usize, 0), f.host().count(.dictation_press));
+    try f.app.setGlobal(dict.Service{ .enabled = fakeEnabled, .start = fakeStart, .permission_pending = fakePending, .binding = fakeBinding });
+    const mod: zpui.input.Modifiers = if (@import("builtin").os.tag == .macos) .{ .platform = true } else .{ .control = true };
+    _ = f.tw.simulateInput(.{ .key_down = .{ .keystroke = .{ .key = "d", .modifiers = mod } } });
+    // Auto-repeat while held is ignored.
+    _ = f.tw.simulateInput(.{ .key_down = .{ .keystroke = .{ .key = "d", .modifiers = mod }, .is_held = true } });
+    try testing.expectEqual(@as(usize, 1), f.host().count(.dictation_press));
+    // Another key coming up is not the release.
+    _ = f.tw.simulateInput(.{ .key_up = .{ .keystroke = .{ .key = "x" } } });
+    try testing.expectEqual(@as(usize, 0), f.host().count(.dictation_release));
+    // macOS sends no key-up for Command chords: letting go of the modifier releases.
+    _ = f.tw.simulateInput(.{ .modifiers_changed = .{ .modifiers = .{} } });
+    try testing.expectEqual(@as(usize, 1), f.host().count(.dictation_release));
+    _ = f.tw.simulateInput(.{ .key_down = .{ .keystroke = .{ .key = "d", .modifiers = mod } } });
+    _ = f.tw.simulateInput(.{ .key_up = .{ .keystroke = .{ .key = "d", .modifiers = mod } } });
+    try testing.expectEqual(@as(usize, 2), f.host().count(.dictation_press));
+    try testing.expectEqual(@as(usize, 2), f.host().count(.dictation_release));
+}

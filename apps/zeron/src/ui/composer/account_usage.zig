@@ -463,7 +463,7 @@ pub const AccountUsage = struct {
         const theme = &self.theme;
         const f = self.fraction(cx.app) orelse return div();
         const level = usageLevel(f);
-        var chip = div().id("account-usage").relative().flexNone().flex().itemsCenter().gap(px(5)).h(px(24)).px(px(6)).rounded(px(6))
+        var chip = div().id("account-usage").role(.button).ariaLabel(zpui.fmt("Account usage: {d}%", .{@as(u32, @intFromFloat(@round(f * 100)))})).ariaExpanded(self.open).relative().flexNone().flex().itemsCenter().gap(px(5)).h(px(24)).px(px(6)).rounded(px(6))
             .textSize(px(11)).textColor(if (level == .normal) theme.text_muted else usageColor(level, theme)).cursorPointer()
             .hover(sb.bg(theme.ink(0.05)))
             .onClick(cx.listener(onToggle))

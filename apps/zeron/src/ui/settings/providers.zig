@@ -153,7 +153,7 @@ pub fn render(v: *SettingsView, t: *const Theme, _: *zpui.Window, cx: *zpui.Cont
             const primary = (st.phase == .available or st.phase == .@"manual-action-required") and st.canApply;
             const cancel = st.phase == .@"waiting-for-idle" or st.phase == .preparing or st.phase == .downloading;
             if (primary or cancel) {
-                var b = div().id(.{ "harness-update", ix }).flexNone().px(px(9)).py(px(5)).rounded(px(6))
+                var b = div().id(.{ "harness-update", ix }).role(.button).flexNone().px(px(9)).py(px(5)).rounded(px(6))
                     .textSize(rems(11)).cursorPointer().onClick(cx.listenerWith(ix, SettingsView.onHarnessUpdate));
                 b = if (primary)
                     b.bg(t.accent_wash).fontWeight(500).textColor(t.accent).hover(sb.bg(t.accent.opacity(0.16))).child("Update")
@@ -163,26 +163,27 @@ pub fn render(v: *SettingsView, t: *const Theme, _: *zpui.Window, cx: *zpui.Cont
             }
         }
         if (enabled) {
-            trigger = trigger.cursorPointer().onClick(cx.listenerWith(ix, SettingsView.onHarnessDetails))
+            trigger = trigger.role(.button).ariaLabel(zpui.fmt("{s} preferences", .{d.name})).ariaExpanded(expanded)
+                .cursorPointer().onClick(cx.listenerWith(ix, SettingsView.onHarnessDetails))
                 .child(ui.icon.of(if (expanded) .alt_arrow_down else .alt_arrow_right, 14, t.text_muted)
                 .groupHover(group_name, sb.textColor(t.text)));
         }
         var header = w.cardRow(t, ix == 0).child(trigger);
         if (!d.installed and !installing) header = header.opacity(0.55);
         if (h != .mock and !d.installed and d.canInstall and !installing) {
-            var install = w.actionButton(t, .quiet).id(.{ "harness-install", ix }).child("Install");
+            var install = w.actionButton(t, .quiet).id(.{ "harness-install", ix }).role(.button).child("Install");
             if (v.installing == null) install = install.onClick(cx.listenerWith(ix, SettingsView.onHarnessInstall));
             header = header.child(install);
         }
-        if (installing) header = header.child(w.actionButton(t, .quiet).id(.{ "harness-cancel-install", ix })
+        if (installing) header = header.child(w.actionButton(t, .quiet).id(.{ "harness-cancel-install", ix }).role(.button)
             .onClick(cx.listener(SettingsView.onCancelInstall)).child("Cancel"));
-        header = header.child(harnessSwitch(v, ix, h, enabled, interactive, t, cx));
+        header = header.child(harnessSwitch(v, ix, h, d.name, enabled, interactive, t, cx));
         var block = div().flex().flexCol().child(header);
         if (expanded) block = block.child(details(v, ix, t, d, update, cx));
         card = card.child(block);
     }
 
-    const check = div().id("check-harness-updates").flexNone().px(px(9)).py(px(5)).rounded(px(6))
+    const check = div().id("check-harness-updates").role(.button).flexNone().px(px(9)).py(px(5)).rounded(px(6))
         .textSize(rems(11)).textColor(t.text_muted).cursorPointer().hover(sb.bg(t.ink(0.05)))
         .onClick(cx.listener(SettingsView.onCheckUpdates)).child("Check now");
     var page = w.pageColumn()
@@ -194,9 +195,9 @@ pub fn render(v: *SettingsView, t: *const Theme, _: *zpui.Window, cx: *zpui.Cont
     return page;
 }
 
-fn harnessSwitch(v: *SettingsView, ix: usize, h: HarnessId, enabled: bool, interactive: bool, t: *const Theme, cx: *zpui.Context(SettingsView)) zpui.StatefulDiv {
+fn harnessSwitch(v: *SettingsView, ix: usize, h: HarnessId, name: []const u8, enabled: bool, interactive: bool, t: *const Theme, cx: *zpui.Context(SettingsView)) zpui.StatefulDiv {
     const pos = v.travel(cx, 0x40000 | @as(u32, @intFromEnum(h)), if (enabled) 1 else 0, 180);
-    var d = div().id(.{ "harness-toggle", ix }).flexNone().w(px(w.switch_width)).h(px(w.switch_height))
+    var d = div().id(.{ "harness-toggle", ix }).role(.@"switch").ariaLabel(name).ariaToggled(enabled).flexNone().w(px(w.switch_width)).h(px(w.switch_height))
         .child(w.switchVisual(t, pos));
     if (!interactive and !enabled) d = d.opacity(0.55);
     if (interactive) d = d.cursorPointer().onClick(cx.listenerWith(ix, SettingsView.onHarnessToggle));
@@ -216,7 +217,7 @@ fn details(v: *SettingsView, ix: usize, t: *const Theme, d: *const protocol.Harn
     };
     for (rows, 0..) |r, i| {
         const pos = v.travel(cx, 0x50000 | @as(u32, @intCast(ix * 2 + i)), if (r[3]) 1 else 0, 180);
-        var row = div().id(.{ "completion", ix * 2 + i }).minH(px(52)).py(px(10))
+        var row = div().id(.{ "completion", ix * 2 + i }).role(.@"switch").ariaLabel(zpui.fmt("{s}: {s}", .{ d.name, r[1] })).ariaToggled(r[3]).minH(px(52)).py(px(10))
             .flex().flexRow().itemsCenter().gap(px(16)).cursorPointer()
             .onClick(cx.listenerWith(SettingsView.CompletionKey{ .ix = @intCast(ix), .dollar = r[0] }, SettingsView.onCompletionToggle))
             .child(div().flex1().minW0().child(w.rowTitle(t, r[1])).child(w.metaLine(t, &.{.{ .text = r[2] }})))

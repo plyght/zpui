@@ -364,7 +364,7 @@ pub const TranscriptView = struct {
         const now = cx.app.executor.now();
         switch (state) {
             .loaded => |l| {
-                var thumb = frame.relative().border1().borderColor(theme.hairline(0.11)).bg(theme.ink(0.035)).cursorPointer()
+                var thumb = frame.role(.button).ariaLabel(zpui.fmt("Preview {s}", .{std.fs.path.basename(a.path)})).relative().border1().borderColor(theme.hairline(0.11)).bg(theme.ink(0.035)).cursorPointer()
                     .onClick(cx.listenerWith(ThumbClick{ .row = row.key, .aix = @intCast(aix) }, onThumbClick))
                     .child(zpui.img(l.image).w(px(att_thumb_w - 2)).h(px(att_thumb_h - 2)).rounded(px(7)).objectFit(.cover));
                 if (sending) {
@@ -403,7 +403,7 @@ pub const TranscriptView = struct {
                 const w: f32 = @floatFromInt(@max(size.width, 1));
                 const h: f32 = @floatFromInt(@max(size.height, 1));
                 const scale = @min(@min(512.0 / w, 420.0 / h), 1.0);
-                break :blk frame.w(px(w * scale)).h(px(h * scale)).cursorPointer()
+                break :blk frame.role(.button).ariaLabel("Preview generated image").w(px(w * scale)).h(px(h * scale)).cursorPointer()
                     .onClick(cx.listenerWith(ThumbClick{ .row = row.key, .aix = 0 }, onThumbClick))
                     .child(zpui.img(l.image).sizeFull().rounded(px(12)).objectFit(.contain));
             },
@@ -990,7 +990,7 @@ pub const TranscriptView = struct {
     fn renderJump(self: *TranscriptView, theme_in: *const Theme, cx: *Context(TranscriptView)) zpui.Div {
         const theme = zpui.window.arena_mod.current().create(Theme, theme_in.forPopup());
         const glass = theme.isFrost();
-        var pill = div().id("jump-to-bottom").h(px(30)).roundedFull().border1().borderColor(theme.border).cursorPointer()
+        var pill = div().id("jump-to-bottom").role(.button).ariaLabel("Scroll to bottom").h(px(30)).roundedFull().border1().borderColor(theme.border).cursorPointer()
             .bg(if (glass) (if (theme.appearance.isDark()) theme.composerSidebarTint() else theme.glassOverlay()) else theme.surface_raised)
             .hover(sb.bg(if (glass) theme.glassHover() else theme.surface_raised_hover))
             .onClick(cx.listener(onJumpClick))
@@ -1137,7 +1137,7 @@ pub const TranscriptView = struct {
             .child(div().textSize(px(12)).textColor(theme.text_muted.opacity(0.55)).child(ts));
         if (row.copy_text != null) {
             const copied = self.copied_entry == entry_key and cx.app.executor.now() -| self.copied_at < 1600 * std.time.ns_per_ms;
-            meta = meta.child(div().id(.{ "copy-msg", entry_key }).size(px(layout.space_md * 2)).flex().itemsCenter().justifyCenter()
+            meta = meta.child(div().id(.{ "copy-msg", entry_key }).role(.button).ariaLabel(if (copied) "Copied" else "Copy message").size(px(layout.space_md * 2)).flex().itemsCenter().justifyCenter()
                 .rounded(px(layout.control_radius)).cursorPointer().hover(sb.bg(theme.ink(0.08)))
                 .onClick(cx.listenerWith(entry_key, onCopyMessage))
                 .child(md.icon(if (copied) .check else .copy, 14, theme.text_muted)));
@@ -1170,7 +1170,7 @@ pub const TranscriptView = struct {
             } else body = body.child(text_el);
             if (collapsible) {
                 body = body.child(div().mt(px(8)).flex().itemsStart().child(
-                    div().id(.{ "user-exp", row.key }).group("user-toggle").flex().itemsCenter().gap(px(5))
+                    div().id(.{ "user-exp", row.key }).role(.button).ariaLabel(if (expanded) "Collapse message" else "Expand message").ariaExpanded(expanded).group("user-toggle").flex().itemsCenter().gap(px(5))
                         .textSize(px(14)).lineHeight(px(user_line_height)).textColor(theme.text_muted).cursorPointer()
                         .hover(sb.textColor(theme.text))
                         .onClick(cx.listenerWith(row.key, onToggleUser))
@@ -1253,7 +1253,7 @@ pub const TranscriptView = struct {
             const ts = model.Timestamp.fromUnixMillis(now_ms);
             if (store.sendUndelivered(ts)) {
                 // [wiring] the trailer IS the retry affordance (`retry_send`).
-                return div().child(div().id("undelivered-retry").flex().flexRow().itemsCenter().gap(px(layout.space_sm)).pt(px(layout.space_lg))
+                return div().child(div().id("undelivered-retry").role(.button).flex().flexRow().itemsCenter().gap(px(layout.space_sm)).pt(px(layout.space_lg))
                     .textSize(px(12)).textColor(theme.danger).cursorPointer()
                     .onClick(cx.listener(onRetryClick))
                     .child("Not delivered \u{2014} click to retry"));
@@ -1323,7 +1323,7 @@ pub const TranscriptView = struct {
             const is_active = active >= start and active < end;
             const is_hovered = self.rail_hover == k;
             const bar_color = if (is_active or is_hovered) theme.text.opacity(0.8) else theme.ink(0.16);
-            var tick = div().id(.{ "rail-tick", k }).relative().h(px(tick_slot)).wFull().flex().itemsCenter().cursorPointer()
+            var tick = div().id(.{ "rail-tick", k }).role(.button).ariaLabel(zpui.fmt("Jump to message {d}", .{rep + 1})).relative().h(px(tick_slot)).wFull().flex().itemsCenter().cursorPointer()
                 .onHover(cx.listenerWith(k, onRailHover))
                 .onClick(cx.listenerWith(tick_rows.items[rep], onRailClick))
                 .child(div().h(px(2)).w(px(if (is_hovered) 20 else 12)).rounded(px(1)).bg(bar_color));

@@ -153,3 +153,153 @@ test "shell: titlebar controls are named buttons" {
     try testing.expect(buttons > 0);
     try testing.expectEqual(buttons, named);
 }
+
+/// Every interactive element (click listener or tab-stop focus handle) must be a node
+/// with a role, and every interactive node must have a name. Prints all offenders and
+/// returns their number.
+fn audit(t: *const a11y.Tree, what: []const u8) usize {
+    var bad: usize = 0;
+    for (t.unroled.items) |u| {
+        bad += 1;
+        const parent = t.at(u.parent);
+        std.debug.print("[{s}] no role: element \"{s}\" ({s}{s}) at {d:.0},{d:.0} {d:.0}x{d:.0} in {t} \"{s}\"\n", .{
+            what,                              t.str(u.element) orelse "",
+            if (u.clickable) "click " else "", if (u.focusable) "focus" else "",
+            u.bounds.origin.x,                 u.bounds.origin.y,
+            u.bounds.size.width,               u.bounds.size.height,
+            parent.role,                       t.name(parent) orelse "",
+        });
+    }
+    for (t.nodes.items, 0..) |*n, ix| {
+        if (ix == 0 or n.synthetic) continue;
+        const interactive = n.actions.contains(.click) or n.isFocusable();
+        if (!interactive) continue;
+        if (t.name(n)) |nm| if (std.mem.trim(u8, nm, " ").len > 0) continue;
+        bad += 1;
+        const parent = if (t.parentOf(@intCast(ix))) |p| t.at(p) else t.at(0);
+        std.debug.print("[{s}] no name: {t} at {d:.0},{d:.0} {d:.0}x{d:.0} in {t} \"{s}\"\n", .{ what, n.role, n.bounds.origin.x, n.bounds.origin.y, n.bounds.size.width, n.bounds.size.height, parent.role, t.name(parent) orelse "" });
+    }
+    return bad;
+}
+
+/// A node whose name starts with `prefix`.
+fn findPrefix(t: *const a11y.Tree, role: a11y.Role, prefix: []const u8) ?*const a11y.Node {
+    for (t.nodes.items) |*n| {
+        if (n.role != role) continue;
+        const got = t.name(n) orelse continue;
+        if (std.mem.startsWith(u8, got, prefix)) return n;
+    }
+    return null;
+}
+
+const Audit = struct {
+    h: *Harness,
+    bad: usize = 0,
+    states: usize = 0,
+
+    /// Redraw from scratch (no cached views) and audit the tree.
+    fn check(self: *Audit, what: []const u8) void {
+        const tw = self.h.tw();
+        self.h.app.runUntilParked();
+        tw.simulateA11yActivation(false);
+        tw.frame(false);
+        tw.simulateA11yActivation(true);
+        tw.frame(false);
+        self.h.app.runUntilParked();
+        self.bad += audit(self.h.tree(), what);
+        self.states += 1;
+    }
+
+    /// Press the node `role` named `prefix…` through assistive technology.
+    fn press(self: *Audit, role: a11y.Role, prefix: []const u8) !void {
+        const n = findPrefix(self.h.tree(), role, prefix) orelse {
+            var out: std.Io.Writer.Allocating = .init(testing.allocator);
+            defer out.deinit();
+            self.h.tree().dump(&out.writer) catch {};
+            std.debug.print("no {t} \"{s}…\" in tree:\n{s}\n", .{ role, prefix, out.written() });
+            return error.MissingNode;
+        };
+        self.h.tw().simulateA11yAction(.{ .target = n.id, .action = .click });
+        self.h.redraw();
+    }
+
+    fn key(self: *Audit, k: []const u8) void {
+        self.h.tw().typeKey(k);
+        self.h.app.advanceClock(400 * std.time.ns_per_ms);
+        self.h.redraw();
+    }
+};
+
+test "audit: every interactive element of the shell has a role and a name" {
+    var h = try Harness.init();
+    defer h.deinit();
+    h.activate();
+    var a: Audit = .{ .h = &h };
+    a.check("shell");
+
+    // Sidebar menus.
+    try a.press(.button, "Account menu");
+    a.check("user menu");
+    a.key("escape");
+    try a.press(.button, "Account menu");
+    try a.press(.button, "Sidebar view options");
+    a.check("view options");
+    try a.press(.button, "Sidebar view options");
+    try a.press(.button, "All projects");
+    a.check("spaces menu");
+    try a.press(.button, "All projects");
+    _ = h.tw().simulateInput(.{ .mouse_down = .{ .button = .right, .position = .{ .x = 120, .y = 129 }, .click_count = 1 } });
+    _ = h.tw().simulateInput(.{ .mouse_up = .{ .button = .right, .position = .{ .x = 120, .y = 129 }, .click_count = 1 } });
+    h.redraw();
+    a.check("chat context menu");
+    a.key("escape");
+
+    // Composer model picker.
+    try a.press(.button, "Model:");
+    a.check("model picker");
+    a.key("escape");
+
+    // Right pane: launcher, surfaces and the + menu.
+    a.key(mod ++ "-r");
+    a.check("right pane launcher");
+    h.tw().click(1340, 544);
+    h.redraw();
+    a.check("right pane diffs");
+    h.tw().click(1215, 20);
+    h.redraw();
+    a.check("right pane + menu");
+    h.tw().click(1260, 204);
+    h.redraw();
+    a.check("right pane history");
+    a.key(mod ++ "-e");
+    a.check("files");
+    a.key(mod ++ "-r");
+
+    // Command palette.
+    a.key(mod ++ "-k");
+    a.check("command palette");
+    a.key("escape");
+
+    // New session page.
+    a.key(mod ++ "-n");
+    a.check("new session");
+
+    // Settings, every section.
+    a.key(mod ++ "-,");
+    const v = h.handle.rootView(h.app).?.read(h.app).settings_view.?;
+    inline for (@typeInfo(view_mod.Section).@"enum".field_names) |name| {
+        v.update(h.app, openSection, .{@field(view_mod.Section, name)});
+        a.check("settings " ++ name);
+    }
+
+    // Settings dialogs and expanded rows.
+    v.update(h.app, openSection, .{.appearance});
+    h.redraw();
+    try a.press(.button, "Add theme");
+    a.check("theme import dialog");
+
+    if (a.bad > 0) {
+        std.debug.print("{d} accessibility offenders in {d} states\n", .{ a.bad, a.states });
+        return error.A11yAudit;
+    }
+}

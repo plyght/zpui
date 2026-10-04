@@ -144,6 +144,7 @@ pub const BrowserPane = struct {
         const address = try cx.newWith(input.TextInput, input.TextInput.init, .{input.Options{
             .placeholder = "Website or localhost:3000",
             .key_context = "PaletteSearch",
+            .role = .text_input,
             .single_line = true,
             .text_size = 11,
             .line_height = 16,
@@ -710,7 +711,7 @@ pub const BrowserPane = struct {
             .child(ui.icon.of(.globe, 12, theme.text_faint))
             .child(div().flex1().minW0().h(px(16)).overflowHidden().child(self.address));
         if (self.validation != null) address = address.border1().borderColor(theme.danger);
-        if (address_focused or self.address_edited) address = address.child(div().id("browser-go").size(px(18)).flexNone().rounded(px(4))
+        if (address_focused or self.address_edited) address = address.child(div().id("browser-go").role(.button).ariaLabel("Go to address").size(px(18)).flexNone().rounded(px(4))
             .flex().itemsCenter().justifyCenter().cursorPointer().hover(sb.bg(theme.wash(0.10)))
             .onMouseDown(.left, onGoDown)
             .onClick(cx.listener(onGo))
@@ -821,7 +822,7 @@ pub const BrowserPane = struct {
         const pt = zpui.window.arena_mod.current().create(Theme, theme.forPopup());
         var rows = div().id("browser-menu-options").flex().flexCol().maxH(px(320)).overflowYScroll();
         for (m.value.items, 0..) |item, i| {
-            var row = ui.popover.menuRow(pt, i == p.menu_active).id(.{ "browser-option", i }).child(item.label);
+            var row = ui.popover.menuRow(pt, i == p.menu_active).id(.{ "browser-option", i }).role(.menu_item).child(item.label);
             row = if (item.enabled) row.onClick(cx.listenerWith(i, onMenuRow)) else row.opacity(0.4);
             rows = rows.child(row);
         }
@@ -840,7 +841,7 @@ pub const BrowserPane = struct {
             "Open a website or local app in your default browser. Embedded browsing is available on macOS and Linux."
         else
             "Preview your local app or keep a website beside your conversation.";
-        var action = div().mt(px(6)).id("browser-empty-action").h(px(28)).px(px(10)).rounded(px(6))
+        var action = div().mt(px(6)).id("browser-empty-action").role(.button).ariaLabel(if (has_error) "Retry page" else "Enter an address").h(px(28)).px(px(10)).rounded(px(6))
             .border1().borderColor(theme.border).bg(theme.surface_raised).cursorPointer()
             .hover(sb.bg(theme.wash(0.10))).flex().itemsCenter().gap(px(8))
             .textSize(ui.rems(12)).textColor(theme.text)
@@ -869,13 +870,13 @@ pub const BrowserPane = struct {
                 zpui.fmt("{s} \u{b7} localhost:{d}", .{ s.deviceName, s.port })
             else
                 zpui.fmt("localhost:{d}", .{s.port});
-            var row = div().id(.{ "preview-row", i }).wFull().h(px(56)).px(px(14)).rounded(px(10))
+            var row = div().id(.{ "preview-row", i }).role(.button).ariaLabel(zpui.fmt("Open {s} preview", .{s.name})).wFull().h(px(56)).px(px(14)).rounded(px(10))
                 .border1().borderColor(theme.border).bg(theme.ink(0.02))
                 .flex().itemsCenter().gap(px(10))
                 .child(div().flex1().minW0().flex().flexCol().gap(px(2))
                     .child(div().textSize(ui.rems(13)).fontWeight(500).textColor(theme.text).truncate().child(s.name))
                     .child(div().textSize(ui.rems(11)).textColor(theme.text_muted).truncate().child(label)));
-            var open = div().id(.{ "open-preview", i }).h(px(28)).px(px(6)).flexShrink0().rounded(px(6))
+            var open = div().id(.{ "open-preview", i }).role(.button).ariaLabel(zpui.fmt("Open {s} preview", .{s.name})).h(px(28)).px(px(6)).flexShrink0().rounded(px(6))
                 .flex().itemsCenter().justifyCenter().textSize(ui.rems(12)).textColor(theme.text_muted).child("Open");
             if (available) {
                 row = row.cursorPointer().hover(sb.bg(theme.ink(0.05)).borderColor(theme.border_strong)).onClick(cx.listenerWith(i, onPreview));
@@ -894,7 +895,7 @@ pub const BrowserPane = struct {
                 .textSize(ui.rems(12)).lineHeight(px(19)).textColor(theme.text_muted).child(msg));
         }
         if (err) |e| content = content.child(div().textSize(ui.rems(11)).lineHeight(px(17)).textColor(theme.text_muted).child(e));
-        content = content.child(div().id("preview-enter-address").mt(px(8)).textSize(ui.rems(11)).textColor(theme.text_muted)
+        content = content.child(div().id("preview-enter-address").role(.button).ariaLabel("Enter a website address").mt(px(8)).textSize(ui.rems(11)).textColor(theme.text_muted)
             .cursorPointer().onClick(cx.listener(onEnterAddress)).child("Or enter a website address"));
         return zpui.intoAnyElement(div().id("browser-previews").sizeFull().overflowYScroll().p(px(16))
             .flex().flexCol().itemsCenter().child(content));
@@ -909,7 +910,7 @@ fn surfaceToolbar(theme: *const Theme) zpui.Div {
 }
 
 fn toolbarButton(id: []const u8, i: Icon, label: []const u8, enabled: bool, theme: *const Theme) zpui.StatefulDiv {
-    var b = div().id(id).size(px(24)).flexNone().flex().itemsCenter().justifyCenter().rounded(px(6))
+    var b = div().id(id).role(.button).ariaLabel(label).ariaDisabled(!enabled).size(px(24)).flexNone().flex().itemsCenter().justifyCenter().rounded(px(6))
         .tooltipWith(label, ui.tooltip.build)
         .child(ui.icon.of(i, 14, theme.text_muted));
     b = if (enabled) b.cursorPointer().hover(sb.bg(theme.wash(0.10))) else b.opacity(0.35);

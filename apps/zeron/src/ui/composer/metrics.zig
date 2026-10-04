@@ -89,6 +89,33 @@ pub fn attachmentStripHeight(count: usize, inner_width: f32) f32 {
     return strip_pad_top + r * strip_thumb + (r - 1) * strip_gap;
 }
 
+/// Appshot tiles (`composer.rs` `APPSHOT_*`).
+pub const appshot_tile_min_width: f32 = 96;
+pub const appshot_image_inset: f32 = 12;
+pub const appshot_preview_height: f32 = 148;
+pub const appshot_image_max_width: f32 = 320;
+pub const appshot_image_max_height: f32 = 132;
+pub const appshot_tile_height: f32 = 192;
+
+/// `appshot_contained_size`: a shared height, width following the source window,
+/// capped without cropping.
+pub fn appshotContainedSize(dimensions: ?[2]u32, max_width_in: f32) [2]f32 {
+    const max_width = if (std.math.isFinite(max_width_in)) std.math.clamp(max_width_in, 1.0, appshot_image_max_width) else appshot_image_max_width;
+    var d: [2]u32 = .{ 16, 10 };
+    if (dimensions) |v| if (v[0] > 0 and v[1] > 0) {
+        d = v;
+    };
+    const w: f32 = @floatFromInt(d[0]);
+    const h: f32 = @floatFromInt(d[1]);
+    const scale = @min(max_width / w, appshot_image_max_height / h);
+    return .{ w * scale, h * scale };
+}
+
+/// `appshot_strip_height`: one scrolling row of tiles.
+pub fn appshotStripHeight(count: usize) f32 {
+    return if (count == 0) 0 else strip_pad_top + appshot_tile_height;
+}
+
 pub const SendButtonMode = enum {
     /// No live run: plain send.
     send,
@@ -227,4 +254,26 @@ test "flip morph" {
     try testing.expectEqual(@as(f32, 12), morphClusterInset(true, 1));
     try testing.expectEqual(@as(f32, 8), morphClusterInset(false, 1));
     try testing.expectEqual(@as(f32, 16), morphTextPad(1));
+}
+
+test "appshot strip height tracks cards" {
+    try testing.expectEqual(@as(f32, 0), appshotStripHeight(0));
+    try testing.expectEqual(strip_pad_top + appshot_tile_height, appshotStripHeight(1));
+    try testing.expectEqual(appshotStripHeight(1), appshotStripHeight(2));
+}
+
+test "appshot images share height and adapt width without losing aspect ratio" {
+    const landscape = appshotContainedSize(.{ 1600, 900 }, 320);
+    try testing.expectApproxEqAbs(@as(f32, 1600.0 / 900.0), landscape[0] / landscape[1], 0.0001);
+    try testing.expectEqual(appshot_image_max_height, landscape[1]);
+    const portrait = appshotContainedSize(.{ 900, 1600 }, 320);
+    try testing.expectEqual(appshot_image_max_height, portrait[1]);
+    try testing.expectApproxEqAbs(@as(f32, 900.0 / 1600.0), portrait[0] / portrait[1], 0.0001);
+    const square = appshotContainedSize(.{ 1000, 1000 }, 320);
+    try testing.expectEqual(square[0], square[1]);
+    const narrow = appshotContainedSize(.{ 1600, 900 }, 160);
+    try testing.expectEqual(@as(f32, 160), narrow[0]);
+    try testing.expect(appshotContainedSize(.{ 4000, 1000 }, 900)[0] <= appshot_image_max_width);
+    const fallback = appshotContainedSize(null, 320);
+    try testing.expectApproxEqAbs(@as(f32, 1.6), fallback[0] / fallback[1], 0.0001);
 }

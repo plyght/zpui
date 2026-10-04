@@ -36,6 +36,9 @@ pub const Common = struct {
     fullscreen: bool = false,
     maximized: bool = false,
     closed: bool = false,
+    /// The AT-SPI bridge exposing this window (set by `atspi.Bridge.addWindow`), told
+    /// about activation changes (Window Activate / Deactivate events).
+    atspi_bridge: ?*@import("atspi.zig").Bridge = null,
 
     /// Delivers an event to the core; unhandled printable key presses become text input.
     pub fn handleInput(w: *Common, event: input.PlatformInput) void {
@@ -77,8 +80,10 @@ pub const Common = struct {
     }
 
     pub fn setActive(w: *Common, active: bool) void {
+        const changed = w.active != active;
         w.active = active;
         if (w.callbacks.active_status_change) |f| f(w.callbacks.ctx, active);
+        if (changed) if (w.atspi_bridge) |b| b.windowActivated(w, active);
     }
 
     pub fn setHovered(w: *Common, hovered: bool) void {

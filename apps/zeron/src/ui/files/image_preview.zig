@@ -47,18 +47,18 @@ pub fn isImage(path: []const u8) bool {
     return false;
 }
 
-const Loaded = struct {
+pub const Loaded = struct {
     decoded: ?image.DecodedImage = null,
     err: ?[]const u8 = null,
 
-    fn deinit(self: *Loaded, gpa: Allocator) void {
+    pub fn deinit(self: *Loaded, gpa: Allocator) void {
         if (self.decoded) |*d| d.deinit(gpa);
         self.decoded = null;
     }
 };
 
 /// Background: read (local) and/or decode the bytes.
-const LoadJob = struct {
+pub const LoadJob = struct {
     gpa: Allocator,
     io: std.Io,
     /// Local: the absolute file to read.

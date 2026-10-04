@@ -1314,7 +1314,7 @@ pub const ChangesPane = struct {
     /// `header_toggle`: 24px, radius 6, hover blend wash 0 → 0.14; latched
     /// toggles hold the wash and the full text tone.
     fn headerToggle(id: []const u8, i: Icon, label: []const u8, active: bool, theme: *const Theme, cx: *Context(ChangesPane)) zpui.StatefulDiv {
-        var b = div().id(id).size(px(m.control_size)).flexNone().flex().itemsCenter().justifyCenter()
+        var b = div().id(id).role(.button).ariaLabel(label).ariaToggled(active).size(px(m.control_size)).flexNone().flex().itemsCenter().justifyCenter()
             .rounded(px(m.control_radius)).cursorPointer();
         b = if (active)
             b.bg(theme.wash(0.14))
@@ -1344,7 +1344,7 @@ pub const ChangesPane = struct {
                 .child(headerToggle("changes-fold-all", .fold_vertical, self.foldAllLabel(), false, theme, cx).onClick(cx.listener(onFoldAllClick)));
         }
         const trigger_key = "changes-scope-trigger";
-        var trigger = div().id(trigger_key).h(px(m.control_size)).px(px(8)).flexNone().flex().flexRow().itemsCenter().gap(px(6))
+        var trigger = div().id(trigger_key).role(.button).ariaLabel(zpui.fmt("Diff scope: {s}", .{self.scope.label()})).ariaExpanded(self.scope_menu_open).h(px(m.control_size)).px(px(8)).flexNone().flex().flexRow().itemsCenter().gap(px(6))
             .rounded(px(m.control_radius)).cursorPointer()
             .bg(ui.hover.blend(cx, trigger_key, theme.wash(0.05), theme.wash(0.14)))
             .onHover(cx.listenerWith(@as([]const u8, trigger_key), onHoverKey))
@@ -1381,7 +1381,7 @@ pub const ChangesPane = struct {
         const theme = zpui.window.arena_mod.current().create(Theme, base_theme.forPopup());
         var col = div().flex().flexCol().gap(px(2));
         for (m.DiffScope.menu, 0..) |scope, ix| {
-            col = col.child(ui.popover.menuRow(theme, scope == self.scope).id(.{ "changes-scope-row", ix })
+            col = col.child(ui.popover.menuRow(theme, scope == self.scope).id(.{ "changes-scope-row", ix }).role(.menu_item)
                 .onClick(cx.listenerWith(ix, onScopeRow))
                 .child(div().flex1().child(scope.label())));
         }
@@ -1394,7 +1394,7 @@ pub const ChangesPane = struct {
         const branch = if (self.selectedChat(cx)) |c| (c.branch orelse "HEAD") else "HEAD";
         const base: []const u8 = self.base_ref orelse "…";
         const key = "changes-ref-trigger";
-        var trigger = div().id(key).h(px(m.control_size)).px(px(6)).minW0().flex().flexRow().itemsCenter().gap(px(4))
+        var trigger = div().id(key).role(.button).ariaLabel(zpui.fmt("Compare against {s}", .{base})).ariaExpanded(self.ref_menu != null).h(px(m.control_size)).px(px(6)).minW0().flex().flexRow().itemsCenter().gap(px(4))
             .rounded(px(6)).cursorPointer()
             .bg(ui.hover.blend(cx, key, theme.wash(0), theme.wash(0.12)))
             .onHover(cx.listenerWith(@as([]const u8, key), onHoverKey))
@@ -1423,7 +1423,7 @@ pub const ChangesPane = struct {
             const selected = eqlOpt(self.base_ref, name);
             var row = ui.popover.menuRow(theme, selected);
             if (row_ix == r.active and !selected) row = row.bg(theme.ink(0.08));
-            rows_col = rows_col.child(row.id(.{ "changes-ref-row", row_ix }).onClick(cx.listenerWith(bi, onRefRow))
+            rows_col = rows_col.child(row.id(.{ "changes-ref-row", row_ix }).role(.menu_item_radio).ariaLabel(name).ariaToggled(selected).onClick(cx.listenerWith(bi, onRefRow))
                 .child(div().flex1().minW0().truncate().whitespaceNowrap().fontFamily(theme.font_mono).textSize(px(12)).child(name)));
         }
         const search_frame = div().h(px(28)).mb(px(4)).px(px(8)).rounded(px(7)).flex().itemsCenter().gap(px(6))
@@ -1483,7 +1483,7 @@ pub const ChangesPane = struct {
             zpui.intoAnyElement(zpui.withAnimationCtx(chevron, .{ if (sticky) "chev-sticky" else "chev", ix * 65536 + fold.epoch }, zpui.Animation.ms(200).withEasing(zpui.easing.cubicBezier(0.25, 0.1, 0.25, 1)), {}, chevronFrame))
         else
             zpui.intoAnyElement(chevron);
-        var row = div().id(.{ if (sticky) "sticky-file-hdr" else "file-hdr", ix })
+        var row = div().id(.{ if (sticky) "sticky-file-hdr" else "file-hdr", ix }).role(.button).ariaLabel(file.path).ariaExpanded(!fold.collapsed)
             .wFull().h(px(m.file_header_height)).flexNone().flex().flexRow().itemsCenter().gap(px(8)).px(px(12))
             .bg(paint.rest).cursorPointer().hover(sb.bg(paint.hover))
             .onClick(cx.listenerWith(ix, onHeaderClick));
@@ -1495,7 +1495,7 @@ pub const ChangesPane = struct {
         if (file.binary) row = row.child(div().flexNone().textSize(px(10)).textColor(theme.text_faint).child("BIN"));
         if (file.additions > 0 or !file.binary) row = row.child(div().flexNone().fontFamily(theme.font_mono).textSize(px(11)).textColor(rows.addColor(theme)).child(zpui.fmt("+{d}", .{file.additions})));
         if (file.deletions > 0 or !file.binary) row = row.child(div().flexNone().fontFamily(theme.font_mono).textSize(px(11)).textColor(rows.delColor(theme)).child(zpui.fmt("\u{2212}{d}", .{file.deletions})));
-        row = row.child(div().id(.{ "diff-open-file", ix }).flexNone().size(px(m.control_size)).flex().itemsCenter().justifyCenter()
+        row = row.child(div().id(.{ "diff-open-file", ix }).role(.button).ariaLabel("Open in file browser").flexNone().size(px(m.control_size)).flex().itemsCenter().justifyCenter()
             .rounded(px(m.control_radius)).hover(sb.bg(theme.ink(0.08)))
             .onMouseDown(.left, stopDown)
             .onClick(cx.listenerWith(ix, onOpenFile))
@@ -1689,13 +1689,13 @@ pub const ChangesPane = struct {
                 .child(dialog.title(theme, "Discard working tree changes?"))
                 .child(div().mt(px(6)).child(dialog.body(theme, "Discard all uncommitted changes in this working tree? This can\u{2019}t be undone.")))
                 .child(div().mt(px(16)).flex().flexRow().justifyEnd().gap(px(8))
-                    .child(dialog.btnGhost(theme, "Cancel").id("discard-working-tree-cancel").onClick(cx.listener(onDiscardCancel)))
-                    .child(dialog.btnDanger(theme, "Discard changes").id("discard-working-tree-confirm").onClick(cx.listener(onDiscardConfirm)))),
+                    .child(dialog.btnGhost(theme, "Cancel").id("discard-working-tree-cancel").role(.button).onClick(cx.listener(onDiscardCancel)))
+                    .child(dialog.btnDanger(theme, "Discard changes").id("discard-working-tree-confirm").role(.button).onClick(cx.listener(onDiscardConfirm)))),
             .failed => |msg| dialog.card(theme)
                 .child(dialog.title(theme, "Couldn\u{2019}t discard changes"))
                 .child(div().mt(px(6)).child(dialog.body(theme, msg)))
                 .child(div().mt(px(16)).flex().justifyEnd()
-                    .child(dialog.btnPrimary(theme, "Close").id("discard-working-tree-error-close").onClick(cx.listener(onDiscardCancel)))),
+                    .child(dialog.btnPrimary(theme, "Close").id("discard-working-tree-error-close").role(.button).onClick(cx.listener(onDiscardCancel)))),
         };
         return dialog.modal(window, card, cx.listener(onDiscardScrim));
     }

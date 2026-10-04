@@ -167,7 +167,7 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
     var group = div().relative().flex().flexCol().fontFamily(theme.font_sans_fixed);
     if (collapses) {
         const shimmer: ?f32 = if (active and !reduced) @as(f32, @floatFromInt(now % shimmer_period_ns)) / @as(f32, @floatFromInt(shimmer_period_ns)) else null;
-        const header = div().id(.{ "tg-hdr", row.key }).relative().flex().flexRow().itemsCenter().gap(px(6)).pr(px(4))
+        const header = div().id(.{ "tg-hdr", row.key }).role(.button).ariaExpanded(open).relative().flex().flexRow().itemsCenter().gap(px(6)).pr(px(4))
             .h(px(tool_group_header_height)).cursorPointer().textSize(px(tool_text_size)).lineHeight(px(tool_label_line_height))
             .textColor(theme.text_muted).hover(sb.textColor(theme.text)).group("tg-hdr")
             .onClick(cx.listenerWith(GroupToggle{ .key = row.key, .height = body_h, .auto_open = g.auto_open, .compact_shell = g.compact_shell }, TranscriptView.onToggleGroup))
@@ -269,7 +269,7 @@ fn chipRow(self: *TranscriptView, row: *const rows.Row, t: ToolItem, ix: usize, 
     var card = div().my(px((base_row_height - chip_card_height) / 2)).minW0().flex1().flex().flexCol().overflowHidden();
     if (collapses) card = card.ml(px(activity_text_gap)) else card = card.rounded(px(9)).border1()
         .borderColor(theme.hairline(0.07)).bg(theme.ink(0.03));
-    card = card.child(div().id(.{ "chip-hdr", dkey }).h(px(if (collapses) chip_card_height else chip_header_height)).flexNone()
+    card = card.child(div().id(.{ "chip-hdr", dkey }).role(.button).ariaExpanded(open).h(px(if (collapses) chip_card_height else chip_header_height)).flexNone()
         .flex().itemsCenter().cursorPointer()
         .onClick(cx.listenerWith(DetailToggle{ .key = dkey, .height = height - base_row_height + chip_card_height, .open = open }, TranscriptView.onToggleDetail))
         .child(chipHeaderRow(t, open, collapses, theme)));
@@ -289,7 +289,7 @@ fn chipRow(self: *TranscriptView, row: *const rows.Row, t: ToolItem, ix: usize, 
         }
         // [wiring] "Show full output" fetches the sidecar blob (FetchToolBlob).
         var abuf: [96]u8 = undefined;
-        if (self.blobs.affordance(t, &abuf)) |aff| panel = panel.child(div().id(.{ "blob-affordance", dkey }).h(px(blob_affordance_height)).flexNone().flex().itemsCenter()
+        if (self.blobs.affordance(t, &abuf)) |aff| panel = panel.child(div().id(.{ "blob-affordance", dkey }).role(.button).h(px(blob_affordance_height)).flexNone().flex().itemsCenter()
             .textSize(px(tool_text_size)).textColor(theme.text_faint).cursorPointer().hover(sb.textColor(theme.text_muted))
             .onClick(cx.listenerWith(view_mod.BlobClick{ .row_key = row.key, .tool_ix = ix }, TranscriptView.onBlobClick))
             .child(zpui.window.arena_mod.dupe(aff.label)));
@@ -353,7 +353,7 @@ fn fileBadgeName(path: []const u8) []const u8 {
 fn subagentChip(t: ToolItem, row_key: u64, ix: usize, rail: bool, theme: *const Theme, cx: *Context(TranscriptView)) AnyElement {
     var r = div().h(px(chip_height)).wFull().flexNone().flex().flexRow().itemsCenter();
     if (rail) r = r.child(div().ml(px(12)).hFull().w(px(1)).flexNone().bg(theme.ink(0.08)));
-    var card = div().id(.{ "spawn", mixKey(row_key, ix) }).h(px(chip_card_height)).minW0().flex1().flex().itemsCenter().overflowHidden()
+    var card = div().id(.{ "spawn", mixKey(row_key, ix) }).role(.link).h(px(chip_card_height)).minW0().flex1().flex().itemsCenter().overflowHidden()
         .rounded(px(9)).border1().borderColor(theme.hairline(0.07)).bg(theme.ink(0.03)).cursorPointer().hover(sb.bg(theme.ink(0.05)))
         .onClick(cx.listenerWith([2]u64{ row_key, ix }, TranscriptView.onSpawnClick)); // [wiring]
     if (rail) card = card.ml(px(12));

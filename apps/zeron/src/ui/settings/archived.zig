@@ -69,7 +69,7 @@ pub fn render(v: *SettingsView, t: *const Theme, _: *zpui.Window, cx: *zpui.Cont
             .child(div().minW0().truncate().textSize(rems(13)).fontWeight(500).textColor(t.text).child(title))
             .child(div().flexNone().textSize(rems(11)).textColor(t.text_muted).child(ago)))
             .child(meta))
-            .child(div().id(.{ "unarchive", ix }).flexNone().flex().flexRow().itemsCenter().gap(px(6))
+            .child(div().id(.{ "unarchive", ix }).role(.button).flexNone().flex().flexRow().itemsCenter().gap(px(6))
             .px(px(10)).py(px(4)).rounded(px(6)).border1().borderColor(t.border)
             .textSize(rems(12)).textColor(t.text_muted).opacity(0.8).cursorPointer()
             .hover(sb.bg(t.surface_raised).textColor(t.text))

@@ -321,6 +321,20 @@ pub const Geometry = struct {
     }
 };
 
+/// `interpolate_graph_geometry`: width and lane spacing tween; the full
+/// topology stays while lanes converge, the compact rail takes over only once
+/// every path shares its x (and expanding does the inverse from frame one).
+pub fn interpolate(from: Geometry, to: Geometry, progress_in: f32) Geometry {
+    const p = std.math.clamp(progress_in, 0, 1);
+    return .{
+        .lane_count = to.lane_count,
+        .width = from.width + (to.width - from.width) * p,
+        .lane_spacing = from.lane_spacing + (to.lane_spacing - from.lane_spacing) * p,
+        .device_scale = to.device_scale,
+        .compact = if (from.compact) p <= 0.001 else to.compact and p >= 0.999,
+    };
+}
+
 /// The subject stays primary: the graph takes at most a third of the
 /// surface and never eats the subject's minimum or the metadata columns.
 pub fn responsiveGeometry(lane_count: usize, container: f32, optional_columns: f32) Geometry {
@@ -550,4 +564,26 @@ test "geometry, refs, dates, matching" {
     try testing.expect(matches("f561", .{ .sha = "f5618ff", .subject = "Bump" }));
     try testing.expect(matches("bmp rtry", .{ .sha = "x", .subject = "Bump retry default" }));
     try testing.expect(!matches("zzz", .{ .sha = "x", .subject = "Bump" }));
+}
+
+test "graph geometry morph converges lanes before entering the compact rail" {
+    const full = Geometry.natural(8);
+    const compact = Geometry.compactRail(8);
+    const halfway = interpolate(full, compact, 0.5);
+    try testing.expect(!halfway.compact);
+    try testing.expect(halfway.width < full.width and halfway.width > compact.width);
+    try testing.expect(halfway.lane_spacing < full.lane_spacing and halfway.lane_spacing > compact.lane_spacing);
+    const settled = interpolate(full, compact, 1);
+    try testing.expect(settled.compact);
+    try testing.expectEqual(compact.width, settled.width);
+    try testing.expectEqual(@as(f32, 0), settled.lane_spacing);
+}
+
+test "graph geometry morph expands the rail from its compact start" {
+    const compact = Geometry.compactRail(8);
+    const full = Geometry.natural(8);
+    try testing.expect(interpolate(compact, full, 0).compact);
+    const halfway = interpolate(compact, full, 0.5);
+    try testing.expect(!halfway.compact);
+    try testing.expect(halfway.lane_spacing > 0 and halfway.lane_spacing < full.lane_spacing);
 }

@@ -28,7 +28,8 @@ const ui = @import("../components/root.zig");
 const dialog = @import("../components/dialog.zig");
 const shell_mod = @import("shell.zig");
 const right_pane_mod = @import("right_pane.zig");
-const terminal_dock = @import("terminal_dock.zig");
+const terminal_panel = @import("terminal_panel.zig");
+const prefs_mod = @import("prefs.zig");
 
 const Allocator = std.mem.Allocator;
 const json = std.json;
@@ -231,7 +232,8 @@ pub const Controller = struct {
     /// In-flight mutation (upsert / delete).
     mutation: ?struct { key: Key, generation: u64, delete: bool, action_id: ?[]u8 } = null,
     /// In-flight runs (FIFO): the chat, target and tab title.
-    runs: std.ArrayList(struct { key: Key, chat_id: []u8, target: ?[]u8, action_id: []u8, name: []u8 }) = .empty,
+    /// In-flight `RunProjectAction`s with their reserved terminal tab.
+    runs: std.ArrayList(struct { key: Key, chat_id: []u8, target: ?[]u8, action_id: []u8, name: []u8, tab: ?u64 = null }) = .empty,
 
     pub fn init(gpa: Allocator) Controller {
         return .{ .gpa = gpa };
@@ -750,6 +752,12 @@ pub fn runAction(shell: *Shell, action_id: []const u8, _: *Window, cx: *Ctx) voi
     } else return;
     if (!attached(engineOf(shell, cx).read(cx))) return;
     c.menu_open = false;
+    // The run's tab is reserved (named, no PTY yet) in the chat's bottom
+    // terminal drawer, which opens on it.
+    const panel = shell.main.read(cx).terminal;
+    const tab = panel.update(cx, terminal_panel.TerminalPanel.reserveTab, .{ context.chat_id, action.name });
+    prefs_mod.mut(cx).terminal_open = true;
+    if (tab) |t| panel.update(cx, terminal_panel.TerminalPanel.selectTab, .{t});
     const k = c.dupeKey(context.key) orelse return;
     c.runs.append(c.gpa, .{
         .key = k,
@@ -757,6 +765,7 @@ pub fn runAction(shell: *Shell, action_id: []const u8, _: *Window, cx: *Ctx) voi
         .target = if (context.target) |t| c.gpa.dupe(u8, t) catch null else null,
         .action_id = c.gpa.dupe(u8, action.id) catch return,
         .name = c.gpa.dupe(u8, action.name) catch return,
+        .tab = tab,
     }) catch return c.freeKey(k);
     model.EngineState.request(engineOf(shell, cx), cx, Shell, cx.entityId(), .RunProjectAction, RunParams{
         .spaceId = context.key.space_id,
@@ -790,42 +799,46 @@ fn onRun(shell: *Shell, result: model.engine_state.CallResult, cx: *Ctx) void {
                 return cx.notify();
             };
             defer parsed.deinit();
-            if (!attachTerminal(shell, r.chat_id, parsed.value, r.target, r.name, cx)) {
+            if (!attachTerminal(shell, r.chat_id, r.tab, parsed.value, r.target, cx)) {
                 model.EngineState.send(engineOf(shell, cx), cx, .CloseTerminal, CloseParams{ .terminalId = parsed.value.terminal.id, .targetDeviceId = r.target }) catch {};
             }
             setLastAction(cx.app, r.key.space_id, r.action_id);
         },
         .err => |e| {
+            if (r.tab) |t| shell.main.read(cx).terminal.update(cx, terminal_panel.TerminalPanel.failReserved, .{ r.chat_id, t, e.message });
             c.markUnavailable(r.key, e.message);
-            var buf: [256]u8 = undefined;
-            shell.sidebar.update(cx, @import("../sidebar/sidebar.zig").Sidebar.setNotice, .{@as(?[]const u8, std.fmt.bufPrint(&buf, "{s}: {s}", .{ r.name, e.message }) catch e.message)});
         },
     }
     cx.notify();
 }
 
-/// The run's terminal as a tab of the chat's pane (only while that chat is
-/// still the one on screen; otherwise the session is closed).
-fn attachTerminal(shell: *Shell, chat_id: []const u8, run: Run, target: ?[]const u8, title: []const u8, cx: *Ctx) bool {
-    const ws = shell.state.read(cx).workspace.read(cx);
-    const selected = ws.selected_chat orelse return false;
-    if (!std.mem.eql(u8, selected, chat_id)) return false;
-    const w = if (cx.app.windows.items.len > 0) cx.app.windows.items[0] orelse return false else return false;
-    const T = terminal_dock.TerminalDock;
-    const e = cx.newWith(T, T.initEngine, .{ ws.io, engineOf(shell, cx), run.terminal, target, title, w }) catch return false;
-    {
-        var l = e.lease(cx);
-        defer l.end();
-        l.value.chrome = false;
+/// `attach_reserved_session`: stream the run's PTY into its reserved tab
+/// (false when the tab was closed meanwhile; the caller closes the session).
+fn attachTerminal(shell: *Shell, chat_id: []const u8, tab: ?u64, run: Run, target: ?[]const u8, cx: *Ctx) bool {
+    const t = tab orelse return false;
+    return shell.main.read(cx).terminal.update(cx, terminal_panel.TerminalPanel.attachReserved, .{ chat_id, t, run.terminal, target });
+}
+
+/// `attach_worktree_setup`: a new worktree chat's setup action (started by
+/// the host when the worktree materialized) streams into a "(setup)" tab of
+/// that chat's drawer; the drawer opens on it when the chat is on screen.
+pub fn attachWorktreeSetup(shell: *Shell, chat_id: []const u8, run: ?Run, setup_error: ?[]const u8, target: ?[]const u8, cx: *Ctx) void {
+    const Sidebar = @import("../sidebar/sidebar.zig").Sidebar;
+    var buf: [512]u8 = undefined;
+    if (setup_error) |e| shell.sidebar.update(cx, Sidebar.setNotice, .{@as(?[]const u8, std.fmt.bufPrint(&buf, "Setup action failed: {s}", .{e}) catch "Setup action failed")});
+    const r = run orelse return cx.notify();
+    const panel = shell.main.read(cx).terminal;
+    var title_buf: [256]u8 = undefined;
+    const title = std.fmt.bufPrint(&title_buf, "{s} (setup)", .{r.actionName}) catch r.actionName;
+    const tab = panel.update(cx, terminal_panel.TerminalPanel.reserveTab, .{ chat_id, title });
+    const ok = if (tab) |t| panel.update(cx, terminal_panel.TerminalPanel.attachReserved, .{ chat_id, t, r.terminal, target }) else false;
+    if (!ok) shell.sidebar.update(cx, Sidebar.setNotice, .{@as(?[]const u8, "Setup action started, but its terminal could not be attached")});
+    const selected = if (shell.state.read(cx).workspace.read(cx).selected_chat) |s| std.mem.eql(u8, s, chat_id) else false;
+    if (selected) {
+        prefs_mod.mut(cx).terminal_open = true;
+        if (tab) |t| panel.update(cx, terminal_panel.TerminalPanel.selectTab, .{t});
     }
-    shell.setRightOpen(true, cx);
-    var l = shell.right_pane.lease(cx);
-    defer l.end();
-    if (l.value.push(.{ .terminal = e }, &l.cx) == null) {
-        e.release(cx);
-        return false;
-    }
-    return true;
+    cx.notify();
 }
 
 // ---- rendering --------------------------------------------------------------------------------
@@ -844,7 +857,7 @@ fn preventDefault(_: *const zpui.input.MouseDownEvent, window: *Window, _: *App)
 }
 
 fn segment(theme: *const Theme, id: []const u8, enabled: bool) zpui.StatefulDiv {
-    var d = div().id(id).relative().hFull().px(px(8)).flex().itemsCenter().gap(px(5))
+    var d = div().id(id).role(.button).ariaDisabled(!enabled).relative().hFull().px(px(8)).flex().itemsCenter().gap(px(5))
         .textSize(px(11.5)).fontWeight(500).textColor(theme.text)
         .onMouseDown(.left, preventDefault);
     if (enabled) d = d.hover(sb.bg(actionFill(theme, true)));
@@ -856,7 +869,7 @@ fn divider(theme: *const Theme) zpui.Div {
 }
 
 fn chevron(theme: *const Theme, enabled: bool, cx: *Ctx) zpui.StatefulDiv {
-    var d = div().id("project-actions-chevron").hFull().relative().flexNone().w(px(22))
+    var d = div().id("project-actions-chevron").role(.button).ariaLabel("Project actions").ariaDisabled(!enabled).hFull().relative().flexNone().w(px(22))
         .roundedR(px(control_radius)).flex().itemsCenter().justifyCenter()
         .onMouseDown(.left, preventDefault);
     if (!enabled) d = d.opacity(0.45) else d = d.cursorPointer().hover(sb.bg(actionFill(theme, true)))
@@ -891,14 +904,14 @@ pub fn control(shell: *Shell, available_width: f32, theme: *const Theme, liquid:
     if (!liquid) ctrl = ctrl.child(div().absolute().inset0().child(ui.effects.frosted(control_radius, zt.layout.menu_blur, if (theme.isFrost()) fill else fill.shadowSm())));
 
     if (loading) {
-        var seg = segment(theme, "project-action-loading", false).roundedL(px(control_radius)).opacity(0.45)
+        var seg = segment(theme, "project-action-loading", false).ariaLabel("Loading project actions").roundedL(px(control_radius)).opacity(0.45)
             .child(div().size(px(13)).flexNone().flex().itemsCenter().justifyCenter()
             .child(ui.loaders.miniGlyphSpinner(2, .{ theme.text_muted, theme.text_muted, theme.text_muted }, ui.loaders.phaseOf(cx, zt.motion.gradient_spin))));
         if (show_label) seg = seg.child(labelText("Loading…"));
         if (cx.app.windows.items.len > 0) if (cx.app.windows.items[0]) |w| w.requestAnimationFrame();
         ctrl = ctrl.child(seg).child(divider(theme)).child(chevron(theme, false, cx));
     } else if (preferred) |action| {
-        var main = segment(theme, "project-action-main", can_run).roundedL(px(control_radius));
+        var main = segment(theme, "project-action-main", can_run).ariaLabel(zpui.fmt("Run {s}", .{action.name})).roundedL(px(control_radius));
         if (!can_run) main = main.opacity(0.45);
         if (can_run) main = main.cursorPointer().onClick(cx.listener(onRunPreferred));
         if (!show_label) main = main.tooltipWith(zpui.fmt("Run {s}", .{action.name}), ui.tooltip.build);
@@ -906,13 +919,13 @@ pub fn control(shell: *Shell, available_width: f32, theme: *const Theme, liquid:
         if (show_label) main = main.child(div().maxW(px(150)).truncate().relative().top(px(-1)).child(action.name));
         ctrl = ctrl.child(main).child(divider(theme)).child(chevron(theme, true, cx));
     } else if (unavailable) {
-        var retry = segment(theme, "project-actions-unavailable", true).rounded(px(control_radius)).cursorPointer()
+        var retry = segment(theme, "project-actions-unavailable", true).ariaLabel("Actions unavailable").rounded(px(control_radius)).cursorPointer()
             .onClick(cx.listener(onChevron))
             .child(icon.of(.danger_triangle, 13, theme.danger));
         if (show_label) retry = retry.child(labelText("Actions unavailable"));
         ctrl = ctrl.child(retry);
     } else {
-        var add = segment(theme, "project-action-add", true).roundedL(px(control_radius)).cursorPointer()
+        var add = segment(theme, "project-action-add", true).ariaLabel("Add action").roundedL(px(control_radius)).cursorPointer()
             .onClick(cx.listener(onAdd))
             .child(icon.of(.plus, 13, theme.text_muted))
             .child(labelText("Add action"));
@@ -940,16 +953,16 @@ fn renderMenu(shell: *Shell, status: *const Status, snapshot: Snapshot, theme_in
         .child(ui.popover.heading(theme, trackedUpper(a, "Project actions")));
     if (status.* == .unavailable) {
         card = card.child(div().px(px(8)).py(px(6)).textSize(px(12)).textColor(theme.danger).child(status.unavailable.message));
-        if (actionContext(shell, cx) != null) card = card.child(ui.popover.menuRow(theme, false).id("project-actions-retry")
+        if (actionContext(shell, cx) != null) card = card.child(ui.popover.menuRow(theme, false).id("project-actions-retry").role(.menu_item)
             .onClick(cx.listener(onRetry))
             .child(icon.of(.refresh, 15, theme.text_muted)).child("Retry"));
     }
     for (snapshot.actions, 0..) |action, i| {
-        var row = ui.popover.menuRow(theme, false).id(.{ "project-action-row", i });
+        var row = ui.popover.menuRow(theme, false).id(.{ "project-action-row", i }).role(.menu_item);
         if (status.canRun()) row = row.onClick(cx.listenerWith(i, onRunRow));
         row = row.child(icon.of(actionIcon(action.icon), 15, theme.text_muted))
             .child(div().flex1().minW0().truncate().child(if (action.runOnWorktreeCreate) zpui.fmt("{s} (setup)", .{action.name}) else action.name))
-            .child(div().id(.{ "edit-project-action", i }).size(px(22)).flex().itemsCenter().justifyCenter().rounded(px(5))
+            .child(div().id(.{ "edit-project-action", i }).role(.button).ariaLabel("Edit action").size(px(22)).flex().itemsCenter().justifyCenter().rounded(px(5))
             .hover(sb.bg(theme.ink(0.08)))
             .onClick(cx.listenerWith(i, onEditRow))
             .child(icon.of(.settings_minimalistic, 14, theme.text_muted)));
@@ -958,14 +971,14 @@ fn renderMenu(shell: *Shell, status: *const Status, snapshot: Snapshot, theme_in
     if (snapshot.importableActions.len > 0) {
         card = card.child(ui.popover.separator(theme)).child(ui.popover.heading(theme, trackedUpper(a, "Import from zeron.json")));
         for (snapshot.importableActions, 0..) |draft, i| {
-            card = card.child(ui.popover.menuRow(theme, false).id(.{ "import-project-action", i })
+            card = card.child(ui.popover.menuRow(theme, false).id(.{ "import-project-action", i }).role(.menu_item)
                 .onClick(cx.listenerWith(i, onImportRow))
                 .child(icon.of(actionIcon(draft.icon), 15, theme.text_muted)).child(draft.name));
         }
     }
     if (snapshot.projectFileIssue) |issue| card = card.child(div().px(px(8)).py(px(5)).textSize(px(11)).textColor(theme.text_muted).child(issue));
     return card.child(ui.popover.separator(theme))
-        .child(ui.popover.menuRow(theme, false).id("project-actions-add-row")
+        .child(ui.popover.menuRow(theme, false).id("project-actions-add-row").role(.menu_item)
         .onClick(cx.listener(onAdd))
         .child(icon.of(.plus, 15, theme.text_muted)).child("Add action"));
 }
@@ -1037,15 +1050,15 @@ pub fn overlay(shell: *Shell, window: *Window, theme_in: *const Theme, cx: *Ctx)
             .child(dialog.title(theme, "Delete action?"))
             .child(div().mt(px(6)).child(dialog.body(theme, zpui.fmt("\u{201C}{s}\u{201D} will be permanently deleted.", .{name}))))
             .child(div().mt(px(16)).flex().justifyEnd().gap(px(8))
-            .child(dialog.btnGhost(theme, "Cancel").id("action-delete-cancel").onClick(cx.listenerWith(false, onAskDelete)))
-            .child(dialog.btnDanger(theme, "Delete").id("action-delete-confirm").onClick(cx.listener(onDelete))));
+            .child(dialog.btnGhost(theme, "Cancel").id("action-delete-cancel").role(.button).onClick(cx.listenerWith(false, onAskDelete)))
+            .child(dialog.btnDanger(theme, "Delete").id("action-delete-confirm").role(.button).onClick(cx.listener(onDelete))));
         return dialog.modal(window, card, cx.listener(onEditorScrim));
     }
     const editing = e.action_id != null;
     var icons = div().flex().flexRow().gap(px(6));
     for (action_icons) |pair| {
         const selected = pair[0] == e.icon;
-        icons = icons.child(div().id(.{ "action-icon", @intFromEnum(pair[0]) }).size(px(34)).flex().itemsCenter().justifyCenter()
+        icons = icons.child(div().id(.{ "action-icon", @intFromEnum(pair[0]) }).role(.radio_button).ariaLabel(pair[1]).ariaToggled(selected).size(px(34)).flex().itemsCenter().justifyCenter()
             .rounded(px(7)).border1().borderColor(if (selected) theme.text_muted else theme.border)
             .bg(if (selected) theme.ink(0.10) else theme.ink(0.03)).cursorPointer()
             .onClick(cx.listenerWith(pair[0], onPickIcon))
@@ -1065,18 +1078,18 @@ pub fn overlay(shell: *Shell, window: *Window, theme_in: *const Theme, cx: *Ctx)
         .child(field(theme, div().h(px(88)).overflowHidden().child(e.command)).fontFamily(theme.font_mono))
         .child(fieldLabel(theme, "Icon"))
         .child(icons)
-        .child(div().id("action-setup-toggle").mt(px(14)).flex().itemsCenter().gap(px(9)).cursorPointer()
+        .child(div().id("action-setup-toggle").role(.check_box).ariaToggled(setup).mt(px(14)).flex().itemsCenter().gap(px(9)).cursorPointer()
         .onClick(cx.listener(onToggleSetup))
         .child(check).child("Run automatically on worktree creation"));
     if (e.err) |msg| card = card.child(div().mt(px(10)).textSize(px(12)).textColor(theme.danger).child(msg));
     var left = div();
-    if (editing) left = left.child(dialog.btnGhost(theme, "Delete action").id("action-delete").textColor(theme.danger).onClick(cx.listenerWith(true, onAskDelete)));
-    var save_btn = dialog.btnPrimary(theme, if (e.saving) "Saving…" else "Save action").id("action-save");
+    if (editing) left = left.child(dialog.btnGhost(theme, "Delete action").id("action-delete").role(.button).textColor(theme.danger).onClick(cx.listenerWith(true, onAskDelete)));
+    var save_btn = dialog.btnPrimary(theme, if (e.saving) "Saving…" else "Save action").id("action-save").role(.button);
     if (!e.saving) save_btn = save_btn.onClick(cx.listener(onSave));
     card = card.child(div().mt(px(18)).flex().itemsCenter().justifyBetween()
         .child(left)
         .child(div().flex().gap(px(8))
-        .child(dialog.btnGhost(theme, "Cancel").id("action-cancel").onClick(cx.listener(onEditorCancel)))
+        .child(dialog.btnGhost(theme, "Cancel").id("action-cancel").role(.button).onClick(cx.listener(onEditorCancel)))
         .child(save_btn)));
     return dialog.modal(window, card, cx.listener(onEditorScrim));
 }

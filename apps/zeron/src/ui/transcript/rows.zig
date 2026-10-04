@@ -617,7 +617,8 @@ pub fn parseUserMessageImages(a: Allocator, content: []const u8) Allocator.Error
                 try atts.append(a, .{ .path = path, .name = name });
             }
             if (atts.items.len == 0) return .{ .text = content, .attachments = &.{} };
-            const body = std.mem.trimEnd(u8, content[0..gap], " \t\r\n");
+            // [appshots] the machine-facing Appshot context never reaches the bubble.
+            const body = model.appshots.stripContextForDisplay(std.mem.trimEnd(u8, content[0..gap], " \t\r\n"));
             return .{
                 .text = if (std.mem.eql(u8, std.mem.trim(u8, body, " \t\r\n"), "See the attached image(s).")) "" else body,
                 .attachments = atts.items,
@@ -1072,6 +1073,15 @@ test "user attachments split" {
     try std.testing.expectEqualStrings("look", p.text);
     try std.testing.expectEqual(@as(usize, 2), p.attachments.len);
     try std.testing.expectEqualStrings("b.jpg", p.attachments[1].name);
+}
+
+test "user bubbles hide the Appshot context" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const content = "fix this\n\n" ++ model.appshots.context_marker ++ "\n<appshot app=\"Safari\" image=\"/h/a.png\" accessibility-format=\"1\" truncated=\"false\">\nsecret\n</appshot>\n\nAttached images (local files — open them to view):\n- /h/a.png";
+    const p = try parseUserMessageImages(arena.allocator(), content);
+    try std.testing.expectEqualStrings("fix this", p.text);
+    try std.testing.expectEqual(@as(usize, 1), p.attachments.len);
 }
 
 test "rows split per block and group tools" {

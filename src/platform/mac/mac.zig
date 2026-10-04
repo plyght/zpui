@@ -19,6 +19,7 @@ const window_mod = @import("window.zig");
 const file_dialog = @import("file_dialog.zig");
 const menu_mod = @import("menu.zig");
 const notify = @import("notify.zig");
+pub const window_capture = @import("window_capture.zig");
 const CoreTextSystem = @import("../../text/coretext.zig").CoreTextSystem;
 
 pub const MacWindow = window_mod.MacWindow;
@@ -99,7 +100,28 @@ pub const MacPlatform = struct {
         .playSound = vPlaySound,
         .supportsLiquidGlass = vSupportsLiquidGlass, // [liquid-glass]
         .liquidGlassRevision = vLiquidGlassRevision, // [liquid-glass]
+        .setGlobalHotkey = vSetGlobalHotkey,
+        .windowCaptureCapabilities = vWindowCaptureCapabilities,
+        .captureActiveWindow = vCaptureActiveWindow,
+        .requestCaptureAccess = vRequestCaptureAccess,
+        .foregroundAfterCapture = vForegroundAfterCapture,
     };
+
+    fn vSetGlobalHotkey(_: *anyopaque, hotkey: ?pf.GlobalHotkey, handler: pf.GlobalHotkeyHandler) void {
+        window_capture.setHotkey(hotkey, handler);
+    }
+    fn vWindowCaptureCapabilities(_: *anyopaque) pf.WindowCaptureCapabilities {
+        return window_capture.capabilities();
+    }
+    fn vCaptureActiveWindow(_: *anyopaque, gpa: std.mem.Allocator, done: pf.WindowCaptureCallback) void {
+        window_capture.capture(gpa, done);
+    }
+    fn vRequestCaptureAccess(_: *anyopaque, kind: pf.CaptureAccess) void {
+        window_capture.requestAccess(kind);
+    }
+    fn vForegroundAfterCapture(_: *anyopaque) void {
+        window_capture.foregroundAfterCapture();
+    }
 
     /// [liquid-glass] 26 (Tahoe), 27 (Golden Gate), ...; 0 without NSGlassEffectView.
     fn vLiquidGlassRevision(_: *anyopaque) u32 {

@@ -371,6 +371,7 @@ pub fn picker(v: *SettingsView, kind: FontKind, t: *const Theme, cx: *Context(Se
     const key = zpui.fmt("settings-font-{s}", .{kind.slug()});
     const fill = if (open) w.selectFill(t, true) else ui.hover.blend(cx, key, w.selectFill(t, false), w.selectFill(t, true));
     var trigger = w.selectTrigger(t, fill).id(.{ "font-dropdown", @intFromEnum(kind) }).w(px(220))
+        .role(.button).ariaExpanded(open).ariaLabel(zpui.fmt("{s}: {s}", .{ kind.label(), eff.label() }))
         .fontFamily(t.font_sans_fixed)
         .onHover(cx.listenerWith(kind, onHover))
         .onClick(cx.listenerWith(kind, onTrigger))
@@ -396,7 +397,8 @@ fn menu(v: *SettingsView, kind: FontKind, t_page: *const Theme, cx: *Context(Set
         const available = isAvailable(kind, f);
         const active = sameFamily(f, eff);
         const focused = sameFamily(f, v.fonts.highlight);
-        var row = ui.popover.menuRow(t, active or focused).id(.{ "font-option", @as(usize, @intFromEnum(kind)) * 100_000 + ix });
+        var row = ui.popover.menuRow(t, active or focused).id(.{ "font-option", @as(usize, @intFromEnum(kind)) * 100_000 + ix })
+            .role(.menu_item_radio).ariaLabel(f.label()).ariaToggled(active);
         if (available) row = row.onClick(cx.listenerWith(Pick{ .kind = kind, .ix = @intCast(ix) }, onOption)) else row = row.opacity(0.45);
         rows = rows.child(row.child(div().flex1().minW0().truncate().child(f.label())).child(w.selectCheck(t, active)));
     }

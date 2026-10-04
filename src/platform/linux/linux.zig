@@ -26,6 +26,7 @@ pub const dbus = @import("dbus.zig");
 pub const file_dialog = @import("file_dialog.zig");
 pub const notifications = @import("notifications.zig");
 pub const atspi = @import("atspi.zig");
+pub const window_capture = @import("window_capture.zig");
 const text_mod = @import("../../text/text.zig");
 
 pub const BackendKind = enum { wayland, x11 };
@@ -62,6 +63,8 @@ pub const LinuxPlatform = struct {
     /// AT-SPI2 accessibility bridge (atspi.zig); null without a session bus or when
     /// disabled (`ZPUI_NO_A11Y=1` / `NO_AT_BRIDGE=1`).
     atspi: ?*atspi.Bridge = null,
+    /// Global hotkey + window capture (window_capture.zig), created on first use.
+    capture: ?*window_capture.Service = null,
 
     /// Ends `run` after the current loop iteration.
     pub fn requestQuit(self: *LinuxPlatform) void {
@@ -94,7 +97,31 @@ pub const LinuxPlatform = struct {
         .promptForPaths = promptForPaths,
         .postNotification = postNotification,
         .playSound = playSound,
+        .setGlobalHotkey = setGlobalHotkey,
+        .windowCaptureCapabilities = windowCaptureCapabilities,
+        .captureActiveWindow = captureActiveWindow,
     };
+
+    fn captureService(self: *LinuxPlatform) ?*window_capture.Service {
+        if (self.capture == null) {
+            self.capture = window_capture.Service.create(self.gpa, self.disp.io, self.disp.dispatcher(), .fromProcess()) catch return null;
+        }
+        return self.capture;
+    }
+    fn setGlobalHotkey(ptr: *anyopaque, hotkey: ?platform.GlobalHotkey, handler: platform.GlobalHotkeyHandler) void {
+        if (cast(ptr).captureService()) |s| s.setHotkey(hotkey, handler);
+    }
+    fn windowCaptureCapabilities(ptr: *anyopaque) platform.WindowCaptureCapabilities {
+        const s = cast(ptr).captureService() orelse return .{};
+        return s.capabilities();
+    }
+    fn captureActiveWindow(ptr: *anyopaque, gpa: Allocator, done: platform.WindowCaptureCallback) void {
+        const s = cast(ptr).captureService() orelse {
+            var r: platform.WindowCaptureResult = .{ .err = .{ .failed = gpa.dupe(u8, "Appshot capture is unavailable.") catch &.{} } };
+            return done.done(done.ctx, gpa, &r);
+        };
+        s.capture(gpa, done);
+    }
 
     fn postNotification(ptr: *anyopaque, n: platform.Notification) void {
         const self = cast(ptr);
@@ -194,6 +221,8 @@ pub const LinuxPlatform = struct {
         if (self.notifier) |n| n.destroy();
         if (self.atspi) |a| a.destroy();
         self.atspi = null;
+        if (self.capture) |c| c.destroy();
+        self.capture = null;
         switch (self.backend) {
             inline else => |b| b.destroy(),
         }

@@ -6,6 +6,8 @@
 #     zeron-<version>-linux-<arch>/zeron.desktop   XDG desktop entry (Exec=zeron, Icon=zeron)
 #     zeron-<version>-linux-<arch>/zeron.png       512x512 app icon
 #     zeron-<version>-linux-<arch>/licenses/       font + third-party notices
+#     zeron-<version>-linux-<arch>/lib/libonnxruntime.so  dictation runtime, when
+#                                                  ZERON_ONNXRUNTIME names one (optional)
 # Run through `zig build zeron-dist`, which passes: <repo root> <install prefix> <arch> <version>.
 set -euo pipefail
 root=$1 prefix=$2 arch=$3 version=$4
@@ -18,6 +20,11 @@ mkdir -p "$stage/licenses/fonts"
 install -m 755 "$bin" "$stage/zeron"
 # The WebKitGTK browser helper (built when webkit2gtk-4.1 dev files were found).
 [[ -x $prefix/bin/zeron-webkit ]] && install -m 755 "$prefix/bin/zeron-webkit" "$stage/zeron-webkit"
+# Dictation's optional native runtime (apps/zeron/src/voice/ort.zig looks in lib/).
+if [[ -n ${ZERON_ONNXRUNTIME:-} ]]; then
+  mkdir -p "$stage/lib"
+  install -m 644 "$ZERON_ONNXRUNTIME" "$stage/lib/libonnxruntime.so"
+fi
 install -m 644 "$root/apps/zeron/dist/zeron.desktop" "$stage/zeron.desktop"
 install -m 644 "$root/apps/zeron/dist/zeron.png" "$stage/zeron.png"
 cp "$root"/apps/zeron/assets/fonts/licenses/* "$stage/licenses/fonts/"

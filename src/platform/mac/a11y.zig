@@ -34,6 +34,9 @@ const NO = objc.NO;
 const NSRect = ak.NSRect;
 const NSPoint = ak.NSPoint;
 const NSUInteger = ak.NSUInteger;
+const NSInteger = ak.NSInteger;
+const NSRange = ak.NSRange;
+const offsets = a11y.text_offsets;
 const B = ak.enc_bool;
 
 const bridge_ivar = "zpuiA11yBridge";
@@ -159,6 +162,23 @@ pub fn registerClasses() void {
     _ = b.addMethod("setAccessibilityExpanded:", &elSetExpanded, "v@:" ++ B);
     _ = b.addMethod("accessibilityHitTest:", &elHitTest, "@@:" ++ ak.enc_point);
     _ = b.addMethod("isAccessibilitySelectorAllowed:", &elSelectorAllowed, B ++ "@::");
+    // Text ranges (NSAccessibility counts UTF-16 code units; the tree stores UTF-8 bytes).
+    _ = b.addMethod("accessibilityNumberOfCharacters", &elNumberOfCharacters, "q@:");
+    _ = b.addMethod("accessibilitySelectedText", &elSelectedText, "@@:");
+    _ = b.addMethod("accessibilitySelectedTextRange", &elSelectedTextRange, ak.enc_range ++ "@:");
+    _ = b.addMethod("accessibilitySelectedTextRanges", &elSelectedTextRanges, "@@:");
+    _ = b.addMethod("setAccessibilitySelectedTextRange:", &elSetSelectedTextRange, "v@:" ++ ak.enc_range);
+    _ = b.addMethod("accessibilityVisibleCharacterRange", &elVisibleCharacterRange, ak.enc_range ++ "@:");
+    _ = b.addMethod("accessibilityInsertionPointLineNumber", &elInsertionPointLineNumber, "q@:");
+    _ = b.addMethod("accessibilityStringForRange:", &elStringForRange, "@@:" ++ ak.enc_range);
+    _ = b.addMethod("accessibilityAttributedStringForRange:", &elAttributedStringForRange, "@@:" ++ ak.enc_range);
+    _ = b.addMethod("accessibilityLineForIndex:", &elLineForIndex, "q@:q");
+    _ = b.addMethod("accessibilityRangeForLine:", &elRangeForLine, ak.enc_range ++ "@:q");
+    _ = b.addMethod("accessibilityRangeForIndex:", &elRangeForIndex, ak.enc_range ++ "@:q");
+    _ = b.addMethod("accessibilityStyleRangeForIndex:", &elRangeForIndex, ak.enc_range ++ "@:q");
+    _ = b.addMethod("accessibilityRangeForPosition:", &elRangeForPosition, ak.enc_range ++ "@:" ++ ak.enc_point);
+    _ = b.addMethod("accessibilityFrameForRange:", &elFrameForRange, ak.enc_rect ++ "@:" ++ ak.enc_range);
+    _ = b.addMethod("accessibilityURL", &elURL, "@@:");
     element_class = b.register();
 }
 
@@ -209,6 +229,7 @@ pub fn update(w: *MacWindow, u: a11y.Update) void {
                 post(el, if (n.role == .tree_item or n.role == .row) (if (expanded) "AXRowExpanded" else "AXRowCollapsed") else "AXExpandedChanged");
             }
         }
+        if (e.what.text_selection) post(el, "AXSelectedTextChanged");
         if (e.what.bounds) post(el, "AXMoved");
     }
     if (layout_changed) post(w.native_view, "AXLayoutChanged");
@@ -521,6 +542,9 @@ fn elSelectorAllowed(this: id, _: SEL, selector: SEL) callconv(.c) BOOL {
     if (Check.is(selector, "isAccessibilityExpanded")) return objc.toBOOL(n.expanded != null);
     if (Check.is(selector, "isAccessibilitySelected")) return objc.toBOOL(n.selected != null);
     if (Check.is(selector, "accessibilityMinValue") or Check.is(selector, "accessibilityMaxValue")) return objc.toBOOL(n.role.isRange());
+    if (Check.is(selector, "setAccessibilitySelectedTextRange:")) return objc.toBOOL(n.actions.contains(.set_text_selection));
+    if (Check.is(selector, "accessibilityURL")) return objc.toBOOL(n.role == .link and n.url.present);
+    inline for (text_selectors) |name| if (Check.is(selector, name)) return objc.toBOOL(hasText(n));
     return YES;
 }
 
@@ -580,4 +604,160 @@ fn viewLabel(this: id, _: SEL) callconv(.c) ?id {
     const tree = br.tree orelse return null;
     const root = tree.root() orelse return null;
     return str(tree.str(root.label));
+}
+
+// ---------------------------------------------------------------------------------------
+// Text ranges (accesskit_macos text support): text fields expose their value with the
+// caret / selection from the node's `text_selection`; static text its string.
+// ---------------------------------------------------------------------------------------
+
+const text_selectors = [_][:0]const u8{
+    "accessibilityNumberOfCharacters",
+    "accessibilitySelectedText",
+    "accessibilitySelectedTextRange",
+    "accessibilitySelectedTextRanges",
+    "accessibilityVisibleCharacterRange",
+    "accessibilityInsertionPointLineNumber",
+    "accessibilityStringForRange:",
+    "accessibilityAttributedStringForRange:",
+    "accessibilityLineForIndex:",
+    "accessibilityRangeForLine:",
+    "accessibilityRangeForIndex:",
+    "accessibilityStyleRangeForIndex:",
+    "accessibilityRangeForPosition:",
+    "accessibilityFrameForRange:",
+};
+
+fn hasText(n: *const a11y.Node) bool {
+    return n.role.isTextInput() or n.role == .label;
+}
+
+fn textOf(c: Ctx) []const u8 {
+    if (c.n.role.isTextInput()) return c.tree.str(c.n.value) orelse "";
+    return c.tree.name(c.n) orelse "";
+}
+
+fn nsRange(loc: usize, len: usize) NSRange {
+    return .{ .location = loc, .length = len };
+}
+
+/// UTF-16 range → byte range `[start, end)` of `text` (clamped).
+fn byteRange(text: []const u8, r: NSRange) [2]usize {
+    const s = offsets.utf16ToByte(text, r.location);
+    const e = offsets.utf16ToByte(text, r.location +| r.length);
+    return .{ s, @max(s, e) };
+}
+
+/// The selection as a UTF-16 range (the caret at the end of the text when the node
+/// publishes none).
+fn selectedRange(c: Ctx) NSRange {
+    const text = textOf(c);
+    const sel = c.n.text_selection orelse return nsRange(offsets.utf16Len(text), 0);
+    const s = offsets.byteToUtf16(text, sel.start());
+    const e = offsets.byteToUtf16(text, sel.end());
+    return nsRange(s, e - s);
+}
+
+fn elNumberOfCharacters(this: id, _: SEL) callconv(.c) NSInteger {
+    const c = ctxOf(this) orelse return 0;
+    return @intCast(offsets.utf16Len(textOf(c)));
+}
+
+fn elSelectedText(this: id, _: SEL) callconv(.c) ?id {
+    const c = ctxOf(this) orelse return null;
+    const text = textOf(c);
+    const sel = c.n.text_selection orelse return ak.nsString("");
+    return ak.nsString(text[@min(sel.start(), text.len)..@min(sel.end(), text.len)]);
+}
+
+fn elSelectedTextRange(this: id, _: SEL) callconv(.c) NSRange {
+    const c = ctxOf(this) orelse return nsRange(0, 0);
+    return selectedRange(c);
+}
+
+fn elSelectedTextRanges(this: id, _: SEL) callconv(.c) ?id {
+    const c = ctxOf(this) orelse return null;
+    const v = ak.class("NSValue").msg(id, "valueWithRange:", .{selectedRange(c)});
+    return ak.class("NSArray").msg(id, "arrayWithObject:", .{v});
+}
+
+fn elSetSelectedTextRange(this: id, _: SEL, r: NSRange) callconv(.c) void {
+    const c = ctxOf(this) orelse return;
+    const br = byteRange(textOf(c), r);
+    _ = c.br.perform(.{ .target = c.id, .action = .set_text_selection, .selection = .{ .anchor = @intCast(br[0]), .focus = @intCast(br[1]) } });
+}
+
+fn elVisibleCharacterRange(this: id, _: SEL) callconv(.c) NSRange {
+    const c = ctxOf(this) orelse return nsRange(0, 0);
+    return nsRange(0, offsets.utf16Len(textOf(c)));
+}
+
+fn elInsertionPointLineNumber(this: id, _: SEL) callconv(.c) NSInteger {
+    const c = ctxOf(this) orelse return 0;
+    const text = textOf(c);
+    const caret = if (c.n.text_selection) |s| s.focus else text.len;
+    return @intCast(offsets.lineOf(text, caret));
+}
+
+fn elStringForRange(this: id, _: SEL, r: NSRange) callconv(.c) ?id {
+    const c = ctxOf(this) orelse return null;
+    const text = textOf(c);
+    const br = byteRange(text, r);
+    return ak.nsString(text[br[0]..br[1]]);
+}
+
+fn elAttributedStringForRange(this: id, sel: SEL, r: NSRange) callconv(.c) ?id {
+    const s = elStringForRange(this, sel, r) orelse return null;
+    return ak.class("NSAttributedString").msg(id, "alloc", .{}).msg(id, "initWithString:", .{s}).autorelease();
+}
+
+fn elLineForIndex(this: id, _: SEL, index: NSInteger) callconv(.c) NSInteger {
+    const c = ctxOf(this) orelse return 0;
+    const text = textOf(c);
+    return @intCast(offsets.lineOf(text, offsets.utf16ToByte(text, @intCast(@max(0, index)))));
+}
+
+fn elRangeForLine(this: id, _: SEL, line: NSInteger) callconv(.c) NSRange {
+    const c = ctxOf(this) orelse return nsRange(ak.NSNotFound, 0);
+    const text = textOf(c);
+    const lr = offsets.lineRange(text, @intCast(@max(0, line))) orelse return nsRange(ak.NSNotFound, 0);
+    const s = offsets.byteToUtf16(text, lr[0]);
+    return nsRange(s, offsets.byteToUtf16(text, lr[1]) - s);
+}
+
+/// The composed character at a UTF-16 index (a surrogate pair is one range).
+fn elRangeForIndex(this: id, _: SEL, index: NSInteger) callconv(.c) NSRange {
+    const c = ctxOf(this) orelse return nsRange(ak.NSNotFound, 0);
+    const text = textOf(c);
+    const b0 = offsets.utf16ToByte(text, @intCast(@max(0, index)));
+    if (b0 >= text.len) return nsRange(offsets.utf16Len(text), 0);
+    const b1 = offsets.charToByte(text, offsets.byteToChar(text, b0) + 1);
+    const s = offsets.byteToUtf16(text, b0);
+    return nsRange(s, offsets.byteToUtf16(text, b1) - s);
+}
+
+/// Without glyph geometry in the tree, a point maps to the line it falls on (by the
+/// node's height / line count) — the line's whole range.
+fn elRangeForPosition(this: id, sel: SEL, p: NSPoint) callconv(.c) NSRange {
+    const c = ctxOf(this) orelse return nsRange(ak.NSNotFound, 0);
+    const text = textOf(c);
+    const lines = offsets.lineOf(text, text.len) + 1;
+    const local = c.br.fromScreen(p);
+    const b = c.n.bounds;
+    if (b.size.height <= 0) return nsRange(0, 0);
+    const frac = (local.y - b.origin.y) / b.size.height;
+    const line: NSInteger = @intFromFloat(std.math.clamp(@floor(frac * @as(f32, @floatFromInt(lines))), 0, @as(f32, @floatFromInt(lines - 1))));
+    return elRangeForLine(this, sel, line);
+}
+
+fn elFrameForRange(this: id, _: SEL, _: NSRange) callconv(.c) NSRect {
+    const zero: NSRect = .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 0, .height = 0 } };
+    const c = ctxOf(this) orelse return zero;
+    return c.br.screenRect(c.n.bounds);
+}
+
+fn elURL(this: id, _: SEL) callconv(.c) ?id {
+    const c = ctxOf(this) orelse return null;
+    const u = c.tree.str(c.n.url) orelse return null;
+    return ak.class("NSURL").msg(?id, "URLWithString:", .{ak.nsString(u)});
 }

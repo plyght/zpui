@@ -13,11 +13,12 @@ const ui = @import("../components/root.zig");
 const prefs_mod = @import("prefs.zig");
 const fixtures_mod = @import("fixtures.zig");
 const slots = @import("slots.zig");
-const terminal_dock = @import("terminal_dock.zig");
+const terminal_panel = @import("terminal_panel.zig");
 const background = @import("../background/root.zig");
 const settings_store_ui = @import("../settings/store.zig");
 const harness_updates = @import("harness_updates.zig");
 const right_pane = @import("right_pane.zig");
+const files = @import("../files/root.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -35,10 +36,13 @@ pub const MainPanel = struct {
     fixtures: ?*fixtures_mod.Fixtures,
     slots: slots.Slots,
     subs: zpui.Subscriptions = .{},
-    terminal: ?Entity(terminal_dock.TerminalDock) = null,
+    /// The bottom terminal drawer (per-chat tabs; `terminal/panel.rs`).
+    terminal: Entity(terminal_panel.TerminalPanel),
     /// Column width (set by the shell each frame).
     width: f32 = 800,
     terminal_sub: ?zpui.Subscription = null,
+    /// (pointer y, height) when a terminal resize drag began.
+    terminal_drag_anchor: ?[2]f32 = null,
     /// The new-thread hero's crossfade state (`new_thread_artwork_ready`).
     artwork_ready: background.hero.Readiness = .{},
     /// Home's agent-update island (`render_harness_update_card`).
@@ -51,7 +55,10 @@ pub const MainPanel = struct {
             .fixtures = fixtures,
             .slots = try slots.Slots.init(state, fixtures, cx),
             .harness_updates = undefined,
+            .terminal = try cx.newWith(terminal_panel.TerminalPanel, terminal_panel.TerminalPanel.init, .{state}),
         };
+        errdefer self.terminal.release(cx);
+        self.terminal_sub = try cx.subscribe(self.terminal, onTerminalHide);
         self.harness_updates = try cx.newWith(harness_updates.HarnessUpdateIsland, harness_updates.HarnessUpdateIsland.init, .{state});
         errdefer self.harness_updates.release(cx);
         const s = state.read(cx);
@@ -64,7 +71,7 @@ pub const MainPanel = struct {
         self.subs.deinit(self.gpa);
         self.artwork_ready.deinit(app, self.gpa);
         if (self.terminal_sub) |*t| t.deinit();
-        if (self.terminal) |t| t.release(app);
+        self.terminal.release(app);
         self.slots.deinit(app);
         self.harness_updates.release(app);
         self.state.release(app);
@@ -89,8 +96,10 @@ pub const MainPanel = struct {
         // (`chat_dropzone`), with the "Drop to attach" overlay while a file
         // drag hovers it.
         var col = div().id("chat-dropzone").relative().sizeFull().flex().flexCol().overflowHidden()
+            .onDragMove(TerminalResize, cx.listener(MainPanel.onTerminalResize))
             .onDrop(zpui.ExternalPaths, cx.listener(MainPanel.onDropPaths))
-            .onDrop(right_pane.TabDrag, cx.listener(MainPanel.onDropTab));
+            .onDrop(right_pane.TabDrag, cx.listener(MainPanel.onDropTab))
+            .onDrop(files.WorkspacePathDrag, cx.listener(MainPanel.onDropWorkspacePath));
         const width = self.width;
         if (has_chat) {
             const stack = self.slots.composer_view.read(cx).last_rendered_height;
@@ -131,21 +140,19 @@ pub const MainPanel = struct {
             col = col.child(div().absolute().left(px(0)).right(px(0)).bottom(px(harness_updates.bottom_inset))
                 .flex().justifyCenter().child(self.harness_updates));
         }
+        if (self.terminal.read(cx).open != terminal_open) self.terminal.update(cx, terminal_panel.TerminalPanel.setOpen, .{ terminal_open, window });
         if (terminal_open) {
-            if (self.terminal == null) {
-                const chat = ws.selectedChatRow();
-                const cwd: ?[]const u8 = if (chat) |c| (c.cwd orelse if (ws.spaceForChat(c)) |sp| sp.path else null) else if (ws.selectedSpaceRow()) |sp| sp.path else null;
-                const t = terminal_dock.TerminalDock;
-                if (cx.newWith(t, t.init, .{ ws.io, cwd, window })) |dock| {
-                    self.terminal = dock;
-                    self.terminal_sub = cx.subscribe(dock, onTerminalHide) catch null;
-                } else |err| std.log.warn("terminal: {t}", .{err});
-            }
-            if (self.terminal) |t| {
-                const vh = window.viewportSize().height;
-                const h = @min(layout.terminal_default_height, vh * layout.terminal_max_vh);
-                col = col.child(div().flexNone().h(px(h)).wFull().child(t));
-            }
+            // `terminal_height` (Settings, persisted), limited to the viewport
+            // share; the top edge drags it, a double-click resets it.
+            const h = terminalHeight(window, cx);
+            col = col.child(div().relative().flexNone().h(px(h)).wFull().child(self.terminal)
+                .child(div().id("terminal-resize").role(.separator).ariaLabel("Resize terminal").absolute().left(px(0)).right(px(0))
+                .top(px(-terminal_resize_hitbox / 2)).h(px(terminal_resize_hitbox)).cursorRowResize()
+                .onMouseDown(.left, cx.listener(MainPanel.onTerminalResizeDown))
+                .onClick(cx.listener(MainPanel.onTerminalResizeClick))
+                .onDrag(TerminalResize{}, buildResizeGhost)
+                .child(div().absolute().top(px(terminal_resize_hitbox / 2)).left(px(0)).right(px(0)).h(px(1))
+                .hover(sb.bg(theme.border_strong)))));
         }
         // Last child: the overlay covers the terminal dock too (Rust order).
         // A file tab dragged out of the right-pane strip reveals it as well;
@@ -190,20 +197,109 @@ pub const MainPanel = struct {
         cx.notify();
     }
 
-    fn onTerminalHide(_: *MainPanel, _: Entity(terminal_dock.TerminalDock), _: *const terminal_dock.Hide, cx: *Context(MainPanel)) void {
+    /// `on_drop::<WorkspacePathDrag>` (`attach_workspace_drag`): an explorer
+    /// row of this chat inserts a workspace file reference; a drag that
+    /// outlived a session switch is dropped.
+    fn onDropWorkspacePath(self: *MainPanel, payload: *const files.WorkspacePathDrag, window: *Window, cx: *Context(MainPanel)) void {
+        const chat = self.state.read(cx).workspace.read(cx).selected_chat orelse return;
+        if (!payload.belongsTo(chat)) return;
+        const ComposerView = @TypeOf(self.slots.composer_view).Type;
+        self.slots.composer_view.update(cx, ComposerView.addWorkspacePath, .{ payload.path(), payload.is_directory, window });
+        cx.notify();
+    }
+
+    fn onTerminalResizeDown(self: *MainPanel, ev: *const zpui.input.MouseDownEvent, window: *Window, cx: *Context(MainPanel)) void {
+        self.terminal_drag_anchor = .{ ev.position.y, terminalHeight(window, cx) };
+    }
+
+    /// `on_terminal_drag`: the height follows the pointer within the limits.
+    fn onTerminalResize(self: *MainPanel, ev: *const zpui.DragMoveEvent(TerminalResize), window: *Window, cx: *Context(MainPanel)) void {
+        const anchor = self.terminal_drag_anchor orelse return;
+        const vh = window.viewportSize().height;
+        const requested = anchor[1] + (anchor[0] - ev.event.position.y);
+        const next = clampTerminalHeight(@min(requested, terminalLimit(vh)), vh);
+        const W = struct {
+            fn f(v: f32, st: *model.UiSettings, _: std.mem.Allocator) void {
+                st.terminalHeight = v;
+            }
+        };
+        _ = model.settings_store.update(cx.app, .debounced, next, W.f);
+        cx.notify();
+    }
+
+    fn onTerminalResizeClick(_: *MainPanel, ev: *const zpui.ClickEvent, _: *Window, cx: *Context(MainPanel)) void {
+        if (ev.clickCount() != 2) return;
+        const W = struct {
+            fn f(_: void, st: *model.UiSettings, _: std.mem.Allocator) void {
+                st.terminalHeight = model.settings.terminal_default_height;
+            }
+        };
+        _ = model.settings_store.update(cx.app, .debounced, {}, W.f);
+        cx.notify();
+    }
+
+    fn onTerminalHide(_: *MainPanel, _: Entity(terminal_panel.TerminalPanel), _: *const terminal_panel.Hide, cx: *Context(MainPanel)) void {
         prefs_mod.mut(cx).terminal_open = false;
         cx.notify();
     }
 };
 
+/// The terminal's top-edge resize drag (`TerminalResize`).
+pub const TerminalResize = struct {};
+const terminal_resize_hitbox: f32 = 10;
+
+const ResizeGhost = struct {
+    pub fn render(_: *ResizeGhost, _: *Window, _: *Context(ResizeGhost)) zpui.Div {
+        return div();
+    }
+};
+
+fn buildResizeGhost(_: *const TerminalResize, _: zpui.Point(f32), _: *Window, app: *App) Entity(ResizeGhost) {
+    return app.new(ResizeGhost, .{}) catch @panic("OOM");
+}
+
+/// The drawer's height limit: 55% of the viewport, and never over the
+/// titlebar and status strip.
+fn terminalLimit(vh: f32) f32 {
+    return @min(vh * layout.terminal_max_vh, @max(vh - layout.titlebar_height - layout.status_strip_height, 0));
+}
+
+/// `clamp_terminal_height` (terminal/panel.rs).
+pub fn clampTerminalHeight(height: f32, vh: f32) f32 {
+    const max = @max(vh * layout.terminal_max_vh, layout.terminal_min_height);
+    if (!std.math.isFinite(height)) return layout.terminal_min_height;
+    return std.math.clamp(height, layout.terminal_min_height, max);
+}
+
+test "terminal height clamps like terminal/panel.rs" {
+    try std.testing.expectEqual(@as(f32, 160), clampTerminalHeight(10, 1000));
+    try std.testing.expectEqual(@as(f32, 550), clampTerminalHeight(900, 1000));
+    try std.testing.expectEqual(@as(f32, 300), clampTerminalHeight(300, 1000));
+    try std.testing.expectEqual(@as(f32, 160), clampTerminalHeight(std.math.inf(f32), 1000));
+}
+
+fn terminalHeight(window: *Window, cx: anytype) f32 {
+    const vh = window.viewportSize().height;
+    const stored = if (model.settings_store.current(cx.app)) |st| st.terminalHeight else layout.terminal_default_height;
+    return @min(stored, terminalLimit(vh));
+}
+
 /// `attachment_drop_overlay`: a scrim with "Drop to attach", shown only
 /// while an external file drag hovers the conversation (typed drag style).
-fn attachmentDropOverlay(theme: *const Theme, tab_file: bool) zpui.StatefulDiv {
+pub fn attachmentDropOverlay(theme: *const Theme, tab_file: bool) zpui.StatefulDiv {
+    return dropOverlay(theme, tab_file, true);
+}
+
+/// The overlay; `external` = OS file drops are accepted too (the side
+/// chat's reply field has no attachment staging, so it takes workspace
+/// references only).
+pub fn dropOverlay(theme: *const Theme, tab_file: bool, external: bool) zpui.StatefulDiv {
     var overlay = div().id("attachment-drop-overlay").absolute().inset0().opacity(0)
         .bg(theme.scrim().opacity(0.4 / 0.6)).flex().itemsCenter().justifyCenter()
         .textSize(ui.rems(13)).textColor(theme.text)
-        .dragOver(zpui.ExternalPaths, sb.opacity(1))
+        .dragOver(files.WorkspacePathDrag, sb.opacity(1))
         .child("Drop to attach");
+    if (external) overlay = overlay.dragOver(zpui.ExternalPaths, sb.opacity(1));
     if (tab_file) overlay = overlay.dragOver(right_pane.TabDrag, sb.opacity(1));
     return overlay;
 }

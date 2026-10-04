@@ -24,6 +24,7 @@ const prefs_mod = @import("../shell/prefs.zig");
 const input_mod = @import("zeron_input");
 const sections = @import("sections.zig");
 const sidebar_mod = @import("sidebar.zig");
+const menu_nav = @import("../pickers/menu.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -79,6 +80,12 @@ const Transfer = struct {
     /// Bumps when `preview` changes (gap tween keys).
     epoch: u64 = 0,
     prev: ?Target = null,
+    /// The group the row starts in (`source_group`); its slot collapses
+    /// while another group previews the drop.
+    source: ?Target = null,
+    /// A pinned row (pin-to-pin keeps the sibling slide; no edge scroll).
+    pinned: bool = false,
+    pointer_x: f32 = 0,
 };
 
 const Return = struct {
@@ -87,6 +94,8 @@ const Return = struct {
     from: f32,
     to: f32,
     epoch: u64,
+    /// The source slot's collapse when cancelled (re-expands on the way home).
+    removed: f32 = 0,
 };
 
 const Dialog = struct {
@@ -101,6 +110,10 @@ pub const State = struct {
     ctl: sections.Controller = .{},
     /// Section `⋯` menu: (section id, window position).
     menu: ?struct { id: []u8, pos: zpui.Point(f32) } = null,
+    /// Keyboard-highlighted menu row (`section_menu_active`).
+    menu_active: ?usize = null,
+    /// The open menu's key focus (`section_menu_focus`).
+    menu_focus: ?zpui.FocusHandle = null,
     header_hover: ?[]u8 = null,
     dialog: ?Dialog = null,
     /// Section ids rendered last frame (owned), for listeners.
@@ -112,8 +125,22 @@ pub const State = struct {
     returning: ?Return = null,
     return_epoch: u64 = 0,
     return_task: zpui.Task(void) = .none,
+    /// Section open/close tweens by section id (owned keys).
+    motions: std.StringHashMapUnmanaged(Motion) = .empty,
+    /// Each section's open body height last frame (owned keys).
+    body_heights: std.StringHashMapUnmanaged(f32) = .empty,
+    /// The pending write's 20 s confirmation deadline (keyed by its id).
+    write_timer: zpui.Task(void) = .none,
+    write_timer_id: u64 = 0,
+    /// The transfer's 16 ms frame loop (layout tweens + edge autoscroll).
+    scroll_task: zpui.Task(void) = .none,
 
     pub fn deinit(self: *State, gpa: std.mem.Allocator, app: *App) void {
+        self.write_timer.cancel();
+        self.scroll_task.cancel();
+        if (self.menu_focus) |f| f.release(app);
+        freeKeys(gpa, Motion, &self.motions);
+        freeKeys(gpa, f32, &self.body_heights);
         self.ctl.deinit(gpa);
         if (self.menu) |m| gpa.free(m.id);
         if (self.header_hover) |h| gpa.free(h);
@@ -126,6 +153,86 @@ pub const State = struct {
         self.* = .{};
     }
 };
+
+fn freeKeys(gpa: std.mem.Allocator, comptime V: type, m: *std.StringHashMapUnmanaged(V)) void {
+    var it = m.keyIterator();
+    while (it.next()) |k| gpa.free(k.*);
+    m.deinit(gpa);
+}
+
+// ---- disclosure motion (`SidebarDisclosureMotion`, `render_sidebar_disclosure_body`) ----
+
+/// `motion::COLLAPSE` (180 ms, CSS ease-out) plus the 120 ms settle grace.
+pub const collapse_ns: u64 = 180 * std.time.ns_per_ms;
+const tween_grace_ns: u64 = 120 * std.time.ns_per_ms;
+
+pub const Motion = struct {
+    epoch: u64,
+    from: f32,
+    to: f32,
+    started: u64,
+
+    pub fn animating(m: Motion, now: u64) bool {
+        return now -| m.started < collapse_ns + tween_grace_ns;
+    }
+
+    /// The tweened height right now (`current`).
+    pub fn current(m: Motion, now: u64) f32 {
+        const raw = @min(@as(f32, @floatFromInt(now -| m.started)) / @as(f32, @floatFromInt(collapse_ns)), 1);
+        const t = zpui.easing.css_ease_out.apply(raw);
+        return m.from + (m.to - m.from) * t;
+    }
+};
+
+/// `begin_sidebar_disclosure_motion`: tween from the live height (or
+/// `resting`) to `target`; each restart bumps the epoch.
+pub fn beginMotion(self: *Sidebar, id: []const u8, resting: f32, target: f32, now: u64) void {
+    const prev = self.sec.motions.get(id);
+    const from = if (prev) |m| (if (m.animating(now)) m.current(now) else resting) else resting;
+    const epoch = if (prev) |m| m.epoch + 1 else 1;
+    const gop = self.sec.motions.getOrPut(self.gpa, id) catch return;
+    if (!gop.found_existing) gop.key_ptr.* = self.gpa.dupe(u8, id) catch {
+        _ = self.sec.motions.remove(id);
+        return;
+    };
+    gop.value_ptr.* = .{ .epoch = epoch, .from = from, .to = target, .started = now };
+}
+
+fn liveMotion(self: *const Sidebar, id: []const u8, now: u64) ?Motion {
+    const m = self.sec.motions.get(id) orelse return null;
+    return if (m.animating(now)) m else null;
+}
+
+/// A collapsing section keeps rendering its rows until the tween ends.
+pub fn sectionAnimating(self: *const Sidebar, id: []const u8, now: u64) bool {
+    return liveMotion(self, id, now) != null;
+}
+
+const BodyTween = struct { from: f32, to: f32, full: f32 };
+
+fn bodyFrame(c: BodyTween, el: zpui.Div, t: f32) zpui.Div {
+    const h = c.from + (c.to - c.from) * t;
+    const reveal = std.math.clamp(h / @max(c.full, 1), 0, 1);
+    return el.h(px(h)).opacity(0.35 + 0.65 * reveal).relative().top(px(-3 * (1 - reveal)));
+}
+
+fn chevronFrame(c: [2]f32, el: zpui.elements.Svg, t: f32) zpui.elements.Svg {
+    const reveal = c[0] + (c[1] - c[0]) * t;
+    return el.withTransformation(.rotate(reveal * std.math.pi / 2.0));
+}
+
+/// `sidebar_disclosure_chevron`: the right chevron turning a quarter turn open.
+fn disclosureChevron(self: *const Sidebar, id: []const u8, key_hash: u64, open: bool, tone: zpui.Hsla, now: u64) zpui.AnyElement {
+    const chevron = icon.of(.alt_arrow_right, 12, tone);
+    const frame = div().flexNone().size(px(12));
+    if (liveMotion(self, id, now)) |m| {
+        const denom = @max(@max(m.from, m.to), 1);
+        const ctx = [2]f32{ std.math.clamp(m.from / denom, 0, 1), std.math.clamp(m.to / denom, 0, 1) };
+        return zpui.intoAnyElement(frame.child(zpui.withAnimationCtx(chevron, .{ "sidebar-chevron", key_hash +% m.epoch }, zpui.Animation.ms(180).withEasing(zpui.easing.css_ease_out), ctx, chevronFrame)));
+    }
+    const resting: f32 = if (open) 1 else 0;
+    return zpui.intoAnyElement(frame.child(chevron.withTransformation(.rotate(resting * std.math.pi / 2.0))));
+}
 
 fn dropDialog(st: *State, gpa: std.mem.Allocator, app: *App) void {
     if (st.dialog) |*d| {
@@ -179,8 +286,9 @@ pub fn change(self: *Sidebar, ch: sections.SectionChange, cx: *Ctx) bool {
             return false;
         },
     }
-    // Pins are device-local in this client: a chat that joins a section (or
-    // returns to Sessions) leaves the pin list, as the engine's projection does.
+    // The shown pin list follows the projection on the next frame; mirror it
+    // now so handlers in the same frame agree (a chat joining a section
+    // leaves the pins).
     if (ch == .assign) {
         const p = prefs_mod.mut(cx);
         if (ch.assign.sectionId != null and p.isPinned(ch.assign.sessionId)) p.setPinned(ch.assign.sessionId, false);
@@ -189,19 +297,102 @@ pub fn change(self: *Sidebar, ch: sections.SectionChange, cx: *Ctx) bool {
     return true;
 }
 
+/// `apply_sidebar_pin_change` for pin / move / unpin: true when applied
+/// (or queued). The shown list (`Prefs.pins`) is updated optimistically.
+pub fn changePin(self: *Sidebar, ch: sections.PinChange, cx: *Ctx) bool {
+    var scratch: std.heap.ArenaAllocator = .init(self.gpa);
+    defer scratch.deinit();
+    const a = scratch.allocator();
+    const shown = prefs_mod.get(cx).pins.items;
+    const shown_c = a.alloc([]const u8, shown.len) catch return false;
+    for (shown, shown_c) |x, *y| y.* = x;
+    const ws = self.state.read(cx).workspace.read(cx);
+    if (ws.workspace_scope == null) {
+        // No workspace scope (fixtures, before the engine reports one): the
+        // device-local list is the only source.
+        var next: std.ArrayList([]const u8) = .empty;
+        next.appendSlice(a, shown_c) catch return false;
+        sections.projectPins(a, &next, ch) catch return false;
+        setShownPins(self, next.items, cx);
+        cx.notify();
+        return true;
+    }
+    const r = self.sec.ctl.changePin(ch, shown_c, env(self, cx));
+    switch (r) {
+        .applied => {},
+        .send => sendHead(self, cx),
+        .refused => return false,
+        .notice => |n| {
+            self.setNotice(n, cx);
+            return false;
+        },
+    }
+    var next: std.ArrayList([]const u8) = .empty;
+    next.appendSlice(a, shown_c) catch return true;
+    sections.projectPins(a, &next, ch) catch return true;
+    setShownPins(self, next.items, cx);
+    cx.notify();
+    return true;
+}
+
+fn setShownPins(self: *Sidebar, ids: []const []const u8, cx: *Ctx) void {
+    const p = prefs_mod.mut(cx);
+    var owned: std.ArrayList([]u8) = .empty;
+    for (ids) |id| owned.append(self.gpa, self.gpa.dupe(u8, id) catch continue) catch {};
+    for (p.pins.items) |x| self.gpa.free(x);
+    p.pins.deinit(self.gpa);
+    p.pins = owned;
+}
+
+/// Per frame: the shown pins are the raw pins (overlay / local settings /
+/// synced snapshot) minus section members (`active_sidebar_pins`). Without
+/// a workspace scope the device-local list stays as it is.
+pub fn syncPins(self: *Sidebar, secs: []const Section, cx: *Ctx) void {
+    var scratch: std.heap.ArenaAllocator = .init(self.gpa);
+    defer scratch.deinit();
+    const a = scratch.allocator();
+    const raw = (self.sec.ctl.rawPins(a, env(self, cx)) catch return) orelse return;
+    var shown: std.ArrayList([]const u8) = .empty;
+    for (raw) |id| if (sections.sectionOf(secs, id) == null) shown.append(a, id) catch return;
+    const cur = prefs_mod.get(cx).pins.items;
+    var same = cur.len == shown.items.len;
+    if (same) for (cur, shown.items) |x, y| if (!std.mem.eql(u8, x, y)) {
+        same = false;
+        break;
+    };
+    if (!same) setShownPins(self, shown.items, cx);
+}
+
 fn sendHead(self: *Sidebar, cx: *Ctx) void {
     const head = self.sec.ctl.head() orelse return;
     const ws = self.state.read(cx).engine;
-    const op: protocol.Mutate = .{ .changeSidebarPin = .{ .change = .{ .section = .{ .change = head } } } };
+    const op: protocol.Mutate = .{ .changeSidebarPin = .{ .change = head } };
     model.EngineState.request(ws, cx, Sidebar, cx.entityId(), .Mutate, op, onWriteReply) catch {
         // The connection went away between queueing and sending.
         const id = self.sec.ctl.pendingId() orelse return;
         const f = self.sec.ctl.finish(id, .{ .err = .{ .kind = error.Closed, .message = "Engine not connected" } }, env(self, cx));
         afterFinish(self, f, cx);
+        return;
     };
+    // 20 s without a reply: stop the queue (the request may still run, so no
+    // later intent may overtake it).
+    self.sec.write_timer.cancel();
+    self.sec.write_timer_id = self.sec.ctl.pendingId() orelse 0;
+    self.sec.write_timer = cx.timer(sections.write_timeout_ns, onWriteTimeout) catch .none;
+}
+
+fn onWriteTimeout(self: *Sidebar, cx: *Ctx) void {
+    self.sec.write_timer.detach();
+    self.sec.write_timer = .none;
+    if (self.sec.ctl.markUnconfirmed(self.sec.write_timer_id, env(self, cx))) {
+        self.setNotice(sections.notice_unconfirmed, cx);
+        cx.notify();
+    }
 }
 
 fn onWriteReply(self: *Sidebar, result: model.engine_state.CallResult, cx: *Ctx) void {
+    self.sec.write_timer.cancel();
+    self.sec.write_timer = .none;
     const id = self.sec.ctl.pendingId() orelse return;
     const f = self.sec.ctl.finish(id, result, env(self, cx));
     afterFinish(self, f, cx);
@@ -209,7 +400,7 @@ fn onWriteReply(self: *Sidebar, result: model.engine_state.CallResult, cx: *Ctx)
 
 fn afterFinish(self: *Sidebar, f: sections.Controller.Finish, cx: *Ctx) void {
     if (f.clear_notice) if (self.notice) |n| if (std.mem.startsWith(u8, n, "Couldn't save sidebar changes") or
-        std.mem.eql(u8, n, sections.notice_waiting))
+        std.mem.eql(u8, n, sections.notice_waiting) or std.mem.eql(u8, n, sections.notice_unconfirmed))
     {
         self.setNotice(null, cx);
     };
@@ -337,8 +528,8 @@ pub fn renderDialog(self: *Sidebar, window: *Window, theme_in: *const Theme, cx:
         .child(div().mt(px(16)).h(px(36)).px(px(12)).flex().itemsCenter().rounded(px(8)).border1().borderColor(theme.border)
             .bg(theme.bg).child(div().flex1().minW0().child(d.input)))
         .child(div().mt(px(16)).flex().justifyEnd().gap(px(8))
-            .child(dialog.btnGhost(theme, "Cancel").id("section-cancel").onClick(cx.listener(onDialogCancel)))
-            .child(dialog.btnPrimary(theme, if (edit) "Save" else "Create section").id("section-save")
+            .child(dialog.btnGhost(theme, "Cancel").id("section-cancel").role(.button).onClick(cx.listener(onDialogCancel)))
+            .child(dialog.btnPrimary(theme, if (edit) "Save" else "Create section").id("section-save").role(.button)
             .opacity(if (valid) 1.0 else 0.5).onClick(cx.listener(onDialogSave))));
     return dialog.modal(window, card, cx.listener(onDialogScrim));
 }
@@ -367,14 +558,19 @@ fn onHeaderClick(self: *Sidebar, ix: usize, _: *const zpui.ClickEvent, _: *Windo
     };
     const owned = self.gpa.dupe(u8, id) catch return;
     defer self.gpa.free(owned);
-    _ = change(self, .{ .collapse = .{ .id = owned, .collapsed = open } }, cx);
+    const height = self.sec.body_heights.get(owned) orelse 0;
+    if (change(self, .{ .collapse = .{ .id = owned, .collapsed = open } }, cx))
+        beginMotion(self, owned, if (open) height else 0, if (open) 0 else height, cx.app.executor.now());
 }
 
-fn onMenuButton(self: *Sidebar, ix: usize, ev: *const zpui.ClickEvent, _: *Window, cx: *Ctx) void {
+fn onMenuButton(self: *Sidebar, ix: usize, ev: *const zpui.ClickEvent, window: *Window, cx: *Ctx) void {
     cx.stopPropagation();
     const id = idAt(self, ix) orelse return;
     if (self.sec.menu) |m| self.gpa.free(m.id);
     self.sec.menu = .{ .id = self.gpa.dupe(u8, id) catch return, .pos = ev.mousePosition() orelse .{ .x = 0, .y = 0 } };
+    self.sec.menu_active = null;
+    if (self.sec.menu_focus == null) self.sec.menu_focus = cx.focusHandle();
+    window.focus(self.sec.menu_focus.?);
     cx.notify();
 }
 
@@ -388,16 +584,28 @@ fn onMenuOutside(self: *Sidebar, _: *const zpui.input.MouseDownEvent, _: *Window
     closeMenu(self, cx);
 }
 
+/// The menu's keys: Escape closes, ↑/↓ move the highlight (wrapping),
+/// Enter runs the highlighted action.
 fn onMenuKey(self: *Sidebar, ev: *const zpui.input.KeyDownEvent, _: *Window, cx: *Ctx) void {
-    if (std.mem.eql(u8, ev.keystroke.key, "escape")) {
-        cx.stopPropagation();
+    const key = ev.keystroke.key;
+    if (std.mem.eql(u8, key, "escape")) {
         closeMenu(self, cx);
-    }
+    } else if (std.mem.eql(u8, key, "up") or std.mem.eql(u8, key, "down")) {
+        self.sec.menu_active = menu_nav.menuStep(self.sec.menu_active, 3, if (std.mem.eql(u8, key, "up")) -1 else 1);
+    } else if (std.mem.eql(u8, key, "enter")) {
+        if (self.sec.menu_active) |action| activateMenu(self, @intCast(action), cx);
+    } else return;
+    cx.stopPropagation();
+    cx.notify();
+}
+
+fn onMenuAction(self: *Sidebar, action: u8, _: *const zpui.ClickEvent, _: *Window, cx: *Ctx) void {
+    cx.stopPropagation();
+    activateMenu(self, action, cx);
 }
 
 /// `activate_section_menu`: 0 Edit section, 1 Archive all, 2 Delete.
-fn onMenuAction(self: *Sidebar, action: u8, _: *const zpui.ClickEvent, _: *Window, cx: *Ctx) void {
-    cx.stopPropagation();
+fn activateMenu(self: *Sidebar, action: u8, cx: *Ctx) void {
     const m = self.sec.menu orelse return;
     self.sec.menu = null;
     defer self.gpa.free(m.id);
@@ -425,8 +633,9 @@ pub fn renderMenu(self: *Sidebar, theme_in: *const Theme, cx: *Ctx) ?zpui.AnyEle
     }
     const theme = zpui.window.arena_mod.current().create(Theme, theme_in.forPopup());
     var card = ui.popover.card(theme).w(px(180)).onMouseDownOut(cx.listener(onMenuOutside)).onKeyDown(cx.listener(onMenuKey));
+    if (self.sec.menu_focus) |f| card = card.trackFocus(f);
     for ([_][]const u8{ "Edit section", "Archive all", "Delete" }, 0..) |label, i| {
-        card = card.child(ui.popover.menuRow(theme, false).id(.{ "section-action", i })
+        card = card.child(ui.popover.menuRow(theme, self.sec.menu_active == i).id(.{ "section-action", i }).role(.menu_item)
             .onClick(cx.listenerWith(@as(u8, @intCast(i)), onMenuAction)).child(label));
     }
     return ui.popover.anchoredAt(m.pos, card);
@@ -485,9 +694,16 @@ fn reportArchive(self: *Sidebar, cx: *Ctx) void {
 
 // ---- rendering ----------------------------------------------------------------------------
 
-/// `render_custom_sidebar_section`. `rows` are already-rendered row elements.
-pub fn renderSection(self: *Sidebar, ix: usize, section: Section, body_rows: zpui.Div, empty: bool, extra_gap: ?zpui.AnyElement, theme: *const Theme, cx: *Ctx) zpui.StatefulDiv {
+/// `render_custom_sidebar_section`. `rows_height` is the members' rows
+/// plus their gaps; the body tweens its height on open / close.
+pub fn renderSection(self: *Sidebar, ix: usize, section: Section, body_rows: zpui.Div, empty: bool, rows_height: f32, extra_gap: ?zpui.AnyElement, extra: f32, theme: *const Theme, cx: *Ctx) zpui.StatefulDiv {
     const open = !section.collapsed;
+    const now = cx.app.executor.now();
+    const key_hash = std.hash.Wyhash.hash(0, section.id);
+    const height = 4 + extra + (if (empty) @as(f32, 40) else rows_height);
+    if (self.sec.body_heights.getPtr(section.id)) |h| h.* = height else if (self.gpa.dupe(u8, section.id)) |k| {
+        self.sec.body_heights.put(self.gpa, k, height) catch self.gpa.free(k);
+    } else |_| {}
     const tone = theme.text_muted.opacity(0.5);
     const show_menu = (if (self.sec.header_hover) |h| std.mem.eql(u8, h, section.id) else false) or
         (if (self.sec.menu) |m| std.mem.eql(u8, m.id, section.id) else false);
@@ -501,17 +717,22 @@ pub fn renderSection(self: *Sidebar, ix: usize, section: Section, body_rows: zpu
         .onClick(cx.listenerWith(ix, onMenuButton))
         .tooltipWith(@as([]const u8, "Section options"), ui.tooltip.build)
         .child(icon.of(.more_horizontal, 14, theme.text_muted)));
-    header = header.child(icon.of(if (open) .alt_arrow_down else .alt_arrow_right, 12, tone));
+    header = header.child(disclosureChevron(self, section.id, key_hash, open, tone, now));
     var out = div().id(.{ "custom-section", ix }).wFull().flex().flexCol().pt(px(12))
         .onDragMove(SessionDrag, cx.listenerWith(Target{ .section = ix }, onGroupDragMove))
         .onDrop(SessionDrag, cx.listenerWith(Target{ .section = ix }, onGroupDrop))
         .child(header);
-    if (open) {
+    const motion = liveMotion(self, section.id, now);
+    if (open or motion != null) {
         var content = div().wFull().flex().flexCol().pt(px(4)).gap(px(2));
         if (empty) content = content.child(div().h(px(40)).px(px(zt.layout.space_sm)).flex().itemsCenter()
             .textSize(rems(12)).textColor(tone).child("Drop sessions here"));
         content = content.child(body_rows).child(extra_gap);
-        out = out.child(content);
+        if (motion) |m| {
+            const frame = div().wFull().flexNone().overflowHidden().child(content);
+            const tween: BodyTween = .{ .from = m.from, .to = m.to, .full = height };
+            out = out.child(zpui.withAnimationCtx(frame, .{ "sidebar-disclosure", key_hash +% m.epoch }, zpui.Animation.ms(180).withEasing(zpui.easing.css_ease_out), tween, bodyFrame));
+        } else out = out.child(content);
     }
     return out;
 }
@@ -547,10 +768,19 @@ pub fn onListDragMove(self: *Sidebar, ev: *const zpui.DragMoveEvent(SessionDrag)
         const id = self.rowId(ev.value.ix) orelse return;
         if (self.sec.returning) |r| self.gpa.free(r.chat_id);
         self.sec.returning = null;
-        self.sec.transfer = .{ .chat_id = self.gpa.dupe(u8, id) catch return, .height = ev.value.height, .pointer_y = ev.event.position.y, .grab_y = grab };
+        self.sec.transfer = .{
+            .chat_id = self.gpa.dupe(u8, id) catch return,
+            .height = ev.value.height,
+            .pointer_y = ev.event.position.y,
+            .grab_y = grab,
+            .pinned = ev.value.pinned_from != null,
+            .source = sourceOf(self, id, cx),
+        };
         self.hovered = null;
+        startDragLoop(self, cx);
     }
     const t = &self.sec.transfer.?;
+    t.pointer_x = ev.event.position.x;
     t.pointer_y = ev.event.position.y;
     t.grab_y = grab;
     if (t.origin_top == null) t.origin_top = contentY(self, ev.event.position.y - grab);
@@ -577,6 +807,101 @@ pub fn onGroupDragMove(self: *Sidebar, target: Target, ev: *const zpui.DragMoveE
 fn contentY(self: *const Sidebar, y: f32) f32 {
     const b = self.scroll.bounds();
     return y - b.origin.y - self.scroll.offset().y;
+}
+
+/// The group `chat_id` is shown in (`source_group`).
+fn sourceOf(self: *Sidebar, chat_id: []const u8, cx: *Ctx) Target {
+    if (prefs_mod.get(cx).isPinned(chat_id)) return .pinned;
+    var scratch: std.heap.ArenaAllocator = .init(self.gpa);
+    defer scratch.deinit();
+    const secs = active(self, scratch.allocator(), cx);
+    return if (sections.sectionOf(secs, chat_id)) |i| .{ .section = i } else .regular;
+}
+
+// ---- drag frame loop + edge autoscroll (`begin_sidebar_session_transfer`) --------------
+
+/// `SIDEBAR_DRAG_SCROLL_BAND` / `SIDEBAR_DRAG_SCROLL_MAX` / `_FRAME_MS`.
+pub const drag_scroll_band: f32 = 48;
+pub const drag_scroll_max: f32 = 12;
+const drag_frame_ns: u64 = 16 * std.time.ns_per_ms;
+
+/// `pinned_drag_scroll_delta`: px per frame toward the nearer edge,
+/// proportional to how deep the pointer sits in the 48px band.
+pub fn dragScrollDelta(pointer_y: f32, top: f32, bottom: f32) f32 {
+    if (bottom <= top) return 0;
+    if (pointer_y < top + drag_scroll_band)
+        return -drag_scroll_max * std.math.clamp((top + drag_scroll_band - pointer_y) / drag_scroll_band, 0, 1);
+    if (pointer_y > bottom - drag_scroll_band)
+        return drag_scroll_max * std.math.clamp((pointer_y - (bottom - drag_scroll_band)) / drag_scroll_band, 0, 1);
+    return 0;
+}
+
+fn startDragLoop(self: *Sidebar, cx: *Ctx) void {
+    self.sec.scroll_task.cancel();
+    self.sec.scroll_task = cx.timer(drag_frame_ns, onDragFrame) catch .none;
+}
+
+/// One frame of the transfer loop: layout keeps animating while the pointer
+/// rests, and a non-pinned row scrolls the list near the viewport edges
+/// (pinned rows keep their sibling-slide reorder).
+fn onDragFrame(self: *Sidebar, cx: *Ctx) void {
+    self.sec.scroll_task.detach();
+    self.sec.scroll_task = .none;
+    const t = self.sec.transfer orelse return;
+    if (!cx.app.hasActiveDrag()) return;
+    cx.notify();
+    if (!t.pinned) {
+        const b = self.scroll.bounds();
+        const inside = t.pointer_x >= b.origin.x and t.pointer_x <= b.origin.x + b.size.width and
+            t.pointer_y >= b.origin.y and t.pointer_y <= b.origin.y + b.size.height;
+        if (inside) {
+            const delta = dragScrollDelta(t.pointer_y, b.origin.y, b.origin.y + b.size.height);
+            const off = self.scroll.offset();
+            const top = -off.y;
+            const next = std.math.clamp(top + delta, 0, @max(self.scroll.maxOffset().y, 0));
+            if (next != top) self.scroll.setOffset(.{ .x = off.x, .y = -next });
+        }
+    }
+    startDragLoop(self, cx);
+}
+
+/// The height a destination group's gap opens to (0 when not previewed).
+pub fn extraHeight(self: *const Sidebar, target: Target) f32 {
+    const t = self.sec.transfer orelse return 0;
+    const p = t.preview orelse return 0;
+    return if (std.meta.eql(p, target)) t.height + 2 else 0;
+}
+
+fn collapsesFrom(src: Target, target: ?Target) bool {
+    const p = target orelse return false;
+    return !std.meta.eql(p, src);
+}
+
+/// The moving row's vacated slot: it collapses (row + the list gap it
+/// shares) while another group previews the drop, so the vacancy moves to
+/// the destination instead of leaving two holes; it re-opens when the
+/// preview returns or the row slides home.
+pub fn sourceSlot(self: *const Sidebar, h: f32, gap: f32) zpui.AnyElement {
+    const full = h + gap;
+    const Slot = struct {
+        fn f(c: [3]f32, el: zpui.Div, k: f32) zpui.Div {
+            const left = c[0] - (c[1] + (c[2] - c[1]) * k);
+            return el.h(px(@max(left, 0))).mb(px(@min(left, 0)));
+        }
+    };
+    const anim = zpui.Animation.ms(150).withEasing(zpui.easing.ease_out_quint);
+    if (self.sec.transfer) |t| {
+        const src = t.source orelse return zpui.intoAnyElement(div().h(px(h)).flexNone());
+        const now = collapsesFrom(src, t.preview);
+        const was = collapsesFrom(src, t.prev);
+        if (!now and !was) return zpui.intoAnyElement(div().h(px(h)).flexNone());
+        const range = [3]f32{ h, if (was) full else 0, if (now) full else 0 };
+        return zpui.intoAnyElement(zpui.withAnimationCtx(div().flexNone(), .{ "session-source-slot", t.epoch }, anim, range, Slot.f));
+    }
+    if (self.sec.returning) |r| if (r.removed > 0) {
+        return zpui.intoAnyElement(zpui.withAnimationCtx(div().flexNone(), .{ "session-source-return", r.epoch }, anim, [3]f32{ h, full, 0 }, Slot.f));
+    };
+    return zpui.intoAnyElement(div().h(px(h)).flexNone());
 }
 
 /// The extra gap a destination group opens for the incoming row.
@@ -620,11 +945,14 @@ pub fn cancelTransfer(self: *Sidebar, cx: *Ctx) void {
     const t = self.sec.transfer orelse return;
     self.sec.transfer = null;
     self.pin_drag = null;
+    self.sec.scroll_task.cancel();
+    self.sec.scroll_task = .none;
     const from = contentY(self, t.pointer_y - t.grab_y);
     if (t.origin_top) |to| if (@abs(to - from) > 0.5 and !reducedMotion(cx)) {
         if (self.sec.returning) |r| self.gpa.free(r.chat_id);
         self.sec.return_epoch += 1;
-        self.sec.returning = .{ .chat_id = t.chat_id, .height = t.height, .from = from, .to = to, .epoch = self.sec.return_epoch };
+        const removed: f32 = if (t.source) |src| (if (collapsesFrom(src, t.preview)) t.height + 2 else 0) else 0;
+        self.sec.returning = .{ .chat_id = t.chat_id, .height = t.height, .from = from, .to = to, .epoch = self.sec.return_epoch, .removed = removed };
         self.sec.return_task.cancel();
         self.sec.return_task = cx.timer(170 * std.time.ns_per_ms, onReturned) catch .none;
         cx.notify();
@@ -704,36 +1032,46 @@ pub fn finishTransfer(self: *Sidebar, payload: *const SessionDrag, target: Targe
     }
     if (self.sec.transfer) |t| self.gpa.free(t.chat_id);
     self.sec.transfer = null;
+    self.sec.scroll_task.cancel();
+    self.sec.scroll_task = .none;
     self.pin_drag = null;
     cx.notify();
 }
 
 /// Pin `chat_id` before the visible pin at `index` (or after the last).
 fn pinAt(self: *Sidebar, chat_id: []const u8, index: usize, cx: *Ctx) void {
-    const p = prefs_mod.mut(cx);
-    if (p.isPinned(chat_id)) return;
+    if (prefs_mod.get(cx).isPinned(chat_id)) return;
     const n = @min(self.pinned_count, self.row_ids.items.len);
     const before: ?[]const u8 = if (index < n) self.row_ids.items[index] else null;
     const after: ?[]const u8 = if (index > 0 and index - 1 < n) self.row_ids.items[index - 1] else if (n > 0 and before == null) self.row_ids.items[n - 1] else null;
-    const copy = self.gpa.dupe(u8, chat_id) catch return;
-    const at = if (before) |b| p.pinIndex(b) orelse p.pins.items.len else if (after) |a| (if (p.pinIndex(a)) |i| i + 1 else p.pins.items.len) else p.pins.items.len;
-    p.pins.insert(self.gpa, @min(at, p.pins.items.len), copy) catch {
-        self.gpa.free(copy);
-        return;
-    };
-    const ws = self.state.read(cx).workspace;
-    ws.update(cx, model.WorkspaceStore.mutate, .{protocol.Mutate{ .changeSidebarPin = .{ .change = .{ .pin = .{
-        .sessionId = chat_id,
-        .after = after,
-        .before = before,
-    } } } }}) catch {};
+    _ = changePin(self, .{ .pin = .{ .sessionId = chat_id, .after = after, .before = before } }, cx);
 }
 
 fn unpin(self: *Sidebar, chat_id: []const u8, cx: *Ctx) void {
-    const p = prefs_mod.mut(cx);
-    p.setPinned(chat_id, false);
-    const ws = self.state.read(cx).workspace;
-    ws.update(cx, model.WorkspaceStore.mutate, .{protocol.Mutate{ .changeSidebarPin = .{ .change = .{ .unpin = .{ .sessionId = chat_id } } } }}) catch {};
+    _ = changePin(self, .{ .unpin = .{ .sessionId = chat_id } }, cx);
+}
+
+/// `set_chat_pinned` (the row menu's Pin / Unpin).
+pub fn setChatPinned(self: *Sidebar, chat_id: []const u8, pinned: bool, cx: *Ctx) void {
+    if (prefs_mod.get(cx).isPinned(chat_id) == pinned) return;
+    var scratch: std.heap.ArenaAllocator = .init(self.gpa);
+    defer scratch.deinit();
+    const a = scratch.allocator();
+    // Pinned but hidden by a section: clearing the membership shows the pin.
+    const raw: ?[]const []const u8 = self.sec.ctl.rawPins(a, env(self, cx)) catch null;
+    if (pinned) if (raw) |ids| for (ids) |id| if (std.mem.eql(u8, id, chat_id)) {
+        _ = change(self, .{ .assign = .{ .sessionId = chat_id, .sectionId = null } }, cx);
+        return;
+    };
+    const shown = prefs_mod.get(cx).pins.items;
+    const last: ?[]const u8 = if (shown.len > 0) a.dupe(u8, shown[shown.len - 1]) catch null else null;
+    const ok = if (pinned)
+        changePin(self, .{ .pin = .{ .sessionId = chat_id, .after = last, .before = null } }, cx)
+    else
+        changePin(self, .{ .unpin = .{ .sessionId = chat_id } }, cx);
+    const scope = self.state.read(cx).workspace.read(cx).workspace_scope;
+    const local = scope == null or scope.? == .local;
+    if (ok and pinned and local) onPinned(self, chat_id, true, cx);
 }
 
 /// `set_chat_pinned`: pinning takes the chat out of its section.
@@ -743,4 +1081,13 @@ pub fn onPinned(self: *Sidebar, chat_id: []const u8, pinned: bool, cx: *Ctx) voi
     defer scratch.deinit();
     const secs = active(self, scratch.allocator(), cx);
     if (sections.sectionOf(secs, chat_id) != null) _ = change(self, .{ .assign = .{ .sessionId = chat_id, .sectionId = null } }, cx);
+}
+
+test "edge autoscroll is proportional inside the band (spaces.rs pinned_edge_scroll)" {
+    const t = std.testing;
+    try t.expectEqual(@as(f32, 0), dragScrollDelta(200, 100, 300));
+    try t.expectEqual(@as(f32, -6), dragScrollDelta(124, 100, 300));
+    try t.expectEqual(@as(f32, 6), dragScrollDelta(276, 100, 300));
+    try t.expectEqual(@as(f32, -12), dragScrollDelta(90, 100, 300));
+    try t.expectEqual(@as(f32, 0), dragScrollDelta(150, 300, 100));
 }

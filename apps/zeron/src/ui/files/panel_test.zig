@@ -232,3 +232,61 @@ test "rename and delete through the local backend" {
     try testing.expectEqual(@as(usize, 1), h.rec.read(h.app).deleted);
     try testing.expectEqualStrings("src NOTES.md ", try h.rowPaths(arena.allocator()));
 }
+
+/// Row `ix`'s center: the 38px header, the 24px "Workspace root" row, then 27px rows.
+fn rowCenter(ix: usize) zpui.Point(f32) {
+    return .{ .x = 120, .y = panel_mod.header_height + panel_mod.root_row_height + panel_mod.tree_row_height * (@as(f32, @floatFromInt(ix)) + 0.5) };
+}
+
+test "a tree row dragged onto a folder moves it there (files/drag.rs)" {
+    var h = try Harness.init();
+    defer h.deinit();
+    const Own = struct {
+        fn f(p: *FilesPanel, c: *Context(FilesPanel)) void {
+            p.setDragOwner("chat-a", c);
+        }
+    };
+    _ = h.panel.update(h.app, Own.f, .{});
+    h.settle();
+    // rows: docs, src, README.md
+    const start = rowCenter(2);
+    const end = rowCenter(1);
+    _ = h.tw().simulateInput(.{ .mouse_down = .{ .button = .left, .position = start } });
+    _ = h.tw().simulateInput(.{ .mouse_move = .{ .position = .{ .x = start.x + 9, .y = start.y }, .pressed_button = .left } });
+    h.settle();
+    const d = h.app.activeDrag(panel_mod.WorkspacePathDrag) orelse return error.NoDrag;
+    try testing.expectEqualStrings("README.md", d.path());
+    try testing.expect(d.belongsTo("chat-a"));
+    try testing.expect(d.source == .tree);
+    _ = h.tw().simulateInput(.{ .mouse_move = .{ .position = end, .pressed_button = .left } });
+    h.settle();
+    try testing.expectEqualStrings("src", h.panel.read(h.app).tree_drag.destination.?);
+    _ = h.tw().simulateInput(.{ .mouse_up = .{ .button = .left, .position = end } });
+    h.settle();
+    try testing.expectEqual(@as(usize, 1), h.rec.read(h.app).renamed);
+    try testing.expect(h.panel.read(h.app).tree_drag.payload == null);
+    var buf: [64]u8 = undefined;
+    _ = try h.tmp.dir.readFile(testing.io, "src/README.md", &buf);
+}
+
+test "dropping on the folder it already lives in is not a move" {
+    var h = try Harness.init();
+    defer h.deinit();
+    const Own = struct {
+        fn f(p: *FilesPanel, c: *Context(FilesPanel)) void {
+            p.setDragOwner("chat-a", c);
+        }
+    };
+    _ = h.panel.update(h.app, Own.f, .{});
+    h.settle();
+    const start = rowCenter(2); // README.md (root)
+    _ = h.tw().simulateInput(.{ .mouse_down = .{ .button = .left, .position = start } });
+    _ = h.tw().simulateInput(.{ .mouse_move = .{ .position = .{ .x = start.x + 9, .y = start.y }, .pressed_button = .left } });
+    const root_row: zpui.Point(f32) = .{ .x = 120, .y = panel_mod.header_height + 12 };
+    _ = h.tw().simulateInput(.{ .mouse_move = .{ .position = root_row, .pressed_button = .left } });
+    h.settle();
+    try testing.expect(h.panel.read(h.app).tree_drag.destination == null);
+    _ = h.tw().simulateInput(.{ .mouse_up = .{ .button = .left, .position = root_row } });
+    h.settle();
+    try testing.expectEqual(@as(usize, 0), h.rec.read(h.app).renamed);
+}

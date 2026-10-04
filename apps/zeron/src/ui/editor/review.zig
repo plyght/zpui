@@ -268,6 +268,23 @@ pub fn openDraft(ed: *FileEditor, line: u32, window: ?*Window, cx: *Context(File
     cx.notify();
 }
 
+/// `open_markdown_comment`: a draft from the Markdown preview's gutter,
+/// only while the buffer is editable and still exactly what the preview
+/// parsed (`source_hash`).
+pub fn openFromPreview(ed: *FileEditor, line: u32, source_hash: u64, window: *Window, cx: *Context(FileEditor)) void {
+    if (!enabled(ed)) return;
+    const text = ed.text(ed.gpa) catch return;
+    defer ed.gpa.free(text);
+    if (std.hash.Wyhash.hash(0, text) != source_hash) return;
+    openDraft(ed, line, window, cx);
+}
+
+/// The preview's view of this editor's comments (`set_comments`).
+pub fn previewDraft(ed: *const FileEditor) ?struct { line: u32, input: Entity(input.TextInput), editing: bool } {
+    const d = ed.review.draft orelse return null;
+    return .{ .line = d.line, .input = d.input, .editing = d.editing_id != null };
+}
+
 /// `edit_editor_comment`.
 pub fn editComment(ed: *FileEditor, id: []const u8, window: *Window, cx: *Context(FileEditor)) void {
     editCommentIn(ed, id, window, cx);
@@ -405,7 +422,8 @@ pub fn overlays(ed: *FileEditor, theme: *const Theme, cx: *Context(FileEditor)) 
         const commented: ?*const cm.ReviewComment = for (list) |*c| {
             if (c.line == line) break c;
         } else null;
-        const cell = div().id(.{ "file-comment-gutter", @as(usize, line) }).absolute().left(px(0)).top(px(top)).w(px(gutter)).h(px(lh))
+        const cell = div().id(.{ "file-comment-gutter", @as(usize, line) }).role(.button)
+            .ariaLabel(if (commented != null) zpui.fmt("Open comment on line {d}", .{line}) else zpui.fmt("Comment on line {d}", .{line})).absolute().left(px(0)).top(px(top)).w(px(gutter)).h(px(lh))
             .flex().itemsCenter().justifyCenter().cursorPointer().onMouseDown(.left, stopDown);
         if (commented) |c| {
             const id = a.dupe(u8, c.id) catch continue;

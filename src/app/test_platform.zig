@@ -223,6 +223,19 @@ pub const TestPlatform = struct {
     sounds_played: usize = 0,
     /// Reported by `displays` (default: one 1920×1080 primary display).
     display_list: ?[]const pf.Display = null,
+    // -- global hotkey + window capture simulation (Appshots) ---------------------------
+    /// The registered hotkey (`setGlobalHotkey`; key copied into `hotkey_key`).
+    hotkey: ?pf.GlobalHotkey = null,
+    hotkey_key: [32]u8 = undefined,
+    hotkey_handler: ?pf.GlobalHotkeyHandler = null,
+    hotkey_sets: usize = 0,
+    /// Reported by `windowCaptureCapabilities`.
+    capture_capabilities: pf.WindowCaptureCapabilities = .{ .system = .linux_x11, .global_hotkey = .ready, .window_capture = .ready, .application_text = .ready },
+    /// Captures waiting for `finishCapture` (FIFO).
+    pending_captures: std.ArrayList(struct { gpa: Allocator, done: pf.WindowCaptureCallback }) = .empty,
+    captures_requested: usize = 0,
+    access_requests: std.ArrayList(pf.CaptureAccess) = .empty,
+    foreground_requests: usize = 0,
 
     pub fn create(gpa: Allocator) Allocator.Error!*TestPlatform {
         const self = try gpa.create(TestPlatform);
@@ -232,6 +245,8 @@ pub const TestPlatform = struct {
 
     pub fn destroy(self: *TestPlatform) void {
         self.app_commands.deinit(self.gpa);
+        self.pending_captures.deinit(self.gpa);
+        self.access_requests.deinit(self.gpa);
         for (self.notifications.items) |n| {
             self.gpa.free(n[0]);
             self.gpa.free(n[1]);
@@ -278,6 +293,24 @@ pub const TestPlatform = struct {
     }
     pub fn simulateNotificationClick(self: *TestPlatform, tag: []const u8) void {
         if (self.callbacks.notification_activated) |f| f(self.callbacks.ctx, tag);
+    }
+    /// The user pressed the registered global hotkey (no-op when none is registered).
+    pub fn simulateGlobalHotkey(self: *TestPlatform) bool {
+        if (self.hotkey == null) return false;
+        const h = self.hotkey_handler orelse return false;
+        h.func(h.ctx);
+        return true;
+    }
+    /// Complete the oldest pending `captureActiveWindow` with `result` (ownership moves
+    /// to the caller's callback; allocate it with `self.gpa`). Returns false when none
+    /// is pending.
+    pub fn finishCapture(self: *TestPlatform, result: pf.WindowCaptureResult) bool {
+        if (self.pending_captures.items.len == 0) return false;
+        const p = self.pending_captures.orderedRemove(0);
+        var r = result;
+        if (r == .ok) if (p.done.pixels_ready) |f| f(p.done.ctx);
+        p.done.done(p.done.ctx, p.gpa, &r);
+        return true;
     }
     /// The tag of the first menu action item named `name` (depth-first), if any.
     pub fn menuTag(self: *const TestPlatform, name: []const u8) ?usize {
@@ -328,7 +361,42 @@ pub const TestPlatform = struct {
         .playSound = vPlaySound,
         .supportsLiquidGlass = vSupportsLiquidGlass,
         .liquidGlassRevision = vLiquidGlassRevision,
+        .setGlobalHotkey = vSetGlobalHotkey,
+        .windowCaptureCapabilities = vWindowCaptureCapabilities,
+        .captureActiveWindow = vCaptureActiveWindow,
+        .requestCaptureAccess = vRequestCaptureAccess,
+        .foregroundAfterCapture = vForegroundAfterCapture,
     };
+
+    fn vSetGlobalHotkey(ptr: *anyopaque, hotkey: ?pf.GlobalHotkey, handler: pf.GlobalHotkeyHandler) void {
+        const self = cast(ptr);
+        self.hotkey_sets += 1;
+        self.hotkey_handler = handler;
+        self.hotkey = null;
+        if (hotkey) |h| if (h.key.len <= self.hotkey_key.len) {
+            @memcpy(self.hotkey_key[0..h.key.len], h.key);
+            var copy = h;
+            copy.key = self.hotkey_key[0..h.key.len];
+            copy.description = "";
+            copy.id = "";
+            self.hotkey = copy;
+        };
+    }
+    fn vWindowCaptureCapabilities(ptr: *anyopaque) pf.WindowCaptureCapabilities {
+        return cast(ptr).capture_capabilities;
+    }
+    fn vCaptureActiveWindow(ptr: *anyopaque, gpa: Allocator, done: pf.WindowCaptureCallback) void {
+        const self = cast(ptr);
+        self.captures_requested += 1;
+        self.pending_captures.append(self.gpa, .{ .gpa = gpa, .done = done }) catch {};
+    }
+    fn vRequestCaptureAccess(ptr: *anyopaque, kind: pf.CaptureAccess) void {
+        const self = cast(ptr);
+        self.access_requests.append(self.gpa, kind) catch {};
+    }
+    fn vForegroundAfterCapture(ptr: *anyopaque) void {
+        cast(ptr).foreground_requests += 1;
+    }
 
     fn vSupportsLiquidGlass(ptr: *anyopaque) bool {
         return cast(ptr).liquid_glass_supported;

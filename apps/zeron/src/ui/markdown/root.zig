@@ -83,8 +83,15 @@ pub const TaskMode = enum {
     /// Task markers stay in the text ("[x] done") — the transcript's choice
     /// (zeron passes no `TaskUi` there).
     text,
-    /// Read-only 16px checkboxes (gpui-base `Checkbox` styling).
+    /// 16px checkboxes (gpui-base `Checkbox` styling); read-only (50%)
+    /// unless `Options.task_toggle` is set.
     checkbox,
+};
+
+/// `TaskUi::toggle`: `f(owner, marker, window, app)` flips a task marker.
+pub const TaskToggle = struct {
+    owner: u64,
+    f: *const fn (owner: u64, marker: mdm.TaskMarker, window: ?*Window, app: *App) void,
 };
 
 pub const Options = struct {
@@ -96,6 +103,8 @@ pub const Options = struct {
     /// Transcript-only "Fit content" (wrap) toggle in the code header.
     fit_toggle: bool = false,
     tasks: TaskMode = .text,
+    /// Checkboxes toggle through the owner (interactive when set).
+    task_toggle: ?TaskToggle = null,
     /// Render inline images as images (local paths); off = alt text.
     images: bool = false,
     /// Syntax-highlight code blocks.
@@ -121,6 +130,15 @@ pub const Options = struct {
     /// against the document); null renders `alt — source` instead. Without a
     /// resolver `images` loads the source as given.
     image_resolver: ?ImageResolver = null,
+    /// `MediaUi::image`: the owner renders each inline image itself (its
+    /// loaded media, a lightbox on click, "Open image link"); null falls
+    /// back to `image_resolver` / alt text.
+    image_ui: ?ImageUi = null,
+};
+
+pub const ImageUi = struct {
+    ctx: *const anyopaque,
+    f: *const fn (ctx: *const anyopaque, image: mdm.InlineImage, id_key: u64, theme: *const Theme) ?AnyElement,
 };
 
 pub const ImageResolver = struct {
@@ -164,11 +182,22 @@ pub const code_state = struct {
         codes.put(gpa, key, owned) catch gpa.free(owned);
     }
 
+    /// `code_fences_fit_content`: with hooks installed (the app), "Fit
+    /// content" is one global setting every fence follows; without them
+    /// (tests, demos) each fence keeps its own toggle.
+    pub const FitHooks = struct {
+        get: *const fn (app: *App) bool,
+        set: *const fn (app: *App, fit: bool) void,
+    };
+    pub var fit_hooks: ?FitHooks = null;
+
     pub fn isFit(key: u64) bool {
+        if (fit_hooks) |h| if (now_source) |app| return h.get(app);
         return fit.contains(key);
     }
 
-    pub fn toggleFit(key: u64) void {
+    pub fn toggleFit(key: u64, app: *App) void {
+        if (fit_hooks) |h| return h.set(app, !h.get(app));
         if (fit.contains(key)) _ = fit.remove(key) else fit.put(gpa, key, {}) catch {};
     }
 
@@ -237,7 +266,7 @@ fn fitListener(key: u64) zpui.Listener(zpui.ClickEvent) {
     var l: zpui.Listener(zpui.ClickEvent) = .{ .func = struct {
         fn f(data: *const zpui.core.context.ListenerData, _: *const zpui.ClickEvent, window: ?*Window, app: *App) void {
             app.propagate_event = false;
-            code_state.toggleFit(data.get(u64));
+            code_state.toggleFit(data.get(u64), app);
             if (window) |w| w.refresh();
         }
     }.f };
@@ -345,13 +374,7 @@ fn listItem(ordered_start: ?u64, item: []const Block, item_ix: usize, ix: usize,
         }
     };
     const marker: AnyElement = if (task) |t| zpui.intoAnyElement(
-        div().flexNone().minW(px(18)).h(px(line_height)).flex().itemsCenter().child(
-            div().size(px(16)).border1().rounded(px(3)).flex().itemsCenter().justifyCenter()
-                .borderColor(if (t.checked) theme.accent else theme.border)
-                .bg(if (t.checked) theme.accent else zpui.color.transparent_black)
-                .opacity(0.5)
-                .child(if (t.checked) icon(.check, 12, theme.bg) else null),
-        ),
+        div().flexNone().minW(px(18)).h(px(line_height)).flex().itemsCenter().child(taskCheckbox(t, opts)),
     ) else if (ordered_start) |start| zpui.intoAnyElement(
         div().flexNone().minW(px(18)).textSize(px(text_size)).lineHeight(px(line_height))
             .textColor(theme.accent).child(zpui.fmt("{d}.", .{start + item_ix})),
@@ -369,6 +392,36 @@ fn listItem(ordered_start: ?u64, item: []const Block, item_ix: usize, ix: usize,
         } else body = body.child(renderBlock(child, cix, opts, window));
     }
     return div().flex().flexRow().gap(px(8)).child(marker).child(body);
+}
+
+/// The task checkbox: interactive (pointer, click toggles through the
+/// owner) with a `task_toggle`, else disabled at 50%.
+fn taskCheckbox(t: mdm.TaskMarker, opts: Options) zpui.StatefulDiv {
+    const theme = opts.theme;
+    var box = div().id(.{ "md-task", opts.key +% t.range.start }).role(.check_box).ariaToggled(t.checked)
+        .size(px(16)).border1().rounded(px(3)).flex().itemsCenter().justifyCenter()
+        .borderColor(if (t.checked) theme.accent else theme.border)
+        .bg(if (t.checked) theme.accent else zpui.color.transparent_black)
+        .child(if (t.checked) icon(.check, 12, theme.bg) else null);
+    const toggle = opts.task_toggle orelse return box.opacity(0.5);
+    const Data = extern struct { f: usize, start: u64, end_checked: u64 };
+    var l: zpui.Listener(zpui.ClickEvent) = .{ .func = struct {
+        fn f(data: *const zpui.core.context.ListenerData, _: *const zpui.ClickEvent, window: ?*Window, app: *App) void {
+            app.propagate_event = false;
+            const d = data.get(Data);
+            const func: *const fn (u64, mdm.TaskMarker, ?*Window, *App) void = @ptrFromInt(d.f);
+            const end: usize = @intCast(d.end_checked >> 1);
+            func(data.entity, .{ .checked = d.end_checked & 1 == 1, .range = .{ .start = @intCast(d.start), .end = end } }, window, app);
+        }
+    }.f };
+    l.data.entity = toggle.owner;
+    l.data.set(Data{ .f = @intFromPtr(toggle.f), .start = t.range.start, .end_checked = (@as(u64, t.range.end) << 1) | @intFromBool(t.checked) });
+    box = box.cursorPointer().onMouseDown(.left, struct {
+        fn f(_: *const zpui.input.MouseDownEvent, _: *Window, app: *App) void {
+            app.propagate_event = false;
+        }
+    }.f).onClick(l);
+    return box;
 }
 
 /// A monochrome icon tinted with the inherited text color.
@@ -539,6 +592,11 @@ fn imageText(runs: []const InlineRun, size: f32, lh: f32, bold: bool, ix: usize,
     for (runs, 0..) |r, i| {
         const image = r.style.image orelse continue;
         if (start < i) col = col.child(textElement(runs[start..i], size, lh, bold, ix *% 4099 +% start + 1000, no_images));
+        if (opts.image_ui) |iu| if (iu.f(iu.ctx, image, mix(opts.key, ix *% 4099 +% i + 9000), opts.theme)) |el| {
+            col = col.child(el);
+            start = i + 1;
+            continue;
+        };
         const fa = zpui.window.arena_mod.frameAllocator();
         const local: ?[]const u8 = if (opts.image_resolver) |res| res.f(res.ctx, image.source, fa) else image.source;
         if (local) |path| {
@@ -663,7 +721,7 @@ fn codeBlockSource(language: ?[]const u8, code: []const u8, ix: usize, opts: Opt
     var actions = div().flexNone().flex().flexRow().itemsCenter().gap(px(2));
     if (opts.fit_toggle) {
         const base = if (fit) theme.ink(0.09) else zpui.color.transparent_black;
-        actions = actions.child(div().id(.{ "code-fit", key }).size(px(code_action_size)).rounded(px(6))
+        actions = actions.child(div().id(.{ "code-fit", key }).role(.button).ariaLabel("Fit to width").ariaToggled(fit).size(px(code_action_size)).rounded(px(6))
             .flex().itemsCenter().justifyCenter().cursorPointer().bg(base)
             .hover(sb.bg(theme.ink(if (fit) 0.13 else 0.08)))
             .onClick(fitListener(key))
@@ -674,7 +732,7 @@ fn codeBlockSource(language: ?[]const u8, code: []const u8, ix: usize, opts: Opt
         code_state.putCode(key, body_code);
         const app_now = currentNow();
         const copied = code_state.isCopied(key, app_now);
-        actions = actions.child(div().id(.{ "code-copy", key }).h(px(code_action_size)).px(px(6)).rounded(px(5))
+        actions = actions.child(div().id(.{ "code-copy", key }).role(.button).ariaLabel(if (copied) "Copied" else "Copy code").h(px(code_action_size)).px(px(6)).rounded(px(5))
             .flex().flexRow().itemsCenter().gap(px(4)).cursorPointer()
             .hover(sb.bg(theme.ink(0.08)))
             .textSize(px(10.5)).textColor(theme.text_muted)
@@ -767,7 +825,7 @@ fn diagramOpenListener(open: DiagramOpen, key: u64) zpui.Listener(zpui.ClickEven
 }
 
 fn codeIconAction(id_key: u64, comptime name: []const u8, label: []const u8, which: assets.Icon, theme: *const Theme, on_click: zpui.Listener(zpui.ClickEvent)) AnyElement {
-    return zpui.intoAnyElement(div().id(.{ name, id_key }).size(px(code_action_size)).rounded(px(6))
+    return zpui.intoAnyElement(div().id(.{ name, id_key }).role(.button).ariaLabel(label).size(px(code_action_size)).rounded(px(6))
         .flex().itemsCenter().justifyCenter().cursorPointer()
         .hover(sb.bg(theme.ink(0.08)))
         .onClick(on_click)
@@ -803,7 +861,7 @@ fn mermaidBlock(app: *App, language: ?[]const u8, code: []const u8, ix: usize, o
         const body_code = if (std.mem.endsWith(u8, code, "\n")) code[0 .. code.len - 1] else code;
         code_state.putCode(key, body_code);
         const copied = code_state.isCopied(key, currentNow());
-        actions = actions.child(div().id(.{ "code-copy", key }).h(px(code_action_size)).px(px(6)).rounded(px(5))
+        actions = actions.child(div().id(.{ "code-copy", key }).role(.button).ariaLabel(if (copied) "Copied" else "Copy code").h(px(code_action_size)).px(px(6)).rounded(px(5))
             .flex().flexRow().itemsCenter().gap(px(4)).cursorPointer()
             .hover(sb.bg(theme.ink(0.08)))
             .textSize(px(10.5)).textColor(theme.text_muted)
@@ -821,7 +879,7 @@ fn mermaidBlock(app: *App, language: ?[]const u8, code: []const u8, ix: usize, o
     var preview = div().id(.{ "mermaid-image", frame_key }).wFull().maxW(px(ready.natural.width)).mxAuto()
         .maxH(px(480)).aspectRatio(ready.natural.width / ready.natural.height)
         .child(zpui.img(ready.image).sizeFull().objectFit(.contain));
-    if (opts.diagram_open) |open| preview = preview.cursorPointer().onClick(diagramOpenListener(open, ready.key));
+    if (opts.diagram_open) |open| preview = preview.role(.button).ariaLabel("Open diagram").cursorPointer().onClick(diagramOpenListener(open, ready.key));
     return zpui.intoAnyElement(div().id(.{ "mermaid", frame_key }).wFull().minW0().flex().flexCol().rounded(px(10)).bg(theme.ink(0.035))
         .border1().borderColor(theme.border).overflowHidden().relative()
         .child(header)

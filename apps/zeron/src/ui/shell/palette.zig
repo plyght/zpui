@@ -128,6 +128,7 @@ pub const Palette = struct {
         self.chat_ids.clearRetainingCapacity();
         const ws = self.state.read(cx).workspace.read(cx);
         var chats: std.ArrayList(*const engine.protocol.Chat) = .empty;
+        defer chats.deinit(arena);
         for (ws.chats()) |*c| {
             if (c.parentChatId != null) continue;
             const project = if (ws.spaceForChat(c)) |s| view.spaceDisplayName(s) else "~";
@@ -288,7 +289,15 @@ pub const Palette = struct {
             else => action_count += 1,
         };
         for (list.items, 0..) |e, ix| {
-            var row = div().id(.{ "command-result", ix }).flexNone()
+            const row_label: []const u8 = switch (e) {
+                .chat => |ci| if (ws.chat(self.chat_ids.items[ci])) |c| c.title orelse "New session" else "",
+                .new_chat => "New chat",
+                .new_project => "New project",
+                .settings => "Open settings",
+                .theme_light => "Switch to light theme",
+                .theme_dark => "Switch to dark theme",
+            };
+            var row = div().id(.{ "command-result", ix }).role(.button).ariaLabel(row_label).flexNone()
                 .onMouseMove(cx.listenerWith(ix, Palette.onHoverRow))
                 .onClick(cx.listenerWith(ix, Palette.onClickRow));
             if (ix == 0) row = row.pt(px(8));

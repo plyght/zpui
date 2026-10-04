@@ -1668,6 +1668,24 @@ pub const FileEditor = struct {
         return zpui.intoAnyElement(root);
     }
 
+    /// `toggle_markdown_task`: a preview checkbox flips its `[ ]` / `[x]`
+    /// marker in the buffer (undoable), only while the buffer is editable and
+    /// still exactly what the preview parsed; selection and scroll stay.
+    pub fn toggleMarkdownTask(self: *FileEditor, source_hash: u64, start: usize, end: usize, checked: bool, cx: *Context(FileEditor)) void {
+        if (!review.enabled(self)) return;
+        const source = self.text(self.gpa) catch return;
+        defer self.gpa.free(source);
+        if (std.hash.Wyhash.hash(0, source) != source_hash) return;
+        if (end > source.len or start >= end) return;
+        const marker = source[start..end];
+        const ok = if (checked) std.mem.eql(u8, marker, "[x]") or std.mem.eql(u8, marker, "[X]") else std.mem.eql(u8, marker, "[ ]");
+        if (!ok) return;
+        const changed = self.core.replaceKeepingSelection(.{ .start = start + 1, .end = start + 2 }, if (checked) " " else "x", self.now(cx)) catch return;
+        if (!changed) return;
+        self.afterEdit(cx);
+        self.reveal_cursor = false;
+    }
+
     /// The Markdown preview, synced to the current buffer (`prepare_markdown_preview`).
     fn markdownView(self: *FileEditor, cx: *Context(FileEditor)) ?Entity(markdown_preview.MarkdownPreview) {
         if (self.markdown == null) {
@@ -1683,6 +1701,17 @@ pub const FileEditor = struct {
             const source = self.text(self.gpa) catch return v;
             defer self.gpa.free(source);
             v.update(cx, markdown_preview.MarkdownPreview.setSource, .{ source, self.truncated });
+        }
+        // Staged comments on this file render as cards between the preview's
+        // blocks (`set_comments`).
+        {
+            review.attach(self, cx);
+            var scratch = std.heap.ArenaAllocator.init(self.gpa);
+            defer scratch.deinit();
+            const list = review.fileComments(self, scratch.allocator(), cx.app);
+            const draft: ?markdown_preview.CommentDraft = if (review.previewDraft(self)) |d| .{ .line = d.line, .input = d.input, .editing = d.editing } else null;
+            v.update(cx, markdown_preview.MarkdownPreview.setComments, .{ cx.weakEntity(), list, draft, review.enabled(self) });
+            v.update(cx, markdown_preview.MarkdownPreview.setCheckout, .{self.checkout_id});
         }
         return v;
     }
@@ -1701,7 +1730,7 @@ pub const FileEditor = struct {
     }
 
     fn toolbarButton(id: []const u8, active: bool, theme: *const Theme) zpui.StatefulDiv {
-        var b = div().id(id).size(px(control_size)).flexNone().rounded(px(control_radius)).flex().itemsCenter().justifyCenter()
+        var b = div().id(id).role(.button).size(px(control_size)).flexNone().rounded(px(control_radius)).flex().itemsCenter().justifyCenter()
             .cursorPointer().occlude().onMouseDown(.left, preventDefault)
             .hover(sb.bg(theme.wash(0.14)));
         if (active) b = b.bg(theme.wash(0.1));
@@ -1728,7 +1757,7 @@ pub const FileEditor = struct {
             .child(crumbs);
         if (markdown_preview.isMarkdown(self.path)) {
             const on = self.show_markdown;
-            bar = bar.child(toolbarButton("files-toggle-markdown", on, theme)
+            bar = bar.child(toolbarButton("files-toggle-markdown", on, theme).ariaLabel(if (on) "Show Markdown code" else "Preview Markdown")
                 .tooltipWith(@as([]const u8, if (on) "Show Markdown code" else "Preview Markdown"), ui.tooltip.build)
                 .onClick(cx.listener(onMarkdownToggleClick))
                 .child(ui.icon.of(if (on) .file_code else .eye, icon_size, theme.text_muted)));
@@ -1736,16 +1765,16 @@ pub const FileEditor = struct {
         if (self.saveStatus(theme)) |st| {
             var chip = div().id("files-save-status").h(px(control_size)).px(px(6)).rounded(px(control_radius)).flex().itemsCenter().flexNone()
                 .fontFamily(theme.font_sans).textSize(px(11)).textColor(st.color);
-            if (st.retry) chip = chip.cursorPointer().hover(sb.bg(theme.wash(0.14))).onMouseDown(.left, preventDefault).onClick(cx.listener(onSaveStatusClick));
+            if (st.retry) chip = chip.role(.button).cursorPointer().hover(sb.bg(theme.wash(0.14))).onMouseDown(.left, preventDefault).onClick(cx.listener(onSaveStatusClick));
             if (st.detail) |d| chip = chip.tooltipWith(d, ui.tooltip.build);
             bar = bar.child(chip.child(st.label));
         }
         const wrap_on = self.opts.soft_wrap;
         bar = bar
-            .child(toolbarButton("files-reveal-active", false, theme).tooltipWith(@as([]const u8, "Reveal file in tree"), ui.tooltip.build)
+            .child(toolbarButton("files-reveal-active", false, theme).ariaLabel("Reveal file in tree").tooltipWith(@as([]const u8, "Reveal file in tree"), ui.tooltip.build)
                 .onClick(cx.listener(onRevealClick))
                 .child(ui.icon.of(.folder, icon_size, theme.text_muted)))
-            .child(toolbarButton("files-toggle-word-wrap", wrap_on, theme)
+            .child(toolbarButton("files-toggle-word-wrap", wrap_on, theme).ariaLabel(if (wrap_on) "Disable word wrap" else "Enable word wrap")
                 .tooltipWith(@as([]const u8, if (wrap_on) "Disable word wrap" else "Enable word wrap"), ui.tooltip.build)
                 .onClick(cx.listener(onWrapClick))
                 .child(ui.icon.of(.list, icon_size, if (wrap_on) theme.text else theme.text_muted)));
@@ -1819,7 +1848,7 @@ pub const FileEditor = struct {
             .loading => return zpui.intoAnyElement(centered(theme, "Loading file\u{2026}", theme.text_faint)),
             .failed => return zpui.intoAnyElement(div().flex1().flex().flexCol().itemsCenter().justifyCenter().gap(px(10))
                 .child(centered(theme, self.message orelse "Could not read file.", theme.danger_muted).flexNone())
-                .child(div().id("files-retry-read").h(px(28)).px(px(12)).rounded(px(7)).border1().borderColor(theme.border)
+                .child(div().id("files-retry-read").role(.button).h(px(28)).px(px(12)).rounded(px(7)).border1().borderColor(theme.border)
                 .bg(theme.wash(0.04)).hover(sb.bg(theme.wash(0.09))).cursorPointer().flex().itemsCenter()
                 .textSize(px(11.5)).textColor(theme.text).child("Retry").onClick(cx.listener(onRetryReadClick)))),
             else => {},
@@ -1920,7 +1949,7 @@ pub const FileEditor = struct {
     }
 
     fn findToggle(id: []const u8, label: []const u8, active: bool, theme: *const Theme) zpui.StatefulDiv {
-        var b = div().id(id).h(px(22)).minW(px(22)).px(px(4)).rounded(px(5)).flexNone().flex().itemsCenter().justifyCenter()
+        var b = div().id(id).role(.toggle_button).ariaToggled(active).h(px(22)).minW(px(22)).px(px(4)).rounded(px(5)).flexNone().flex().itemsCenter().justifyCenter()
             .cursorPointer().onMouseDown(.left, preventDefault).fontFamily(theme.font_mono).textSize(px(11))
             .textColor(if (active) theme.text else theme.text_muted).hover(sb.bg(theme.wash(0.12)));
         if (active) b = b.bg(theme.accent.opacity(0.22));
@@ -1928,7 +1957,7 @@ pub const FileEditor = struct {
     }
 
     fn findIconButton(id: []const u8, i: ui.icon.Icon, enabled: bool, theme: *const Theme) zpui.StatefulDiv {
-        var b = div().id(id).size(px(22)).rounded(px(5)).flexNone().flex().itemsCenter().justifyCenter()
+        var b = div().id(id).role(.button).ariaDisabled(!enabled).size(px(22)).rounded(px(5)).flexNone().flex().itemsCenter().justifyCenter()
             .onMouseDown(.left, preventDefault)
             .child(ui.icon.of(i, 13, theme.text_muted));
         b = if (enabled) b.cursorPointer().hover(sb.bg(theme.wash(0.12))) else b.opacity(0.4);
@@ -1954,15 +1983,15 @@ pub const FileEditor = struct {
             zpui.fmt("{d}{s} results", .{ count, if (s.capped) "+" else "" });
         const can_replace = !self.core.read_only;
         var top = div().flex().flexRow().itemsCenter().gap(px(4))
-            .child(findIconButton("find-toggle-replace", if (self.replace_open) .alt_arrow_down else .alt_arrow_right, can_replace, theme)
+            .child(findIconButton("find-toggle-replace", if (self.replace_open) .alt_arrow_down else .alt_arrow_right, can_replace, theme).ariaLabel("Toggle replace").ariaExpanded(self.replace_open)
                 .onClick(cx.listener(onReplaceToggle)))
             .child(findField(theme, self.find_input.?))
-            .child(findToggle("find-case", "Aa", s.case_sensitive, theme).onClick(cx.listener(onCaseClick)).tooltipWith(@as([]const u8, "Match case"), ui.tooltip.build))
-            .child(findToggle("find-word", "ab", s.whole_word, theme).onClick(cx.listener(onWordClick)).tooltipWith(@as([]const u8, "Match whole word"), ui.tooltip.build))
+            .child(findToggle("find-case", "Aa", s.case_sensitive, theme).ariaLabel("Match case").onClick(cx.listener(onCaseClick)).tooltipWith(@as([]const u8, "Match case"), ui.tooltip.build))
+            .child(findToggle("find-word", "ab", s.whole_word, theme).ariaLabel("Match whole word").onClick(cx.listener(onWordClick)).tooltipWith(@as([]const u8, "Match whole word"), ui.tooltip.build))
             .child(div().w(px(70)).flexNone().textSize(px(11)).textColor(if (count == 0 and s.query.items.len > 0) theme.danger_muted else theme.text_muted).whitespaceNowrap().truncate().child(label))
-            .child(findIconButton("find-prev", .arrow_up, count > 0, theme).onClick(cx.listener(onFindPrevClick)).tooltipWith(@as([]const u8, "Previous match (Shift+Enter)"), ui.tooltip.build))
-            .child(findIconButton("find-next", .arrow_down, count > 0, theme).onClick(cx.listener(onFindNextClick)).tooltipWith(@as([]const u8, "Next match (Enter)"), ui.tooltip.build))
-            .child(findIconButton("find-close", .close, true, theme).onClick(cx.listener(onFindCloseClick)).tooltipWith(@as([]const u8, "Close (Escape)"), ui.tooltip.build));
+            .child(findIconButton("find-prev", .arrow_up, count > 0, theme).ariaLabel("Previous match").onClick(cx.listener(onFindPrevClick)).tooltipWith(@as([]const u8, "Previous match (Shift+Enter)"), ui.tooltip.build))
+            .child(findIconButton("find-next", .arrow_down, count > 0, theme).ariaLabel("Next match").onClick(cx.listener(onFindNextClick)).tooltipWith(@as([]const u8, "Next match (Enter)"), ui.tooltip.build))
+            .child(findIconButton("find-close", .close, true, theme).ariaLabel("Close find").onClick(cx.listener(onFindCloseClick)).tooltipWith(@as([]const u8, "Close (Escape)"), ui.tooltip.build));
         var card = ui.popover.card(theme).w(px(400)).p(px(4)).gap(px(4)).textSize(px(12)).keyContext(A.find_context)
             .onAction(A.FindNext, cx.listener(aFindNext))
             .onAction(A.FindPrevious, cx.listener(aFindPrevious))
@@ -1993,7 +2022,7 @@ pub const FileEditor = struct {
     }
 
     fn findTextButton(id: []const u8, label: []const u8, enabled: bool, theme: *const Theme) zpui.StatefulDiv {
-        var b = div().id(id).h(px(24)).px(px(8)).rounded(px(6)).flexNone().flex().itemsCenter()
+        var b = div().id(id).role(.button).ariaDisabled(!enabled).h(px(24)).px(px(8)).rounded(px(6)).flexNone().flex().itemsCenter()
             .textSize(px(11.5)).textColor(theme.text).border1().borderColor(theme.border).bg(theme.wash(0.04))
             .onMouseDown(.left, preventDefault).child(label);
         b = if (enabled) b.cursorPointer().hover(sb.bg(theme.wash(0.09))) else b.opacity(0.4);
@@ -2021,7 +2050,7 @@ pub const FileEditor = struct {
         var card = ui.popover.card(theme).w(px(170)).onMouseDownOut(cx.listener(onContextOutside));
         for (rows, 0..) |r, i| {
             if (i == 3) card = card.child(ui.popover.separator(theme));
-            var row = ui.popover.menuRow(theme, false).id(.{ "files-editor-context", i }).child(r[0]);
+            var row = ui.popover.menuRow(theme, false).id(.{ "files-editor-context", i }).role(.menu_item).child(r[0]);
             row = if (r[1]) row.onClick(cx.listenerWith(i, onContextRow)) else row.opacity(0.38);
             card = card.child(row);
         }

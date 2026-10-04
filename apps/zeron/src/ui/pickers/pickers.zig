@@ -681,7 +681,7 @@ pub const Pickers = struct {
         const open = self.open == kind;
         const on_canvas = self.ws(cx).selected_chat == null;
         const measure: Measure = .{ .id = cx.entityId(), .kind = kind, .prefer_below = on_canvas and (kind == .branch or kind == .checkout) };
-        var chip = div().id(id).relative()
+        var chip = div().id(id).role(.button).ariaLabel(label).ariaExpanded(open).relative()
             .h(px(20)).maxW(px(280)).flex().flexRow().itemsCenter().gap(px(6)).px(px(8))
             .rounded(px(footer_chip_radius))
             .textSize(ui.rems(12)).fontWeight(500)
@@ -837,7 +837,7 @@ pub const Pickers = struct {
             .idle, .loading => zpui.intoAnyElement(skeletonRows(theme, 4, cx)),
             .failed => |msg| zpui.intoAnyElement(div().flex().flexCol().gap(px(6)).p(px(8)).textSize(ui.rems(12)).textColor(theme.danger)
                 .child(msg)
-                .child(div().id("branch-retry").px(px(8)).py(px(3)).rounded(px(6)).border1().borderColor(theme.border)
+                .child(div().id("branch-retry").role(.button).px(px(8)).py(px(3)).rounded(px(6)).border1().borderColor(theme.border)
                     .textColor(theme.text).cursorPointer().hover(sb.bg(theme.element_hover))
                     .onClick(cx.listener(onRetry)).child("Retry"))),
             .ready => if (total == 0) zpui.intoAnyElement(note(theme, "No refs found.")) else blk: {

@@ -100,7 +100,7 @@ pub fn orgGate(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div
             .child(div().flex1().minW0().h(px(36)).flex().itemsCenter().px(px(12)).rounded(px(8))
                 .border1().borderColor(theme.border).bg(theme.bg).textSize(ui.rems(13)).textColor(theme.text)
                 .child(wiring.orgInput(shell, cx)))
-            .child(div().id("create-org").h(px(36)).px(px(16)).flex().itemsCenter().rounded(px(6)).bg(theme.text)
+            .child(div().id("create-org").role(.button).h(px(36)).px(px(16)).flex().itemsCenter().rounded(px(6)).bg(theme.text)
                 .textSize(ui.rems(14)).fontWeight(500).textColor(theme.on_solid).cursorPointer().hover(sb.opacity(0.9))
                 .opacity(if (shell.wiring.org_submitting) 0.5 else 1)
                 .onClick(cx.listener(wiring.onCreateOrgClick))
@@ -109,7 +109,7 @@ pub fn orgGate(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div
     if (auth.orgs.len > 0) {
         var rows = div().flex().flexCol().gap(px(4));
         for (auth.orgs, 0..) |o, i| {
-            rows = rows.child(div().id(.{ "org-row", i }).px(px(12)).py(px(8)).rounded(px(8)).border1().borderColor(theme.border)
+            rows = rows.child(div().id(.{ "org-row", i }).role(.button).px(px(12)).py(px(8)).rounded(px(8)).border1().borderColor(theme.border)
                 .bg(theme.bg).textSize(ui.rems(13)).textColor(theme.text).cursorPointer().hover(sb.bg(theme.wash(0.11)))
                 .onClick(cx.listenerWith(i, wiring.onPickOrg))
                 .child(o.name));
@@ -119,7 +119,7 @@ pub fn orgGate(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div
             .child(rows));
     }
     card = card.child(div().mt(px(24)).flex().flexRow()
-        .child(div().id("org-signout").textSize(ui.rems(12)).textColor(theme.text_muted.opacity(0.6)).cursorPointer()
+        .child(div().id("org-signout").role(.button).textSize(ui.rems(12)).textColor(theme.text_muted.opacity(0.6)).cursorPointer()
         .hover(sb.textColor(theme.text)).onClick(cx.listener(onCancelAuth))
         .child(if (local_setup) "Cancel sync setup" else "Use a different account")));
     return page(theme, card);

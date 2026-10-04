@@ -7,6 +7,8 @@
 //!   offset mapping;
 //! - `editor`: `EditorState` — buffer, selection, IME marked text, undo/redo
 //!   with coalescing, motions (pure, unit-tested);
+//! - `dictation`: hold-to-talk dictation state (`Dictation`, `Phase`,
+//!   `Meter`, the `Transcriber` seam and the app-installed `Service`);
 //! - `text_input`: `TextInput`, the zpui view (multiline soft-wrapped or
 //!   single-line, mouse selection, clipboard, IME, caret blink, autoscroll,
 //!   placeholder) plus its custom text element.
@@ -20,6 +22,7 @@
 pub const segment = @import("segment.zig");
 pub const editor = @import("editor.zig");
 pub const text_input = @import("text_input.zig");
+pub const dictation = @import("dictation.zig");
 
 pub const EditorState = editor.EditorState;
 pub const Range = editor.Range;

@@ -53,7 +53,7 @@ pub fn adder(comptime T: type, id: anytype, theme: *const Theme, cx: *Context(T)
             open(view, c, window, vcx);
         }
     };
-    return div().id(id).size(px(comments.comment_adder_size)).flex().itemsCenter().justifyCenter()
+    return div().id(id).role(.button).ariaLabel("Add comment").size(px(comments.comment_adder_size)).flex().itemsCenter().justifyCenter()
         .rounded(px(4)).bg(theme.solid).cursorPointer()
         .onMouseDown(.left, stopDown)
         .onClick(cx.listenerWith(ctx, H.click))
@@ -84,7 +84,7 @@ pub fn editButton(comptime T: type, comment_id: []const u8, group: []const u8, t
             edit(view, id, window, vcx);
         }
     };
-    return div().id(zpui.fmt("cmt-edit-{s}", .{comment_id})).flexNone().size(px(16)).flex().itemsCenter().justifyCenter()
+    return div().id(zpui.fmt("cmt-edit-{s}", .{comment_id})).role(.button).ariaLabel("Edit comment").flexNone().size(px(16)).flex().itemsCenter().justifyCenter()
         .rounded(px(4)).cursorPointer().opacity(0).groupHover(group, sb.opacity(1))
         .onMouseDown(.left, stopDown)
         .onClick(cx.listenerWith(comment_id, H.click))
@@ -98,7 +98,7 @@ fn removeButton(comptime T: type, id_prefix: []const u8, comment_id: []const u8,
             remove(view, id, vcx);
         }
     };
-    return div().id(zpui.fmt("{s}{s}", .{ id_prefix, comment_id })).flexNone().size(px(16)).flex().itemsCenter().justifyCenter()
+    return div().id(zpui.fmt("{s}{s}", .{ id_prefix, comment_id })).role(.button).ariaLabel("Remove comment").flexNone().size(px(16)).flex().itemsCenter().justifyCenter()
         .rounded(px(4)).cursorPointer().opacity(0).groupHover(group, sb.opacity(1))
         .onClick(cx.listenerWith(comment_id, H.click))
         .tooltipWith(@as([]const u8, "Remove comment"), ui.tooltip.build)
@@ -144,7 +144,7 @@ pub fn card(
 
 /// `comment_action`: Cancel (ghost, hover blend) / Comment-Save (solid).
 fn action(comptime T: type, id: []const u8, label: []const u8, primary: bool, theme: *const Theme, cx: *Context(T)) zpui.StatefulDiv {
-    var b = div().id(id).h(px(22)).px(px(10)).flex().itemsCenter().rounded(px(6)).textSize(px(11)).fontWeight(500).cursorPointer();
+    var b = div().id(id).role(.button).h(px(22)).px(px(10)).flex().itemsCenter().rounded(px(6)).textSize(px(11)).fontWeight(500).cursorPointer();
     if (primary) return b.bg(theme.solid).textColor(theme.on_solid).child(label);
     const H = struct {
         fn hover(_: *T, key: []const u8, hovered: *const bool, _: *Window, vcx: *Context(T)) void {

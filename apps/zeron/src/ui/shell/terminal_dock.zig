@@ -90,6 +90,63 @@ pub const TerminalDock = struct {
         return self;
     }
 
+    /// A reserved tab (`reserve_tab_for_chat`): an 80×24 grid with no PTY yet;
+    /// `attachEngine` streams a session into it, `failReserved` marks it failed.
+    pub fn initDetached(io: std.Io, title: []const u8, cx: *Context(TerminalDock)) !TerminalDock {
+        const gpa = cx.gpa();
+        const emu = try term.Emulator.create(gpa, .{ .cols = 80, .rows = 24, .io = io });
+        errdefer emu.destroy();
+        var self: TerminalDock = .{ .gpa = gpa, .io = io, .emu = emu, .focus = cx.focusHandle(), .cols = 80, .rows = 24, .chrome = false };
+        self.applyPalette(cx);
+        const n = @min(title.len, self.title_buf.len);
+        @memcpy(self.title_buf[0..n], title[0..n]);
+        self.title_len = n;
+        self.poll_task = try cx.timer(16 * std.time.ns_per_ms, onPoll);
+        return self;
+    }
+
+    /// `attach_reserved_session`: stream an engine-owned PTY into this tab.
+    pub fn attachEngine(self: *TerminalDock, es: zpui.Entity(model.EngineState), session: engine.protocol.TerminalSession, target: ?[]const u8, cx: *Context(TerminalDock)) bool {
+        if (self.remote != null or self.exited) return false;
+        const r = self.gpa.create(Remote) catch return false;
+        r.* = .{
+            .engine = es.retain(cx),
+            .terminal_id = self.gpa.dupe(u8, session.id) catch {
+                es.release(cx);
+                self.gpa.destroy(r);
+                return false;
+            },
+            .target = if (target) |t| self.gpa.dupe(u8, t) catch null else null,
+        };
+        self.remote = r;
+        self.subscribeRemote(cx);
+        // The engine opened the PTY at 80×24: report the real grid.
+        if (self.cols != 80 or self.rows != 24) model.EngineState.send(r.engine, cx, .ResizeTerminal, ResizeParams{ .terminalId = r.terminal_id, .cols = self.cols, .rows = self.rows, .targetDeviceId = r.target }) catch {};
+        cx.notify();
+        return true;
+    }
+
+    /// `fail_reserved_tab`: a visible failed tab, no PTY.
+    pub fn failReserved(self: *TerminalDock, message: []const u8, cx: *Context(TerminalDock)) void {
+        const text = std.fmt.allocPrint(self.gpa, "\x1b[31mfailed to run action: {s}\x1b[0m\r\n", .{message}) catch return;
+        defer self.gpa.free(text);
+        _ = self.emu.feed(text);
+        self.exited = true;
+        cx.notify();
+    }
+
+    /// Closing the tab closes its engine PTY (`CloseTerminal`); local PTYs
+    /// die with the dock.
+    pub fn closeSession(self: *TerminalDock, cx: anytype) void {
+        const r = self.remote orelse return;
+        const CloseParams = struct { terminalId: []const u8, targetDeviceId: ?[]const u8 = null };
+        model.EngineState.send(r.engine, cx, .CloseTerminal, CloseParams{ .terminalId = r.terminal_id, .targetDeviceId = r.target }) catch {};
+    }
+
+    pub fn focusHandle(self: *const TerminalDock) zpui.FocusHandle {
+        return self.focus;
+    }
+
     fn subscribeRemote(self: *TerminalDock, cx: anytype) void {
         const r = self.remote orelse return;
         const conn = r.engine.read(cx).conn orelse return;
@@ -121,11 +178,19 @@ pub const TerminalDock = struct {
     pub const Events = .{Hide};
 
     pub fn init(io: std.Io, cwd: ?[]const u8, window: *Window, cx: *Context(TerminalDock)) !TerminalDock {
+        return initTitled(io, cwd, "", window, cx);
+    }
+
+    /// A local shell titled `title` until the program sets its own (OSC 0/2).
+    pub fn initTitled(io: std.Io, cwd: ?[]const u8, title: []const u8, window: *Window, cx: *Context(TerminalDock)) !TerminalDock {
         const gpa = cx.gpa();
         const emu = try term.Emulator.create(gpa, .{ .cols = 80, .rows = 12, .io = io });
         errdefer emu.destroy();
         var self: TerminalDock = .{ .gpa = gpa, .io = io, .emu = emu, .focus = cx.focusHandle() };
         self.applyPalette(cx);
+        const tn = @min(title.len, self.title_buf.len);
+        @memcpy(self.title_buf[0..tn], title[0..tn]);
+        self.title_len = tn;
         if (has_pty) {
             const shell_path: [:0]const u8 = blk: {
                 const env = std.c.getenv("SHELL") orelse break :blk "/bin/bash";
@@ -347,6 +412,16 @@ pub const TerminalDock = struct {
                 .child(zpui.canvas(self, TerminalDock.paintGrid).sizeFull()));
     }
 };
+
+/// `display_title`: the live OSC title when the program set one, else the
+/// tab's own name ("Terminal N" / the action's name).
+pub fn displayTitle(self: *const TerminalDock) []const u8 {
+    if (self.emu.title()) |t| {
+        const trimmed = std.mem.trim(u8, t, " \t\r\n");
+        if (trimmed.len > 0) return trimmed;
+    }
+    return if (self.title_len > 0) self.title_buf[0..self.title_len] else "Terminal";
+}
 
 /// The surface title (OSC title, else "Terminal").
 pub fn surfaceTitle(self: *const TerminalDock) []const u8 {

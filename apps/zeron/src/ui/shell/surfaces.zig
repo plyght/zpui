@@ -28,6 +28,8 @@ const composer_mod = @import("zeron_composer");
 const input_mod = @import("zeron_input");
 const ui = @import("../components/root.zig");
 const files = @import("../files/root.zig");
+const right_pane = @import("right_pane.zig");
+const main_panel = @import("main_panel.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -251,6 +253,41 @@ pub const SideChatSurface = struct {
         }
     }
 
+    /// The side chat's `chat_dropzone(("side-chat-dropzone", id))`: an
+    /// explorer row or a file tab of the hosting chat inserts a workspace
+    /// file reference into the reply field (`attach_workspace_drag`).
+    fn onDropWorkspacePath(self: *SideChatSurface, payload: *const files.WorkspacePathDrag, window: *Window, cx: *Context(SideChatSurface)) void {
+        const host = self.state.read(cx).workspace.read(cx).selected_chat orelse return;
+        if (!payload.belongsTo(host)) return;
+        self.insertReference(payload.path(), payload.is_directory, window, cx);
+    }
+
+    fn onDropTab(self: *SideChatSurface, payload: *const right_pane.TabDrag, window: *Window, cx: *Context(SideChatSurface)) void {
+        const path = payload.workspacePath() orelse return;
+        const host = self.state.read(cx).workspace.read(cx).selected_chat orelse return;
+        if (!payload.belongsTo(host)) return;
+        self.insertReference(path, false, window, cx);
+    }
+
+    /// `add_workspace_path` on the reply field (`dropped_file_mention`).
+    pub fn insertReference(self: *SideChatSurface, path: []const u8, is_dir: bool, window: ?*Window, cx: *Context(SideChatSurface)) void {
+        const in = self.input.read(cx);
+        const sel = in.state.selected;
+        const ins = (composer_mod.mentions.droppedFileMention(self.gpa, in.text(), sel.start, sel.end, path, is_dir) catch return) orelse return;
+        defer self.gpa.free(ins.text);
+        const start = sel.start;
+        self.input.update(cx, TextInput.replaceRange, .{ sel.start, sel.end, ins.text });
+        const Move = struct {
+            fn f(t: *TextInput, at: usize, c: *Context(TextInput)) void {
+                t.state.selected = .collapsed(@min(at, t.text().len));
+                c.notify();
+            }
+        };
+        self.input.update(cx, Move.f, .{start + ins.cursor_advance});
+        if (window) |w| w.focus(self.input.read(cx).focusHandle());
+        cx.notify();
+    }
+
     fn onSendClick(self: *SideChatSurface, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SideChatSurface)) void {
         self.send(cx);
     }
@@ -309,20 +346,24 @@ pub const SideChatSurface = struct {
         self.setFailure(null, cx);
     }
 
-    pub fn render(self: *SideChatSurface, _: *Window, cx: *Context(SideChatSurface)) zpui.Div {
+    pub fn render(self: *SideChatSurface, _: *Window, cx: *Context(SideChatSurface)) zpui.StatefulDiv {
         const theme = ui.theme.get(cx);
         var bar = div().flexNone().px(px(12)).pb(px(12)).pt(px(4)).flex().flexCol().gap(px(6));
         if (self.failure) |f| bar = bar.child(div().textSize(ui.rems(12)).textColor(theme.danger).child(f));
         bar = bar.child(div().id("side-chat-reply").minH(px(40)).px(px(12)).py(px(8)).rounded(px(16)).border1().borderColor(theme.border)
             .bg(theme.ink(0.03)).flex().flexRow().itemsEnd().gap(px(8))
             .child(div().flex1().minW0().child(self.input))
-            .child(div().id("side-chat-send").size(px(24)).flexNone().roundedFull().bg(theme.text).flex().itemsCenter().justifyCenter()
+            .child(div().id("side-chat-send").role(.button).ariaLabel("Send message").size(px(24)).flexNone().roundedFull().bg(theme.text).flex().itemsCenter().justifyCenter()
             .cursorPointer().hover(sb.opacity(0.85))
             .onClick(cx.listener(onSendClick))
             .child(ui.icon.of(.arrow_up, 12, theme.bg))));
-        return div().sizeFull().flex().flexCol()
+        const tab_file = if (cx.app.activeDrag(right_pane.TabDrag)) |d| d.workspacePath() != null else false;
+        return div().id(.{ "side-chat-dropzone", std.hash.Wyhash.hash(0, self.chat_id) }).relative().sizeFull().flex().flexCol()
+            .onDrop(files.WorkspacePathDrag, cx.listener(onDropWorkspacePath))
+            .onDrop(right_pane.TabDrag, cx.listener(onDropTab))
             .child(div().flex1().minH0().relative().child(self.view))
-            .child(bar);
+            .child(bar)
+            .child(main_panel.dropOverlay(theme, tab_file, false));
     }
 };
 

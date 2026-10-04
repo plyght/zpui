@@ -15,6 +15,11 @@
 # The engine is found at runtime from Contents/MacOS/zeron-engine, $ZERON_BIN,
 # $PATH or the usual install locations (apps/zeron/src/engine_bin.zig); a
 # packager can drop the engine binary in as Contents/MacOS/zeron-engine.
+# Dictation's native runtime is optional: ZERON_ONNXRUNTIME=/path/libonnxruntime.dylib
+# (ONNX Runtime 1.28, as Rust zeron links) is copied to Contents/Frameworks, where
+# apps/zeron/src/voice/ort.zig loads it; without it the microphone reports
+# "Dictation unavailable". The microphone prompt's NSMicrophoneUsageDescription is
+# in Info.plist and the audio-input entitlement in zeron.entitlements.
 # Env: CODESIGN_IDENTITY="Developer ID Application: …" signs with hardened
 # runtime + entitlements; otherwise the bundle is ad-hoc signed (when codesign exists).
 set -euo pipefail
@@ -50,8 +55,17 @@ cp "$dist/zeron.icns" "$app/Contents/Resources/zeron.icns"
 cp "$root"/apps/zeron/assets/fonts/licenses/* "$app/Contents/Resources/licenses/fonts/"
 cp "$root/apps/zeron/assets/LICENSE.zeron" "$root/apps/zeron/assets/THIRD_PARTY_NOTICES.md" "$app/Contents/Resources/licenses/"
 
+if [[ -n ${ZERON_ONNXRUNTIME:-} ]]; then
+  mkdir -p "$app/Contents/Frameworks"
+  cp "$ZERON_ONNXRUNTIME" "$app/Contents/Frameworks/libonnxruntime.dylib"
+fi
+
 if command -v plutil >/dev/null; then plutil -lint "$app/Contents/Info.plist"; fi
 if command -v codesign >/dev/null; then
+  # Nested code is signed before the bundle that seals it.
+  if [[ -f $app/Contents/Frameworks/libonnxruntime.dylib ]]; then
+    codesign --force ${CODESIGN_IDENTITY:+--options runtime --timestamp} --sign "${CODESIGN_IDENTITY:--}" "$app/Contents/Frameworks/libonnxruntime.dylib"
+  fi
   if [[ -n ${CODESIGN_IDENTITY:-} ]]; then
     codesign --force --options runtime --timestamp --entitlements "$dist/zeron.entitlements" --sign "$CODESIGN_IDENTITY" "$app"
   else

@@ -152,6 +152,110 @@ pub const Toggled = enum(u2) { off, on, mixed };
 
 pub const Orientation = enum(u1) { horizontal, vertical };
 
+/// A text field's selection (AccessKit `TextSelection`), as UTF-8 byte offsets into the
+/// node's value. `anchor == focus` is a caret; `focus` is the moving end (the caret).
+pub const TextSelection = struct {
+    anchor: u32,
+    focus: u32,
+
+    pub fn start(s: TextSelection) u32 {
+        return @min(s.anchor, s.focus);
+    }
+
+    pub fn end(s: TextSelection) u32 {
+        return @max(s.anchor, s.focus);
+    }
+
+    pub fn isCaret(s: TextSelection) bool {
+        return s.anchor == s.focus;
+    }
+};
+
+/// Offset conversions for text values (bridges speak characters (AT-SPI) or UTF-16 code
+/// units (NSAccessibility); the tree stores UTF-8 byte offsets).
+pub const text_offsets = struct {
+    /// Number of code points in `s` (bytes when it is not valid UTF-8).
+    pub fn charCount(s: []const u8) usize {
+        return std.unicode.utf8CountCodepoints(s) catch s.len;
+    }
+
+    /// Code-point index of byte offset `byte` (clamped, snapped back to a boundary).
+    pub fn byteToChar(s: []const u8, byte: usize) usize {
+        const b = snap(s, byte);
+        return charCount(s[0..b]);
+    }
+
+    /// Byte offset of code point `ch` (clamped to the end).
+    pub fn charToByte(s: []const u8, ch: usize) usize {
+        var i: usize = 0;
+        var k: usize = 0;
+        while (i < s.len and k < ch) : (k += 1) i += seqLen(s, i);
+        return @min(i, s.len);
+    }
+
+    /// Length of `s` in UTF-16 code units.
+    pub fn utf16Len(s: []const u8) usize {
+        return byteToUtf16(s, s.len);
+    }
+
+    /// UTF-16 offset of byte offset `byte`.
+    pub fn byteToUtf16(s: []const u8, byte: usize) usize {
+        const b = snap(s, byte);
+        var i: usize = 0;
+        var n: usize = 0;
+        while (i < b) {
+            const l = seqLen(s, i);
+            n += if (l == 4) 2 else 1;
+            i += l;
+        }
+        return n;
+    }
+
+    /// Byte offset of UTF-16 offset `u` (clamped; a split surrogate pair rounds down).
+    pub fn utf16ToByte(s: []const u8, u: usize) usize {
+        var i: usize = 0;
+        var n: usize = 0;
+        while (i < s.len) {
+            const l = seqLen(s, i);
+            const w: usize = if (l == 4) 2 else 1;
+            if (n + w > u) break;
+            n += w;
+            i += l;
+        }
+        return @min(i, s.len);
+    }
+
+    /// Zero-based line (split on `\n`) holding byte offset `byte`.
+    pub fn lineOf(s: []const u8, byte: usize) usize {
+        const b = @min(byte, s.len);
+        return std.mem.count(u8, s[0..b], "\n");
+    }
+
+    /// Byte range `[start, end)` of line `line`, including its trailing newline; null
+    /// past the last line.
+    pub fn lineRange(s: []const u8, line: usize) ?[2]usize {
+        var start: usize = 0;
+        var k: usize = 0;
+        while (k < line) : (k += 1) {
+            const nl = std.mem.indexOfScalarPos(u8, s, start, '\n') orelse return null;
+            start = nl + 1;
+        }
+        const end = if (std.mem.indexOfScalarPos(u8, s, start, '\n')) |nl| nl + 1 else s.len;
+        return .{ start, end };
+    }
+
+    fn seqLen(s: []const u8, i: usize) usize {
+        const l = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
+        return @min(l, s.len - i);
+    }
+
+    fn snap(s: []const u8, byte: usize) usize {
+        var b = @min(byte, s.len);
+        while (b > 0 and b < s.len and (s[b] & 0xC0) == 0x80) b -= 1;
+        return b;
+    }
+};
+
 /// Requests assistive technology can make (AccessKit `Action`, the subset zpui handles).
 pub const Action = enum(u4) {
     /// Press / activate (AXPress, AT-SPI "click").
@@ -166,6 +270,8 @@ pub const Action = enum(u4) {
     collapse,
     scroll_into_view,
     show_context_menu,
+    /// Move the caret / selection of a text field (`ActionRequest.selection`).
+    set_text_selection,
 };
 
 pub const ActionSet = std.EnumSet(Action);
@@ -178,6 +284,8 @@ pub const ActionRequest = struct {
     value: ?[]const u8 = null,
     /// `set_value` with a number (sliders).
     numeric: ?f64 = null,
+    /// `set_text_selection`: the new selection (UTF-8 byte offsets into the value).
+    selection: ?TextSelection = null,
 };
 
 /// What an element declares about itself (gpui `aria_*` builder calls). Strings are
@@ -188,6 +296,10 @@ pub const Info = struct {
     value: ?[]const u8 = null,
     placeholder: ?[]const u8 = null,
     keyshortcuts: ?[]const u8 = null,
+    /// A link's target (AT-SPI Hyperlink `GetURI`, AXURL).
+    url: ?[]const u8 = null,
+    /// A text field's caret / selection in its value.
+    text_selection: ?TextSelection = null,
     selected: ?bool = null,
     expanded: ?bool = null,
     toggled: ?Toggled = null,
@@ -246,6 +358,8 @@ pub const Node = struct {
     value: Str = .{},
     placeholder: Str = .{},
     keyshortcuts: Str = .{},
+    url: Str = .{},
+    text_selection: ?TextSelection = null,
     /// Text gathered from descendant text elements (name from content).
     content: Str = .{},
     selected: ?bool = null,
@@ -317,6 +431,21 @@ pub const Tree = struct {
     finalized: bool = false,
     /// Duplicate ids seen this frame (dropped, as in zui release builds).
     duplicates: u32 = 0,
+    /// Interactive elements (click listeners or a tab-stop focus handle) that pushed no
+    /// node because they have no role: an audit for apps (`unroled`).
+    unroled: std.ArrayList(Unroled) = .empty,
+
+    /// An interactive element without a role (see `noteUnroled`).
+    pub const Unroled = struct {
+        gid: u64,
+        /// The enclosing node (index) when the element was prepainted.
+        parent: u32,
+        bounds: Bounds,
+        /// The element's own id, formatted (`name`, `name#3`, `#7`).
+        element: Str,
+        clickable: bool,
+        focusable: bool,
+    };
 
     pub fn init(gpa: Allocator) Tree {
         return .{ .gpa = gpa };
@@ -329,6 +458,7 @@ pub const Tree = struct {
         t.index.deinit(t.gpa);
         t.stack.deinit(t.gpa);
         t.pieces.deinit(t.gpa);
+        t.unroled.deinit(t.gpa);
     }
 
     pub fn clear(t: *Tree) void {
@@ -338,6 +468,7 @@ pub const Tree = struct {
         t.index.clearRetainingCapacity();
         t.stack.clearRetainingCapacity();
         t.pieces.clearRetainingCapacity();
+        t.unroled.clearRetainingCapacity();
         t.element_nodes = 0;
         t.focus_node = null;
         t.reported_focus = 0;
@@ -406,6 +537,8 @@ pub const Tree = struct {
             .value = t.internOpt(i.value),
             .placeholder = t.internOpt(i.placeholder),
             .keyshortcuts = t.internOpt(i.keyshortcuts),
+            .url = t.internOpt(i.url),
+            .text_selection = i.text_selection,
             .selected = i.selected,
             .expanded = i.expanded,
             .toggled = i.toggled,
@@ -466,6 +599,14 @@ pub const Tree = struct {
         t.pieces.append(t.gpa, .{ .node = cur, .str = s, .bounds = bounds, .at = @intCast(t.nodes.items.len) }) catch @panic("OOM");
     }
 
+    /// Record an interactive element that has no role (and so no node). Deduplicated by
+    /// global id (speculative prepaints may visit an element twice).
+    pub fn noteUnroled(t: *Tree, gid: u64, bounds: Bounds, element: []const u8, clickable: bool, focusable: bool) void {
+        if (!t.isBuilding()) return;
+        for (t.unroled.items) |u| if (u.gid == gid) return;
+        t.unroled.append(t.gpa, .{ .gid = gid, .parent = t.current(), .bounds = bounds, .element = t.intern(element), .clickable = clickable, .focusable = focusable }) catch @panic("OOM");
+    }
+
     /// Mutable access to the current node (zui `A11ySubtreeBuilder::parent_node`).
     pub fn currentNode(t: *Tree) *Node {
         return &t.nodes.items[t.current()];
@@ -477,6 +618,10 @@ pub const Tree = struct {
         for (t.nodes.items[@min(n, t.nodes.items.len)..]) |node| _ = t.index.remove(node.id);
         if (n < t.nodes.items.len) t.nodes.shrinkRetainingCapacity(n);
         if (p < t.pieces.items.len) t.pieces.shrinkRetainingCapacity(p);
+        var k: usize = 0;
+        while (k < t.unroled.items.len) {
+            if (t.unroled.items[k].parent >= n) _ = t.unroled.orderedRemove(k) else k += 1;
+        }
         // Defensive: drop stack entries past the end (balanced callers never have any).
         while (t.stack.items.len > 1 and t.stack.getLast() >= n) _ = t.stack.pop();
     }
@@ -515,6 +660,7 @@ pub const Tree = struct {
             n.value = t.copyStr(src, sn.value);
             n.placeholder = t.copyStr(src, sn.placeholder);
             n.keyshortcuts = t.copyStr(src, sn.keyshortcuts);
+            n.url = t.copyStr(src, sn.url);
             n.content = .{};
             n.first_child = 0;
             n.child_count = 0;
@@ -741,6 +887,7 @@ pub const Tree = struct {
         if (n.expanded) |v| try w.writeAll(if (v) " expanded" else " collapsed");
         if (n.toggled) |v| try w.print(" toggled={t}", .{v});
         if (n.disabled) try w.writeAll(" disabled");
+        if (n.text_selection) |sel| try w.print(" selection={d}..{d}", .{ sel.anchor, sel.focus });
         if (t.finalized and ix == t.reported_focus and ix != 0) try w.writeAll(" focused");
         try w.writeAll("\n");
         if (t.finalized) for (t.children(ix)) |c| try t.dumpNode(w, c, d + 1);
@@ -766,7 +913,9 @@ pub const ChangeMask = packed struct(u16) {
     actions: bool = false,
     placeholder: bool = false,
     numeric: bool = false,
-    _pad: u4 = 0,
+    /// The caret or selection of a text field moved.
+    text_selection: bool = false,
+    _pad: u3 = 0,
 
     pub fn any(m: ChangeMask) bool {
         return @as(u16, @bitCast(m)) != 0;
@@ -783,6 +932,7 @@ pub const Change = struct {
     was_selected: ?bool = null,
     was_expanded: ?bool = null,
     was_toggled: ?Toggled = null,
+    was_text_selection: ?TextSelection = null,
 };
 
 /// The change set from one frame to the next (`diff`), handed to platform bridges.
@@ -858,6 +1008,7 @@ pub fn diff(gpa: Allocator, prev: *const Tree, next: *const Tree, out: *Changes)
         if (!optEql(bool, p.selected, n.selected) or !optEql(bool, p.expanded, n.expanded) or !optEql(Toggled, p.toggled, n.toggled) or p.disabled != n.disabled or p.read_only != n.read_only) m.state = true;
         if (!optEql(f64, p.numeric_value, n.numeric_value) or !optEql(f64, p.min_numeric_value, n.min_numeric_value) or !optEql(f64, p.max_numeric_value, n.max_numeric_value)) m.numeric = true;
         if (!std.meta.eql(p.bounds, n.bounds)) m.bounds = true;
+        if (!std.meta.eql(p.text_selection, n.text_selection)) m.text_selection = true;
         if (p.actions.bits.mask != n.actions.bits.mask) m.actions = true;
         const pc = prev.children(pix);
         const nc = next.children(@intCast(ix));
@@ -874,6 +1025,7 @@ pub fn diff(gpa: Allocator, prev: *const Tree, next: *const Tree, out: *Changes)
             .was_selected = p.selected,
             .was_expanded = p.expanded,
             .was_toggled = p.toggled,
+            .was_text_selection = p.text_selection,
         }) catch @panic("OOM");
     }
     for (prev.nodes.items) |n| {
@@ -1044,4 +1196,47 @@ test "truncate rolls back speculative nodes" {
     t.truncate(n0, p0);
     try testing.expectEqual(n0, t.len());
     try testing.expect(t.push(spec(1, .button)));
+}
+
+test "text offset conversions" {
+    const t = text_offsets;
+    const s = "a\u{e9}\u{1F600}b\nc";
+    // bytes: a(0) é(1,2) 😀(3..7) b(7) \n(8) c(9)
+    try testing.expectEqual(@as(usize, 6), t.charCount(s));
+    try testing.expectEqual(@as(usize, 3), t.byteToChar(s, 7));
+    try testing.expectEqual(@as(usize, 7), t.charToByte(s, 3));
+    try testing.expectEqual(@as(usize, 7), t.utf16Len(s));
+    try testing.expectEqual(@as(usize, 4), t.byteToUtf16(s, 7));
+    try testing.expectEqual(@as(usize, 7), t.utf16ToByte(s, 4));
+    try testing.expectEqual(@as(usize, 3), t.utf16ToByte(s, 3)); // inside the surrogate pair
+    try testing.expectEqual(@as(usize, 1), t.byteToChar(s, 2)); // inside é snaps back
+    try testing.expectEqual(@as(usize, 1), t.lineOf(s, 9));
+    try testing.expectEqual([2]usize{ 0, 9 }, t.lineRange(s, 0).?);
+    try testing.expectEqual([2]usize{ 9, 10 }, t.lineRange(s, 1).?);
+    try testing.expect(t.lineRange(s, 2) == null);
+}
+
+test "diff reports text selection moves" {
+    var a = Tree.init(testing.allocator);
+    defer a.deinit();
+    var b = Tree.init(testing.allocator);
+    defer b.deinit();
+    const vp: Bounds = .{ .origin = .zero, .size = .{ .width = 100, .height = 100 } };
+    a.begin(null, vp);
+    var sp = spec(5, .text_input);
+    sp.info = .{ .value = "hello", .text_selection = .{ .anchor = 0, .focus = 0 } };
+    _ = a.push(sp);
+    a.pop();
+    a.finalize(null);
+    b.begin(null, vp);
+    sp.info.text_selection = .{ .anchor = 1, .focus = 3 };
+    _ = b.push(sp);
+    b.pop();
+    b.finalize(null);
+    var ch: Changes = .{};
+    defer ch.deinit(testing.allocator);
+    diff(testing.allocator, &a, &b, &ch);
+    const m = ch.find(@enumFromInt(5)).?;
+    try testing.expect(m.text_selection);
+    try testing.expect(!m.value);
 }

@@ -37,6 +37,8 @@ const model = @import("model.zig");
 const deco = @import("decorations.zig");
 const icons = @import("icons.zig");
 const search_mod = @import("search.zig");
+const drag_mod = @import("drag.zig");
+pub const WorkspacePathDrag = drag_mod.WorkspacePathDrag;
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -108,6 +110,18 @@ const Rename = struct {
     sub: zpui.Subscription,
 };
 
+/// `TreeDrag`: an entry dragged within the tree (move into a folder).
+const TreeDrag = struct {
+    payload: ?WorkspacePathDrag = null,
+    /// The folder under the pointer ("" = workspace root); owned.
+    destination: ?[]u8 = null,
+    pointer: Point = .{ .x = 0, .y = 0 },
+    bounds: zpui.Bounds(f32) = .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 0, .height = 0 } },
+    hover_since: ?u64 = null,
+    last_tick: ?u64 = null,
+    ticking: bool = false,
+};
+
 const DeleteFlow = struct {
     path: []u8,
     is_dir: bool,
@@ -163,6 +177,12 @@ pub const FilesPanel = struct {
     refresh_timer: Task(void) = .none,
     refresh_dirs: std.StringArrayHashMapUnmanaged(void) = .empty,
 
+    // drag (`files/drag.rs`)
+    /// The chat whose explorer this is (`drag.ownerOf`); stamped on drags.
+    drag_owner: u64 = 0,
+    tree_drag: TreeDrag = .{},
+    drag_timer: Task(void) = .none,
+
     // sections
     subagents: std.ArrayList(SectionRow) = .empty,
     chats: std.ArrayList(SectionRow) = .empty,
@@ -180,6 +200,7 @@ pub const FilesPanel = struct {
         const search = try cx.newWith(TextInput, TextInput.init, .{input.Options{
             .placeholder = "Search files",
             .key_context = "Composer",
+            .role = .search_input,
             .single_line = true,
             .text_size = 11.5,
             .line_height = 16,
@@ -213,6 +234,8 @@ pub const FilesPanel = struct {
         self.subs.deinit(self.gpa);
         self.search_timer.cancel();
         self.refresh_timer.cancel();
+        self.drag_timer.cancel();
+        self.freeOpt(&self.tree_drag.destination);
         self.tree.deinit();
         self.decorations.deinit();
         self.scroll.release();
@@ -268,6 +291,12 @@ pub const FilesPanel = struct {
     }
 
     /// Start loading the root (idempotent; the host calls it when shown).
+    /// The chat this explorer belongs to (drags into the conversation are
+    /// accepted only by that chat).
+    pub fn setDragOwner(self: *FilesPanel, chat_id: []const u8, _: *Context(FilesPanel)) void {
+        self.drag_owner = drag_mod.ownerOf(chat_id);
+    }
+
     pub fn ensureLoaded(self: *FilesPanel, cx: *Context(FilesPanel)) void {
         self.files.update(cx, client.WorkspaceFiles.ensureWatch, .{});
         if (self.started) return;
@@ -726,6 +755,196 @@ pub const FilesPanel = struct {
         }
     }
 
+    // ---- drag (`files/drag.rs`) --------------------------------------------------------
+
+    /// A row's drag payload (`WorkspacePathDrag::new(..).with_origin(..)`).
+    fn dragPayload(self: *const FilesPanel, source: drag_mod.Source, path: []const u8, is_dir: bool, revision: ?[]const u8) ?WorkspacePathDrag {
+        return WorkspacePathDrag.init(self.drag_owner, source, path, is_dir, revision);
+    }
+
+    /// `tree_drag_compatible`: a tree drag from this explorer whose entry
+    /// is still the revision it started as, while no mutation is in flight.
+    fn treeDragCompatible(self: *const FilesPanel, p: *const WorkspacePathDrag) bool {
+        if (p.source != .tree or p.owner == 0 or p.owner != self.drag_owner) return false;
+        if (self.mutation_busy or self.rename != null or self.delete_flow != null) return false;
+        if (!self.capabilities.moveEntry) return false;
+        const n = self.tree.node(p.path()) orelse return false;
+        if (n.kind == .symlink) return false;
+        const rev = n.revision orelse return false;
+        const prev = p.revision() orelse return false;
+        return std.mem.eql(u8, rev, prev);
+    }
+
+    /// `drop_directory_at`: the folder a drop at `point` targets ("" = the
+    /// workspace root), borrowed from the tree. The root row, folder rows,
+    /// file rows (their parent) and an empty folder's placeholder are targets;
+    /// the empty space below the last row is the root; the scrollbar rail is not.
+    fn dropDirectoryAt(self: *const FilesPanel, point: Point) ?[]const u8 {
+        const b = self.tree_drag.bounds;
+        if (!b.contains(point)) return null;
+        if (point.x > b.right() - drag_mod.rail_width) return null;
+        if (point.y < b.origin.y + root_row_height) return "";
+        const handle = self.scroll.baseHandle();
+        const vp = handle.bounds();
+        if (!vp.contains(point)) return null;
+        const rel = point.y - vp.origin.y - handle.offset().y;
+        if (rel < 0) return null;
+        const ix: usize = @intFromFloat(@floor(rel / tree_row_height));
+        const rows = self.tree.rows();
+        if (ix >= rows.len) return "";
+        const r = rows[ix];
+        switch (r.kind) {
+            .entry => {
+                const n = self.tree.node(r.path) orelse return null;
+                return switch (n.kind) {
+                    .directory => n.path,
+                    .file => model.parentPath(n.path),
+                    .symlink => null,
+                };
+            },
+            .empty => return r.path,
+            else => return null,
+        }
+    }
+
+    /// The valid destination folder at `point` for `p` (owned copy), if any.
+    fn destinationAt(self: *FilesPanel, p: *const WorkspacePathDrag, point: Point) ?[]u8 {
+        const dir = self.dropDirectoryAt(point) orelse return null;
+        var buf: [2048]u8 = undefined;
+        var fba = std.heap.FixedBufferAllocator.init(&buf);
+        _ = drag_mod.destinationPath(fba.allocator(), p.path(), dir, p.is_directory) orelse return null;
+        return self.gpa.dupe(u8, dir) catch null;
+    }
+
+    fn setDestination(self: *FilesPanel, dest: ?[]u8, now: u64) bool {
+        const same = if (self.tree_drag.destination) |a| (if (dest) |b| std.mem.eql(u8, a, b) else false) else dest == null;
+        if (same) {
+            if (dest) |d| self.gpa.free(d);
+            return false;
+        }
+        self.freeOpt(&self.tree_drag.destination);
+        self.tree_drag.destination = dest;
+        self.tree_drag.hover_since = now;
+        return true;
+    }
+
+    fn setDragCursor(cx: anytype, style: zpui.platform.CursorStyle) void {
+        if (cx.app.active_drag) |*d| d.cursor_style = style;
+    }
+
+    /// `on_tree_drag_move`.
+    fn onTreeDragMove(self: *FilesPanel, ev: *const zpui.DragMoveEvent(WorkspacePathDrag), window: *Window, cx: *Context(FilesPanel)) void {
+        const payload = ev.value.*;
+        self.tree_drag.bounds = ev.bounds;
+        if (!ev.bounds.contains(ev.event.position) or !self.treeDragCompatible(&payload)) {
+            self.clearTreeDrag(cx);
+            return;
+        }
+        if (self.menu != null) self.closeMenu();
+        self.window_id = window.id;
+        self.tree_drag.pointer = ev.event.position;
+        self.tree_drag.payload = payload;
+        const now = cx.app.executor.now();
+        if (self.setDestination(self.destinationAt(&payload, ev.event.position), now)) cx.notify();
+        if (!self.tree_drag.ticking) {
+            self.tree_drag.ticking = true;
+            self.tree_drag.last_tick = now;
+            self.drag_timer = cx.timer(drag_mod.tick_ns, onDragTick) catch .none;
+        }
+        setDragCursor(cx, if (self.tree_drag.destination != null) .closed_hand else .operation_not_allowed);
+    }
+
+    /// `on_tree_drop`: move the entry into the folder under the pointer.
+    fn onTreeDrop(self: *FilesPanel, payload: *const WorkspacePathDrag, window: *Window, cx: *Context(FilesPanel)) void {
+        var arena = std.heap.ArenaAllocator.init(self.gpa);
+        defer arena.deinit();
+        const dest: ?[]const u8 = if (self.treeDragCompatible(payload)) blk: {
+            const dir = self.dropDirectoryAt(window.mousePosition()) orelse break :blk null;
+            break :blk drag_mod.destinationPath(arena.allocator(), payload.path(), dir, payload.is_directory);
+        } else null;
+        self.clearTreeDrag(cx);
+        const d = dest orelse return;
+        const n = self.tree.node(payload.path()) orelse return;
+        self.freeOpt(&self.mutation_error);
+        self.mutation_busy = true;
+        self.setOpt(&self.pending_old, payload.path());
+        self.setOpt(&self.pending_new, d);
+        self.files.read(cx).moveEntry(cx, .{ .source = payload.path(), .destination = d, .revision = n.revision orelse "", .kind = n.kind }, onMoved);
+        cx.notify();
+    }
+
+    /// `tree_drag_tick`: edge autoscroll and hover-to-expand, every 16 ms
+    /// while the drag stays over the tree.
+    fn onDragTick(self: *FilesPanel, cx: *Context(FilesPanel)) void {
+        self.drag_timer.detach();
+        self.drag_timer = .none;
+        self.tree_drag.ticking = false;
+        const payload = self.tree_drag.payload orelse return;
+        const window = cx.app.windowById(self.window_id) orelse return self.clearTreeDrag(cx);
+        const pointer = window.mousePosition();
+        if (cx.app.activeDrag(WorkspacePathDrag) == null or !window.isWindowActive() or
+            !self.treeDragCompatible(&payload) or !self.tree_drag.bounds.contains(pointer))
+        {
+            self.clearTreeDrag(cx);
+            return;
+        }
+        const now = cx.app.executor.now();
+        const elapsed: f32 = if (self.tree_drag.last_tick) |last| @min(@as(f32, @floatFromInt(now -| last)) / std.time.ns_per_s, 0.05) else 0;
+        self.tree_drag.last_tick = now;
+        const handle = self.scroll.baseHandle();
+        const vp = handle.bounds();
+        const speed = if (vp.contains(pointer)) drag_mod.edgeScrollSpeed(pointer.y, vp.origin.y, vp.bottom()) else 0;
+        if (speed != 0) {
+            const off = handle.offset();
+            const max = handle.maxOffset();
+            // Offsets are negative going down (`max_offset` is the positive extent).
+            const y = std.math.clamp(off.y - speed * elapsed, -max.y, 0);
+            handle.setOffset(.{ .x = off.x, .y = y });
+            cx.notify();
+        }
+        if (self.setDestination(self.destinationAt(&payload, pointer), now)) cx.notify();
+        if (self.tree_drag.hover_since) |since| if (now -| since >= drag_mod.hover_expand_ns) {
+            self.tree_drag.hover_since = null;
+            if (self.tree_drag.destination) |dir| if (dir.len > 0 and !self.tree.isExpanded(dir)) {
+                const copy = self.gpa.dupe(u8, dir) catch return;
+                defer self.gpa.free(copy);
+                if (self.tree.expand(copy)) {
+                    if (self.tree.node(copy)) |n| {
+                        if (n.stale or !n.has_loaded) self.loadDirectory(n.path, false, cx);
+                        self.files.update(cx, client.WorkspaceFiles.watchDirectory, .{n.path});
+                    }
+                    cx.notify();
+                }
+            };
+        };
+        self.tree_drag.ticking = true;
+        self.drag_timer = cx.timer(drag_mod.tick_ns, onDragTick) catch blk: {
+            self.tree_drag.ticking = false;
+            break :blk .none;
+        };
+    }
+
+    /// `clear_tree_drag`.
+    fn clearTreeDrag(self: *FilesPanel, cx: *Context(FilesPanel)) void {
+        self.drag_timer.cancel();
+        self.drag_timer = .none;
+        self.tree_drag.ticking = false;
+        self.tree_drag.hover_since = null;
+        self.tree_drag.last_tick = null;
+        if (self.tree_drag.payload != null or self.tree_drag.destination != null) {
+            self.tree_drag.payload = null;
+            self.freeOpt(&self.tree_drag.destination);
+            setDragCursor(cx, .arrow);
+            cx.notify();
+        }
+    }
+
+    /// The highlighted drop folder (`tree_drag.destination`).
+    fn dropHighlighted(self: *const FilesPanel, path: []const u8) bool {
+        const d = self.tree_drag.destination orelse return false;
+        return std.mem.eql(u8, d, path);
+    }
+
     // ---- mutations -----------------------------------------------------------------
 
     fn canMutate(self: *const FilesPanel, path: []const u8, deleting: bool) bool {
@@ -1004,7 +1223,7 @@ pub const FilesPanel = struct {
             .child(self.renderHeader(theme, cx))
             .child(div().flex1().minH0().wFull().child(self.renderExplorer(theme, cx)));
         if (self.mutation_error) |msg| {
-            root = root.child(div().id("files-mutation-error").flexNone().mx(px(8)).mb(px(6)).px(px(10)).py(px(6)).rounded(px(7))
+            root = root.child(div().id("files-mutation-error").role(.button).flexNone().mx(px(8)).mb(px(6)).px(px(10)).py(px(6)).rounded(px(7))
                 .bg(theme.danger.opacity(0.08)).border1().borderColor(theme.danger.opacity(0.2)).flex().itemsCenter().gap(px(6))
                 .textSize(px(11)).textColor(theme.danger_muted).cursorPointer().onClick(cx.listener(onDismissError))
                 .child(ui.icon.of(.danger_triangle, 12, theme.danger_muted))
@@ -1024,7 +1243,7 @@ pub const FilesPanel = struct {
             .onMouseDown(.left, cx.listener(onSearchFieldDown))
             .child(ui.icon.of(.magnifer, 12, theme.text_faint))
             .child(div().minW0().flex1().overflowHidden().child(self.search));
-        var eye = div().id("files-toggle-ignored").size(px(control_size)).flexNone().rounded(px(control_radius)).flex().itemsCenter().justifyCenter()
+        var eye = div().id("files-toggle-ignored").role(.button).ariaLabel(if (include) "Hide hidden and ignored files" else "Show all files (even hidden)").size(px(control_size)).flexNone().rounded(px(control_radius)).flex().itemsCenter().justifyCenter()
             .cursorPointer().occlude().onMouseDown(.left, preventDefault).hover(sb.bg(theme.wash(0.14)))
             .tooltipWith(@as([]const u8, if (include) "Hide hidden and ignored files" else "Show all files (even hidden)"), ui.tooltip.build)
             .onClick(cx.listener(onToggleIgnored))
@@ -1050,7 +1269,7 @@ pub const FilesPanel = struct {
         if (self.root_error) |e| if (!self.tree.rootLoaded()) {
             return col.child(div().flex1().flex().flexCol().itemsCenter().justifyCenter().gap(px(10)).px(px(28))
                 .child(div().textCenter().textSize(px(12)).textColor(theme.text_muted).child(e))
-                .child(div().id("files-retry-root").h(px(28)).px(px(12)).rounded(px(7)).border1().borderColor(theme.border)
+                .child(div().id("files-retry-root").role(.button).h(px(28)).px(px(12)).rounded(px(7)).border1().borderColor(theme.border)
                 .bg(theme.wash(0.04)).hover(sb.bg(theme.wash(0.09))).cursorPointer().flex().itemsCenter()
                 .textSize(px(11.5)).textColor(theme.text).child("Retry").onClick(cx.listener(retryRoot))));
         };
@@ -1061,12 +1280,19 @@ pub const FilesPanel = struct {
     fn renderTree(self: *FilesPanel, theme: *const Theme, cx: *Context(FilesPanel)) zpui.StatefulDiv {
         const n = self.tree.rows().len;
         const list = zpui.uniformList("files-tree-rows", n, cx, renderTreeRows).trackScroll(self.scroll).sizeFull();
+        // `render_tree_root_target`.
+        const root_active = if (self.tree_drag.destination) |d| d.len == 0 else false;
+        const root_label = if (self.tree_drag.payload != null) "Move to workspace root" else "Workspace root";
+        var root_row = div().id("tree-workspace-root").ariaLabel(root_label).h(px(root_row_height)).wFull().flexNone().px(px(8)).flex().itemsCenter()
+            .textSize(px(10.5)).textColor(theme.text_muted).child(root_label);
+        if (root_active) root_row = root_row.bg(theme.wash(0.16));
         return div().id("files-tree").role(.tree).ariaLabel("Workspace file tree").relative().flex1().minH0().flex().flexCol()
+            .onDragMove(WorkspacePathDrag, cx.listener(onTreeDragMove))
+            .onDrop(WorkspacePathDrag, cx.listener(onTreeDrop))
             .trackFocus(self.tree_focus)
             .onMouseDown(.left, cx.listener(onTreeMouseDown))
             .onKeyDown(cx.listener(onTreeKey))
-            .child(div().id("tree-workspace-root").h(px(root_row_height)).wFull().flexNone().px(px(8)).flex().itemsCenter()
-            .textSize(px(10.5)).textColor(theme.text_muted).child("Workspace root"))
+            .child(root_row)
             .child(div().relative().flex1().minH0()
             .child(zpui.edgeFaded(tree_fade_band, true, true, list).fadeOverflowY(self.scroll))
             .child(zpui.scrollbar(self.scroll).id("files-tree-scrollbar").withStyle(compactBar(theme))));
@@ -1113,13 +1339,13 @@ pub const FilesPanel = struct {
                     .failed => |f| f.message,
                     else => "Error",
                 }) else "Error";
-                return zpui.intoAnyElement(withGuides(div().id(.{ "files-tree-error", ix }).h(px(tree_row_height)).wFull().pl(px(padding + tree_indent)).pr(px(8))
+                return zpui.intoAnyElement(withGuides(div().id(.{ "files-tree-error", ix }).role(.button).h(px(tree_row_height)).wFull().pl(px(padding + tree_indent)).pr(px(8))
                     .flex().itemsCenter().gap(px(6)).cursorPointer().hover(sb.bg(theme.wash(0.055)))
                     .onClick(cx.listenerWith(ix, onRowClick))
                     .child(div().minW0().truncate().whitespaceNowrap().textSize(px(10.5)).textColor(theme.danger.opacity(0.82)).child(zpui.fmt("{s} \u{2014} Retry", .{msg}))), r.depth, theme));
             },
             .load_more => {
-                return zpui.intoAnyElement(withGuides(div().id(.{ "files-tree-more", ix }).h(px(tree_row_height)).wFull().pl(px(padding + tree_indent)).pr(px(8))
+                return zpui.intoAnyElement(withGuides(div().id(.{ "files-tree-more", ix }).role(.button).h(px(tree_row_height)).wFull().pl(px(padding + tree_indent)).pr(px(8))
                     .flex().itemsCenter().cursorPointer().hover(sb.bg(theme.wash(0.055)))
                     .onClick(cx.listenerWith(ix, onRowClick))
                     .child(div().textSize(px(10.5)).textColor(theme.text_muted).child("Load more\u{2026}")), r.depth, theme));
@@ -1138,6 +1364,7 @@ pub const FilesPanel = struct {
             .onClick(cx.listenerWith(ix, onRowClick))
             .onMouseDown(.right, cx.listenerWith(ix, onRowRightDown));
         if (is_dir) row = row.ariaExpanded(expanded);
+        if (is_dir and self.dropHighlighted(n.path)) row = row.bg(theme.wash(0.18));
         if (n.ignored and decoration == null) row = row.opacity(0.52);
         row = if (selected) row.bg(theme.wash(if (focused) 0.12 else 0.08)) else row.hover(sb.bg(theme.wash(0.055)));
         var disclosure = div().size(px(14)).flexNone().flex().itemsCenter().justifyCenter();
@@ -1149,6 +1376,9 @@ pub const FilesPanel = struct {
             .symlink => .symlink,
         }, n.name, theme, 14));
         const renaming = if (self.rename) |rn| std.mem.eql(u8, rn.path, n.path) else false;
+        if (!renaming) if (self.dragPayload(.tree, n.path, is_dir, n.revision)) |payload| {
+            row = row.onDrag(payload, drag_mod.buildGhost);
+        };
         if (renaming) {
             row = row.child(div().id("files-tree-rename").flex1().minW0().h(px(22)).px(px(6)).rounded(px(5)).border1().borderColor(theme.accent)
                 .bg(theme.inputGlassBg()).flex().itemsCenter().textSize(px(11.5)).textColor(theme.text).cursorText().occlude()
@@ -1168,7 +1398,7 @@ pub const FilesPanel = struct {
             col = col.child(div().h(px(24)).flexNone().px(px(10)).flex().itemsCenter().textSize(px(10)).textColor(theme.text_faint).child("Showing the first 200 matches"));
         };
         const list = zpui.uniformList("files-search-rows", rows.len, cx, renderSearchRows).trackScroll(self.search_scroll).sizeFull();
-        return col.child(div().relative().flex1().minH0().child(list)
+        return col.child(div().id("files-search-results").role(.tree).ariaLabel("Fuzzy workspace file results").relative().flex1().minH0().child(list)
             .child(zpui.scrollbar(self.search_scroll).id("files-search-scrollbar").withStyle(compactBar(theme))));
     }
 
@@ -1189,9 +1419,11 @@ pub const FilesPanel = struct {
         const expanded = r.has_children and self.search_tree.isExpanded(r.path);
         const decoration = self.decorations.get(r.path, is_dir);
         const padding = 8 + @as(f32, @floatFromInt(r.depth)) * tree_indent;
-        var row = div().id(.{ "files-search-result", ix }).h(px(tree_row_height)).wFull().flexNone().pl(px(padding)).pr(px(8))
+        var row = div().id(.{ "files-search-result", ix }).role(.tree_item).ariaLabel(r.name).ariaSelected(selected).h(px(tree_row_height)).wFull().flexNone().pl(px(padding)).pr(px(8))
             .flex().itemsCenter().gap(px(4)).cursorPointer().onClick(cx.listenerWith(ix, onSearchRowClick));
+        if (self.dragPayload(.search, r.path, is_dir, null)) |payload| row = row.onDrag(payload, drag_mod.buildGhost);
         row = if (selected) row.bg(theme.wash(0.1)) else row.hover(sb.bg(theme.wash(0.055)));
+        if (r.has_children) row = row.ariaExpanded(expanded);
         var disclosure = div().size(px(14)).flexNone().flex().itemsCenter().justifyCenter();
         if (r.has_children) disclosure = disclosure.child(ui.icon.of(if (expanded) .alt_arrow_down else .alt_arrow_right, 11, theme.text_faint));
         const color = if (decoration) |d| d.color(theme) else if (is_dir) theme.text_muted else theme.text;
@@ -1214,7 +1446,7 @@ pub const FilesPanel = struct {
             if (i == 2) card = card.child(ui.popover.separator(theme));
             const enabled = i < 2 or self.canMutate(m.path, i == 3);
             const danger = i == 3;
-            var row = ui.popover.menuRow(theme, false).id(.{ "tree-menu", i })
+            var row = ui.popover.menuRow(theme, false).id(.{ "tree-menu", i }).role(.menu_item)
                 .child(ui.icon.of(e[1], 16, if (danger) theme.danger else theme.text_muted))
                 .child(e[0]);
             if (danger) row = row.textColor(theme.danger);
@@ -1231,9 +1463,9 @@ pub const FilesPanel = struct {
             name,
             if (d.is_dir) "All current folder contents will be deleted. " else "This cannot be undone. ",
         });
-        var cancel = dialog.btnGhost(theme, "Cancel").id("tree-delete-cancel").onClick(cx.listener(onDeleteCancel));
+        var cancel = dialog.btnGhost(theme, "Cancel").id("tree-delete-cancel").role(.button).onClick(cx.listener(onDeleteCancel));
         if (!d.confirm_focused) cancel = cancel.bg(theme.wash(0.12));
-        var confirm = dialog.btnDanger(theme, "Delete").id("tree-delete-confirm").onClick(cx.listener(onDeleteConfirm));
+        var confirm = dialog.btnDanger(theme, "Delete").id("tree-delete-confirm").role(.button).onClick(cx.listener(onDeleteConfirm));
         if (d.confirm_focused) confirm = confirm.border1().borderColor(theme.text);
         const card = dialog.card(theme).w(px(380)).gap(px(12))
             .child(dialog.title(theme, "Delete permanently?"))
@@ -1276,7 +1508,7 @@ pub const FilesPanel = struct {
         const label_base = if (kind == .subagents) "Subagents" else "Chats";
         const label = if (open or rows.len == 0) label_base else zpui.fmt("{s} ({d})", .{ label_base, rows.len });
         const group = if (kind == .subagents) "files-section-header-subagents" else "files-section-header-chats";
-        var header = div().id(.{ "files-section", @intFromEnum(kind) }).group(group).flexNone().flex().flexRow().itemsCenter().gap(px(6))
+        var header = div().id(.{ "files-section", @intFromEnum(kind) }).role(.button).ariaLabel(zpui.fmt("{s} {s}", .{ if (open) "Collapse" else "Expand", label_base })).group(group).flexNone().flex().flexRow().itemsCenter().gap(px(6))
             .h(px(section_header_height)).pl(px(8)).pr(px(4)).rounded(px(6)).cursorPointer()
             .onClick(cx.listenerWith(@as(usize, @intFromEnum(kind)), onSectionToggle))
             .child(div().flex1().minW0().truncate().whitespaceNowrap().textSize(ui.rems(12)).fontWeight(500).textColor(theme.text_muted.opacity(0.5)).child(label));
@@ -1293,14 +1525,14 @@ pub const FilesPanel = struct {
     }
 
     fn headerAction(id: []const u8, i: ui.icon.Icon, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
-        return div().id(id).flexNone().size(px(20)).rounded(px(5)).flex().itemsCenter().justifyCenter().cursorPointer()
+        return div().id(id).role(.button).ariaLabel(label).flexNone().size(px(20)).rounded(px(5)).flex().itemsCenter().justifyCenter().cursorPointer()
             .hover(sb.bg(theme.wash(0.09))).onMouseDown(.left, preventDefault)
             .tooltipWith(label, ui.tooltip.build)
             .child(ui.icon.of(i, 13, theme.text_muted.opacity(0.85)));
     }
 
     fn pillButton(id: []const u8, i: ui.icon.Icon, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
-        return div().id(id).h(px(26)).px(px(10)).rounded(px(7)).border1().borderColor(theme.border).bg(theme.wash(0.04))
+        return div().id(id).role(.button).ariaLabel(label).h(px(26)).px(px(10)).rounded(px(7)).border1().borderColor(theme.border).bg(theme.wash(0.04))
             .hover(sb.bg(theme.wash(0.09))).cursorPointer().flex().flexRow().itemsCenter().gap(px(5))
             .textSize(px(11.5)).textColor(theme.text).onMouseDown(.left, preventDefault)
             .child(ui.icon.of(i, 12, theme.text_muted)).child(label);
@@ -1319,7 +1551,8 @@ pub const FilesPanel = struct {
         }
         var list = div().id(.{ "files-section-rows", @intFromEnum(kind) }).sizeFull().flex().flexCol().gap(px(section_row_gap)).pt(px(section_body_inset)).overflowYScroll();
         for (rows, 0..) |r, i| {
-            var row = div().id(.{ "files-section-row", @as(usize, @intFromEnum(kind)) * 100000 + i }).flexNone().h(px(section_row_height)).flex().flexRow().itemsCenter().gap(px(4))
+            var row = div().id(.{ "files-section-row", @as(usize, @intFromEnum(kind)) * 100000 + i }).role(.button)
+                .ariaLabel(zpui.fmt("{s} {s}", .{ if (kind == .subagents) "Open subagent" else "Open side chat", r.title })).flexNone().h(px(section_row_height)).flex().flexRow().itemsCenter().gap(px(4))
                 .rounded(px(8)).px(px(8)).cursorPointer().textColor(theme.text.opacity(0.8))
                 .hover(sb.bg(theme.glassHover()).textColor(theme.text));
             row = if (kind == .subagents) row.onClick(cx.listenerWith(i, onSubagentRow)) else row.onClick(cx.listenerWith(i, onChatRow));

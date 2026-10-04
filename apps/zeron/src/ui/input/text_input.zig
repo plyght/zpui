@@ -19,9 +19,14 @@
 //!   solid while typing; steady under reduced motion), wheel scrolling with
 //!   overscroll containment.
 //!
+//! - dictation (Rust `ComposerInput` dictation): a `Transcriber` polled every
+//!   40 ms writes partial / final transcripts over the range selected when it
+//!   began (one undo step), any manual edit, caret move, undo or Escape
+//!   cancels it, and the hold-to-talk shortcut reports `dictation_press` /
+//!   `dictation_release` (key-up or a released modifier) to the composer.
+//!
 //! Not ported here (they live in the composer layer or are later work): file
-//! mention chips and their projection, Markdown faces / list indentation,
-//! dictation capture (the action only emits `toggle_dictation`).
+//! mention chips and their projection, Markdown faces / list indentation.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -30,6 +35,7 @@ const zt = @import("zeron_theme");
 const actions = @import("zeron_actions");
 const editor_mod = @import("editor.zig");
 const seg = @import("segment.zig");
+const dict = @import("dictation.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -182,7 +188,14 @@ pub const TextInputEvent = union(enum) {
     pasted_image,
     /// Plain text was pasted into `[start, end)` at `revision`.
     pasted_text: struct { start: usize, end: usize, revision: u64 },
-    toggle_dictation,
+    /// The dictation shortcut went down (auto-repeat is ignored)…
+    dictation_press,
+    /// …and came back up, or focus left the editor while it was held.
+    dictation_release,
+    /// The dictation phase changed (redraw the composer's voice controls).
+    dictation_changed,
+    /// A dictation that ended with a pending send completed (its generation).
+    dictation_submit: u64,
     /// Tab / Shift-Tab with nothing for the editor to do (owners may move focus).
     tab: struct { shift: bool },
     escape,
@@ -250,6 +263,25 @@ pub const TextInput = struct {
     paste_images: bool = false,
     pasted_image: ?zpui.platform.ClipboardImage = null,
 
+    // ---- dictation (Rust `ComposerInput` dictation state) ----
+    dictation: dict.Dictation,
+    /// Dropping it (`deinit`) cancels capture and invalidates late results.
+    transcriber: ?dict.Transcriber = null,
+    dictation_task: zpui.Task(void) = .none,
+    /// The session generation the poll timer serves.
+    dictation_task_generation: u64 = 0,
+    /// The dictation shortcut while it is held down.
+    dictation_key: ?DictationKey = null,
+
+    /// A held dictation shortcut: its binding recognises the release (the
+    /// key coming up, or any of its modifiers let go — macOS delivers no
+    /// key-up for Command chords).
+    const DictationKey = struct {
+        keystroke: ?zpui.input.Keystroke,
+        key_buf: [32]u8 = undefined,
+        blur: ?zpui.Subscription = null,
+    };
+
     pub const Events = .{TextInputEvent};
 
     const LayoutKey = struct {
@@ -280,6 +312,7 @@ pub const TextInput = struct {
             .paste_images = opts.paste_images,
             .line_height = opts.line_height,
             .content_height = opts.line_height,
+            .dictation = .init(gpa),
         };
         self.state.single_line = opts.single_line;
         self.a11y_role = opts.role orelse if (std.mem.eql(u8, opts.key_context, "PaletteSearch")) .search_input else if (opts.single_line) .text_input else .multiline_text_input;
@@ -289,6 +322,10 @@ pub const TextInput = struct {
     }
 
     pub fn deinit(self: *TextInput, cx: *App) void {
+        // Releasing the input releases the microphone.
+        self.cancelDictation();
+        self.dictation.deinit();
+        if (self.dictation_key) |*k| if (k.blur) |*b| b.deinit();
         self.blink_task.cancel();
         self.drag_task.cancel();
         self.focus.release(cx);
@@ -361,6 +398,21 @@ pub const TextInput = struct {
     fn onA11ySetValue(self: *TextInput, req: *const zpui.a11y.ActionRequest, _: *Window, cx: *Context(TextInput)) void {
         const v = req.value orelse return;
         self.setText(v, cx);
+    }
+
+    /// The fixed end of the selection (the caret is `state.cursor()`).
+    fn selectionAnchor(self: *const TextInput) usize {
+        return if (self.state.reversed) self.state.selected.end else self.state.selected.start;
+    }
+
+    /// Assistive technology moved the caret / selection (AT-SPI SetCaretOffset /
+    /// SetSelection, AXSelectedTextRange).
+    fn onA11ySetSelection(self: *TextInput, req: *const zpui.a11y.ActionRequest, _: *Window, cx: *Context(TextInput)) void {
+        const sel = req.selection orelse return;
+        const len = self.text().len;
+        self.state.moveTo(@min(sel.anchor, len));
+        if (sel.focus != sel.anchor) self.state.selectTo(@min(sel.focus, len));
+        cx.notify();
     }
 
     /// Replace the document (draft load, clear-on-submit): history resets.
@@ -449,6 +501,150 @@ pub const TextInput = struct {
         window.focus(self.focus);
     }
 
+    // ---- dictation (Rust `ComposerInput::{begin,finish,complete,apply,poll}_dictation`) --
+
+    /// Invalidates late results and pending sends, preserving committed text.
+    pub fn cancelDictation(self: *TextInput) void {
+        self.dictation.cancel();
+        // Dropping the transcriber signals capture cancellation.
+        if (self.transcriber) |t| t.deinit();
+        self.transcriber = null;
+        self.dictation_task.cancel();
+        self.dictation_task = .none;
+    }
+
+    /// Cancel and tell the composer when a session was live.
+    pub fn cancelDictationNotify(self: *TextInput, cx: *Context(TextInput)) void {
+        const was_active = self.dictation.phase.active();
+        self.cancelDictation();
+        if (was_active) {
+            cx.emit(TextInputEvent{ .dictation_changed = {} });
+            cx.notify();
+        }
+    }
+
+    /// Start a session that writes over the current selection. Takes
+    /// ownership of `transcriber`.
+    pub fn beginDictation(self: *TextInput, transcriber: dict.Transcriber, cx: *Context(TextInput)) void {
+        self.cancelDictation();
+        self.dictation.begin(self.text(), self.state.selected) catch @panic("OOM");
+        self.transcriber = transcriber;
+        self.state.breakUndoRun();
+        self.dictation_task_generation = self.dictation.generation;
+        self.dictation_task = cx.timer(dict.poll_interval_ns, TextInput.onDictationTick) catch .none;
+        cx.emit(TextInputEvent{ .dictation_changed = {} });
+        cx.notify();
+    }
+
+    fn onDictationTick(self: *TextInput, cx: *Context(TextInput)) void {
+        self.dictation_task.detach();
+        self.dictation_task = .none;
+        const generation = self.dictation_task_generation;
+        if (!self.pollDictation(generation, cx)) return;
+        if (generation != self.dictation.generation or self.dictation_task.header != null) return;
+        self.dictation_task = cx.timer(dict.poll_interval_ns, TextInput.onDictationTick) catch .none;
+    }
+
+    /// Stop listening (`send`: submit once the final transcript lands).
+    /// Returns false when no session is active.
+    pub fn finishDictation(self: *TextInput, send: bool, cx: *Context(TextInput)) bool {
+        if (!self.dictation.phase.active()) return false;
+        // Repeated clicks/Enter only mark one pending send and end audio once.
+        if (self.dictation.finish(send, self.now(cx))) {
+            if (self.transcriber) |t| t.finish();
+        }
+        cx.emit(TextInputEvent{ .dictation_changed = {} });
+        cx.notify();
+        return true;
+    }
+
+    /// End the session in `phase` (owned by the input afterwards).
+    fn completeDictation(self: *TextInput, phase: dict.Phase, cx: *Context(TextInput)) void {
+        const send = self.dictation.complete(phase);
+        if (self.transcriber) |t| t.deinit();
+        self.transcriber = null;
+        self.state.breakUndoRun();
+        cx.emit(TextInputEvent{ .dictation_changed = {} });
+        if (send) cx.emit(TextInputEvent{ .dictation_submit = self.dictation.generation });
+        cx.notify();
+    }
+
+    fn completeWith(self: *TextInput, tag: dict.PhaseTag, message: []const u8, cx: *Context(TextInput)) void {
+        self.completeDictation(dict.Phase.withMessage(self.gpa, tag, message) catch @panic("OOM"), cx);
+    }
+
+    /// Write a partial / final transcript over the dictation range.
+    fn applyDictation(self: *TextInput, transcript: []const u8, cx: *Context(TextInput)) void {
+        const first = !self.dictation.has_partial and transcript.len > 0;
+        const range = self.dictation.target(self.text(), transcript) orelse return;
+        self.state.replaceDictated(range, transcript, first) catch @panic("OOM");
+        _ = self.dictation.replaced(self.text(), transcript) catch @panic("OOM");
+        // The original selection collapses on the first result.
+        self.follow_cursor = true;
+        self.needs_measure = true;
+        self.resetBlink(cx);
+        cx.emit(TextInputEvent{ .edited = {} });
+        cx.notify();
+    }
+
+    /// Drain the transcriber. Returns whether the session `generation` is
+    /// still live (the poll timer keeps running).
+    pub fn pollDictation(self: *TextInput, generation: u64, cx: *Context(TextInput)) bool {
+        if (generation != self.dictation.generation or !self.dictation.phase.active()) return false;
+        while (self.transcriber) |t| {
+            const ev = t.poll() orelse break;
+            switch (ev) {
+                .listening => {
+                    if (self.dictation.phase == .requesting) {
+                        self.dictation.setPhase(.listening);
+                        self.dictation.meter.start(self.now(cx));
+                    }
+                    cx.emit(TextInputEvent{ .dictation_changed = {} });
+                    cx.notify();
+                },
+                .finalizing => _ = self.finishDictation(false, cx),
+                .partial => |text_| self.applyDictation(text_, cx),
+                .final => |text_| {
+                    if (std.mem.trim(u8, text_, " \t\r\n").len == 0 and !self.dictation.has_partial) {
+                        self.completeDictation(.no_speech, cx);
+                        return false;
+                    }
+                    self.applyDictation(text_, cx);
+                    self.completeDictation(.idle, cx);
+                    return false;
+                },
+                .denied => |msg| self.completeWith(.denied, msg, cx),
+                .unavailable => |msg| self.completeWith(.unavailable, msg, cx),
+                .failed => |msg| self.completeWith(.failed, msg, cx),
+                .cancelled => self.cancelDictationNotify(cx),
+            }
+            if (!self.dictation.phase.active()) {
+                if (self.transcriber) |tr| tr.deinit();
+                self.transcriber = null;
+                return false;
+            }
+        }
+        if (self.dictation.phase == .listening) if (self.transcriber) |t| {
+            // The composer drives smooth frames itself; this keeps the
+            // stepped reduced-motion waveform current.
+            if (self.dictation.meter.record(self.now(cx), t.level())) cx.emit(TextInputEvent{ .dictation_changed = {} });
+        };
+        if (self.dictation.timedOut(self.now(cx))) {
+            self.completeWith(.failed, "Dictation took too long. Your draft is safe. Wait a moment, then try a shorter recording.", cx);
+            return false;
+        }
+        return true;
+    }
+
+    /// Whether an IME composition is in progress (dictation waits for it).
+    pub fn isComposing(self: *const TextInput) bool {
+        return self.state.marked != null;
+    }
+
+    pub fn isReadOnly(self: *const TextInput) bool {
+        return self.state.read_only;
+    }
+
     // ---- bookkeeping -------------------------------------------------------------------
 
     fn now(_: *const TextInput, cx: anytype) u64 {
@@ -460,6 +656,9 @@ pub const TextInput = struct {
     }
 
     fn afterEdit(self: *TextInput, cx: *Context(TextInput)) void {
+        // Any edit but dictation's own stops dictation (Rust `record_edit`,
+        // `set_text`, IME): committed text stays, late results are dropped.
+        self.cancelDictation();
         self.follow_cursor = true;
         self.needs_measure = true;
         self.resetBlink(cx);
@@ -468,6 +667,8 @@ pub const TextInput = struct {
     }
 
     fn afterMove(self: *TextInput, cx: *Context(TextInput)) void {
+        // Moving the selection explicitly stops dictation (`move_to` / `select_to`).
+        self.cancelDictation();
         self.follow_cursor = true;
         self.resetBlink(cx);
         cx.emit(TextInputEvent{ .cursor_moved = {} });
@@ -689,19 +890,64 @@ pub const TextInput = struct {
         cx.propagate();
     }
 
-    fn toggleDictation(_: *TextInput, _: *const A.ToggleDictation, _: *Window, cx: *Context(TextInput)) void {
-        cx.emit(TextInputEvent{ .toggle_dictation = {} });
+    fn toggleDictation(self: *TextInput, _: *const A.ToggleDictation, window: *Window, cx: *Context(TextInput)) void {
+        if (self.dictation_key != null) return; // Auto-repeat while held.
+        if (!dict.enabled(cx.app) and !self.dictation.phase.active()) {
+            // Off by default: let another binding of the same chord run.
+            cx.propagate();
+            return;
+        }
+        self.dictation_key = .{ .keystroke = null };
+        const held = &self.dictation_key.?;
+        var combo_buf: [64]u8 = undefined;
+        held.keystroke = dict.binding(cx.app, &combo_buf, &held.key_buf);
+        held.blur = cx.onBlur(self.focus, window, TextInput.onDictationBlur) catch null;
+        cx.emit(TextInputEvent{ .dictation_press = {} });
+    }
+
+    fn onDictationBlur(self: *TextInput, _: *Window, cx: *Context(TextInput)) void {
+        self.releaseDictationKey(cx);
+    }
+
+    fn releaseDictationKey(self: *TextInput, cx: *Context(TextInput)) void {
+        var held = self.dictation_key orelse return;
+        self.dictation_key = null;
+        if (held.blur) |*b| b.deinit();
+        cx.emit(TextInputEvent{ .dictation_release = {} });
+    }
+
+    fn onDictationKeyUp(self: *TextInput, ev: *const input.KeyUpEvent, _: *Window, cx: *Context(TextInput)) void {
+        const held = self.dictation_key orelse return;
+        const released = if (held.keystroke) |b| std.ascii.eqlIgnoreCase(b.key, ev.keystroke.key) else true;
+        if (released) self.releaseDictationKey(cx);
+    }
+
+    fn onDictationModifiers(self: *TextInput, ev: *const input.ModifiersChangedEvent, _: *Window, cx: *Context(TextInput)) void {
+        const held = self.dictation_key orelse return;
+        const b = held.keystroke orelse return;
+        const bound = b.modifiers;
+        const now_m = ev.modifiers;
+        if ((bound.platform and !now_m.platform) or (bound.control and !now_m.control) or
+            (bound.alt and !now_m.alt) or (bound.shift and !now_m.shift)) self.releaseDictationKey(cx);
     }
 
     fn undoAction(self: *TextInput, _: *const A.Undo, _: *Window, cx: *Context(TextInput)) void {
+        // No history is still a deliberate cancellation.
+        self.cancelDictationNotify(cx);
         self.edit(self.state.undo(), cx);
     }
 
     fn redoAction(self: *TextInput, _: *const A.Redo, _: *Window, cx: *Context(TextInput)) void {
+        self.cancelDictationNotify(cx);
         self.edit(self.state.redo(), cx);
     }
 
     fn onKeyDown(self: *TextInput, ev: *const input.KeyDownEvent, _: *Window, cx: *Context(TextInput)) void {
+        if (std.mem.eql(u8, ev.keystroke.key, "escape") and self.dictation.phase.active()) {
+            self.cancelDictationNotify(cx);
+            cx.stopPropagation();
+            return;
+        }
         if (std.mem.eql(u8, ev.keystroke.key, "escape")) {
             if (self.mention_open) {
                 cx.emit(TextInputEvent{ .mention_dismiss = {} });
@@ -1160,6 +1406,7 @@ pub const TextInput = struct {
             // Accessibility (zeron composer.rs: role + placeholder as label and placeholder).
             .role(self.a11y_role).ariaLabel(self.placeholder.items).ariaPlaceholder(self.placeholder.items)
             .ariaValue(self.text()).onA11yAction(.set_value, cx.listener(TextInput.onA11ySetValue))
+            .ariaTextSelection(self.selectionAnchor(), self.state.cursor()).onA11yAction(.set_text_selection, cx.listener(TextInput.onA11ySetSelection))
             .keyContext(self.key_context)
             .trackFocus(self.focus)
             .cursorText()
@@ -1203,6 +1450,8 @@ pub const TextInput = struct {
             .onAction(A.Undo, cx.listener(TextInput.undoAction))
             .onAction(A.Redo, cx.listener(TextInput.redoAction))
             .onKeyDown(cx.listener(TextInput.onKeyDown))
+            .onKeyUp(cx.listener(TextInput.onDictationKeyUp))
+            .onModifiersChanged(cx.listener(TextInput.onDictationModifiers))
             .onMouseDown(.left, cx.listener(TextInput.onMouseDown))
             .onMouseDownOut(cx.listener(TextInput.onMouseDownOut))
             .onMouseUp(.left, cx.listener(TextInput.onMouseUp))

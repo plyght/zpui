@@ -466,6 +466,19 @@ pub fn InteractiveMethods(comptime Self: type, comptime stateful: bool) type {
             aria(self).value = value;
             return self;
         }
+        /// A text field's caret / selection (UTF-8 byte offsets into its value; `focus` is
+        /// the caret). Bridges report it (AT-SPI Text caret + selection, AXSelectedTextRange).
+        pub fn ariaTextSelection(self: Self, anchor: usize, focus: usize) Self {
+            requireId("ariaTextSelection");
+            aria(self).text_selection = .{ .anchor = @intCast(anchor), .focus = @intCast(focus) };
+            return self;
+        }
+        /// A link's target URL (AT-SPI Hyperlink, AXURL). The string must outlive the frame.
+        pub fn ariaUrl(self: Self, url: []const u8) Self {
+            requireId("ariaUrl");
+            aria(self).url = url;
+            return self;
+        }
         /// Placeholder announced while a text field is empty.
         pub fn ariaPlaceholder(self: Self, text: []const u8) Self {
             requireId("ariaPlaceholder");
@@ -677,6 +690,8 @@ fn DivImpl(comptime stateful: bool) type {
         pub const ariaReadOnly = IM.ariaReadOnly;
         pub const ariaValue = IM.ariaValue;
         pub const ariaPlaceholder = IM.ariaPlaceholder;
+        pub const ariaTextSelection = IM.ariaTextSelection;
+        pub const ariaUrl = IM.ariaUrl;
         pub const ariaNumericValue = IM.ariaNumericValue;
         pub const ariaNumericValueStep = IM.ariaNumericValueStep;
         pub const ariaMinNumericValue = IM.ariaMinNumericValue;
@@ -3245,8 +3260,23 @@ pub const Interactivity = struct {
     /// `write_a11y_info`): declared role and aria properties, `click` when it has click
     /// listeners, `focus` (via its focus handle) when focusable, custom actions.
     pub fn a11yNode(self: *const Interactivity, gid: GlobalElementId, bounds: Bounds, window: *Window) ?a11y.NodeSpec {
-        const r = self.a11y_role orelse return null;
         if (self.a11y_hidden) return null;
+        const r = self.a11y_role orelse {
+            // Audit: interactive elements are expected to declare a role.
+            const clickable = self.click_listeners.items.len > 0;
+            const focusable = if (self.tracked_focus_handle) |h| h.tab_stop else false;
+            if (clickable or focusable) {
+                var buf: [96]u8 = undefined;
+                const name: []const u8 = if (self.element_id) |e| switch (e) {
+                    .name => |n| n,
+                    .named_integer => |ni| std.fmt.bufPrint(&buf, "{s}#{d}", .{ ni.name, ni.index }) catch ni.name,
+                    .integer => |i| std.fmt.bufPrint(&buf, "#{d}", .{i}) catch "#",
+                    else => @tagName(e),
+                } else "";
+                window.a11yNoteUnroled(gid.toKey(), bounds, name, clickable, focusable);
+            }
+            return null;
+        };
         var info: a11y.Info = if (self.aria) |a| a.* else .{};
         if (self.click_listeners.items.len > 0) info.actions.insert(.click);
         const node_id = a11y.NodeId.fromGlobal(gid.toKey());

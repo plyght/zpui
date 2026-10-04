@@ -269,7 +269,7 @@ fn gridLine(vertical: bool, at: f32) zpui.Div {
 }
 
 fn compactAction(t: *const Theme, label: []const u8, id: []const u8) zpui.StatefulDiv {
-    return w.textAction(t, .outlined, label).id(id);
+    return w.textAction(t, .outlined, label).id(id).role(.button).ariaLabel(label);
 }
 
 pub fn render(v: *SettingsView, window: *Window, cx: *Context(SettingsView)) ?zpui.AnyElement {
@@ -310,7 +310,10 @@ pub fn render(v: *SettingsView, window: *Window, cx: *Context(SettingsView)) ?zp
     if (!ready) window.requestAnimationFrame();
 
     const fraction = zoomFraction(d.draft.zoom);
-    const slider = div().id("new-thread-background-adjustment-zoom").relative().w(px(168)).h(px(28)).cursorPointer()
+    const slider = div().id("new-thread-background-adjustment-zoom")
+        .role(.slider).ariaLabel("Background zoom").ariaNumericValue(d.draft.zoom * 100)
+        .ariaMinNumericValue(Adjustment.min_zoom * 100).ariaMaxNumericValue(Adjustment.max_zoom * 100)
+        .ariaNumericValueStep(zoom_step * 100).ariaValue(zpui.fmt("{d:.0}%", .{d.draft.zoom * 100})).relative().w(px(168)).h(px(28)).cursorPointer()
         .onMouseDown(.left, cx.listener(onZoomDown))
         .child(zpui.canvas(v, noPaint).withPrepaint(*SettingsView, measureZoom).absolute().inset0())
         .child(div().absolute().left(px(7)).right(px(7)).top(px(12)).h(px(4)).roundedFull().bg(t.border)
@@ -319,12 +322,12 @@ pub fn render(v: *SettingsView, window: *Window, cx: *Context(SettingsView)) ?zp
     const controls = div().mt(px(14)).flex().itemsCenter().justifyBetween().gap(px(12))
         .child(compactAction(t, "Reset", "new-thread-background-adjustment-reset").onClick(cx.listener(onReset)))
         .child(div().flex().itemsCenter().gap(px(6))
-        .child(compactAction(t, "−", "new-thread-background-adjustment-zoom-out").onClick(cx.listener(onZoomOut)))
+        .child(compactAction(t, "−", "new-thread-background-adjustment-zoom-out").ariaLabel("Zoom out").onClick(cx.listener(onZoomOut)))
         .child(slider)
         .child(div().w(px(52)).textCenter().textSize(rems(11.5)).textColor(t.text_muted).child(zpui.fmt("{d:.0}%", .{d.draft.zoom * 100})))
-        .child(compactAction(t, "+", "new-thread-background-adjustment-zoom-in").onClick(cx.listener(onZoomIn))));
+        .child(compactAction(t, "+", "new-thread-background-adjustment-zoom-in").ariaLabel("Zoom in").onClick(cx.listener(onZoomIn))));
 
-    var apply_btn = w.textAction(t, .solid, "Apply").id("new-thread-background-adjustment-apply").h(px(34)).px(px(14)).py(px(0)).flex().itemsCenter();
+    var apply_btn = w.textAction(t, .solid, "Apply").id("new-thread-background-adjustment-apply").role(.button).ariaLabel("Apply").h(px(34)).px(px(14)).py(px(0)).flex().itemsCenter();
     apply_btn = if (ready) apply_btn.onClick(cx.listener(onApply)) else apply_btn.opacity(0.45);
     const footer = div().mt(px(18)).pt(px(12)).borderT1().borderColor(t.border).flex().itemsCenter().justifyEnd().gap(px(8))
         .child(compactAction(t, "Cancel", "new-thread-background-adjustment-cancel").h(px(34)).px(px(13)).onClick(cx.listener(onCancel)))
@@ -333,7 +336,7 @@ pub fn render(v: *SettingsView, window: *Window, cx: *Context(SettingsView)) ?zp
         .child(div().flex1().minW0()
         .child(dialog.title(t, "Adjust background"))
         .child(dialog.body(t, "Drag to reposition. Scroll or pinch to zoom.").mt(px(4))))
-        .child(div().id("new-thread-background-adjustment-close").size(px(28)).rounded(px(7)).border1().borderColor(t.border)
+        .child(div().id("new-thread-background-adjustment-close").role(.button).ariaLabel("Close background adjustment").size(px(28)).rounded(px(7)).border1().borderColor(t.border)
         .bg(t.surface_raised.opacity(0.28)).flex().itemsCenter().justifyCenter().cursorPointer()
         .hover(sb.bg(t.surface_raised_hover)).onClick(cx.listener(onCancel))
         .child(ui.icon.of(.close, 12, t.text_muted)));

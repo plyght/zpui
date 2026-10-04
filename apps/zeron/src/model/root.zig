@@ -35,6 +35,8 @@ pub const queue_store = @import("queue_store.zig");
 pub const status = @import("status.zig");
 pub const app_state = @import("app_state.zig");
 pub const attachments = @import("attachments.zig");
+/// Appshots: capture staging, prompt context, queue restore (appshots.zig).
+pub const appshots = @import("appshots.zig");
 pub const comments = @import("comments.zig");
 pub const review_comments = @import("review_comments.zig");
 pub const change_requests = @import("change_requests.zig");

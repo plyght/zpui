@@ -592,12 +592,12 @@ pub fn overlay(shell: *Shell, window: *Window, theme_in: *const Theme, cx: *Ctx)
                 zpui.fmt("Bring {s} from this device into your synced workspace, or start it fresh.", .{p})
             else
                 "Zeron can switch to your synced workspace now.";
-            var actions = actionsRow().child(dialog.btnGhost(theme, "Later").id("sync-switch-later").onClick(cx.listener(onLater)));
+            var actions = actionsRow().child(dialog.btnGhost(theme, "Later").id("sync-switch-later").role(.button).onClick(cx.listener(onLater)));
             if (phrase != null) {
                 actions = actions
-                    .child(dialog.btnGhost(theme, "Start fresh").id("sync-switch-fresh").onClick(cx.listener(onSwitchFresh)))
-                    .child(dialog.btnPrimary(theme, "Bring my work").id("sync-switch-import").onClick(cx.listener(onSwitchImport)));
-            } else actions = actions.child(dialog.btnPrimary(theme, "Switch now").id("sync-switch-now").onClick(cx.listener(onSwitchFresh)));
+                    .child(dialog.btnGhost(theme, "Start fresh").id("sync-switch-fresh").role(.button).onClick(cx.listener(onSwitchFresh)))
+                    .child(dialog.btnPrimary(theme, "Bring my work").id("sync-switch-import").role(.button).onClick(cx.listener(onSwitchImport)));
+            } else actions = actions.child(dialog.btnPrimary(theme, "Switch now").id("sync-switch-now").role(.button).onClick(cx.listener(onSwitchFresh)));
             break :blk dialog.card(theme).child(dialog.title(theme, "Sync is ready"))
                 .child(div().mt(px(6)).child(dialog.body(theme, body))).child(actions);
         },
@@ -625,7 +625,7 @@ pub fn overlay(shell: *Shell, window: *Window, theme_in: *const Theme, cx: *Ctx)
             break :blk dialog.card(theme).child(dialog.title(theme, "You're all set"))
                 .child(div().mt(px(6)).child(dialog.body(theme, body)))
                 .child(div().mt(px(16)).flex().flexRow().justifyEnd()
-                .child(dialog.btnPrimary(theme, "Continue").id("sync-switch-done").onClick(cx.listener(onDone))));
+                .child(dialog.btnPrimary(theme, "Continue").id("sync-switch-done").role(.button).onClick(cx.listener(onDone))));
         },
         .import_failed => |open| blk: {
             if (!open) return null;
@@ -633,8 +633,8 @@ pub fn overlay(shell: *Shell, window: *Window, theme_in: *const Theme, cx: *Ctx)
                 .child(div().mt(px(6)).child(dialog.body(theme, "Anything already imported is kept; retrying only copies what's missing.")))
                 .child(errorLine(shell, theme))
                 .child(actionsRow()
-                .child(dialog.btnGhost(theme, "Later").id("import-failed-dismiss").onClick(cx.listener(onLater)))
-                .child(dialog.btnPrimary(theme, "Retry import").id("import-failed-retry").onClick(cx.listener(onRetryImport))));
+                .child(dialog.btnGhost(theme, "Later").id("import-failed-dismiss").role(.button).onClick(cx.listener(onLater)))
+                .child(dialog.btnPrimary(theme, "Retry import").id("import-failed-retry").role(.button).onClick(cx.listener(onRetryImport))));
         },
         .restart_pending => |open| blk: {
             if (!open) return null;
@@ -646,14 +646,14 @@ pub fn overlay(shell: *Shell, window: *Window, theme_in: *const Theme, cx: *Ctx)
                 "Quit and reopen Zeron to start the synced workspace. Existing local sessions stay on this device and will not be uploaded.")))
                 .child(errorLine(shell, theme))
                 .child(actionsRow()
-                .child(dialog.btnGhost(theme, "Later").id("sync-restart-later").onClick(cx.listener(onLater)))
-                .child(dialog.btnPrimary(theme, label).id("sync-restart-quit").opacity(if (changing) 0.6 else 1).onClick(cx.listener(onQuit))));
+                .child(dialog.btnGhost(theme, "Later").id("sync-restart-later").role(.button).onClick(cx.listener(onLater)))
+                .child(dialog.btnPrimary(theme, label).id("sync-restart-quit").role(.button).opacity(if (changing) 0.6 else 1).onClick(cx.listener(onQuit))));
         },
         .sign_out_confirm => dialog.card(theme).child(dialog.title(theme, "Sign out?"))
             .child(div().mt(px(6)).child(dialog.body(theme, "Zeron will remove your credentials, close the synced workspace, and continue in local mode.")))
             .child(actionsRow()
-            .child(dialog.btnGhost(theme, "Cancel").id("signout-cancel").onClick(cx.listener(onSignOutCancel)))
-            .child(dialog.btnDanger(theme, "Sign out").id("signout-confirm").onClick(cx.listener(onSignOutConfirm)))),
+            .child(dialog.btnGhost(theme, "Cancel").id("signout-cancel").role(.button).onClick(cx.listener(onSignOutCancel)))
+            .child(dialog.btnDanger(theme, "Sign out").id("signout-confirm").role(.button).onClick(cx.listener(onSignOutConfirm)))),
         .signing_out => dialog.card(theme).child(dialog.title(theme, "Signing out\u{2026}"))
             .child(div().mt(px(6)).child(dialog.body(theme, "Removing account credentials and closing the synced workspace."))),
         else => return null,
@@ -673,7 +673,7 @@ pub fn signedOutPage(shell: *Shell, window: *Window, theme: *const Theme, cx: *C
         .child(div().mt(px(6)).mb(px(24)).textSize(ui.rems(13)).lineHeight(px(19)).textColor(theme.text_muted)
         .child("Zeron removed your credentials but could not finish closing the previous synced workspace. Retry before continuing in local mode."));
     if (shell.wiring.runtime.err) |e| card = card.child(div().mb(px(16)).textSize(ui.rems(12)).lineHeight(px(17)).textColor(theme.danger).child(e));
-    card = card.child(dialog.btnPrimary(theme, if (changing) "Stopping engine\u{2026}" else "Retry local mode").id("signed-out-quit")
+    card = card.child(dialog.btnPrimary(theme, if (changing) "Stopping engine\u{2026}" else "Retry local mode").id("signed-out-quit").role(.button)
         .opacity(if (changing) 0.6 else 1).onClick(cx.listener(onRetryLocal)));
     const vp = window.viewportSize();
     return zpui.intoAnyElement(zpui.deferred(zpui.anchored().position(.{ .x = 0, .y = 0 }).child(

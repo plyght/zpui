@@ -70,9 +70,9 @@ fn deviceRow(v: *SettingsView, t: *const Theme, d: *const Device, ix: usize, fir
     return w.cardRow(t, first)
         .child(w.textBlock(t, v.deviceName(d), frags))
         .child(div().flexNone().flex().itemsCenter().gap(px(4))
-        .child(w.textAction(t, .quiet, if (copied) "Copied" else "Copy ID").id(.{ "device-id", ix })
+        .child(w.textAction(t, .quiet, if (copied) "Copied" else "Copy ID").id(.{ "device-id", ix }).role(.button).ariaLabel(zpui.fmt("Copy device ID {s}", .{d.id}))
         .onClick(cx.listenerWith(ix, SettingsView.onCopyDeviceId)))
-        .child(w.textAction(t, .filled, "Rename").id(.{ "device-rename", ix })
+        .child(w.textAction(t, .filled, "Rename").id(.{ "device-rename", ix }).role(.button).ariaLabel(zpui.fmt("Rename {s}", .{v.deviceName(d)}))
         .onClick(cx.listenerWith(ix, SettingsView.onRenameDevice))));
 }
 
@@ -111,15 +111,15 @@ pub fn renameDialog(v: *SettingsView, window: *zpui.Window, cx: *zpui.Context(Se
     const t_val = ui.theme.get(cx).forPopup();
     const t = &t_val;
     const r = v.rename.?;
-    const card = div().id("rename-device-card").w(px(360)).p(px(20)).rounded(px(16))
+    const card = div().id("rename-device-card").role(.dialog).ariaLabel("Rename device").w(px(360)).p(px(20)).rounded(px(16))
         .bg(ui.popover.surfaceBg(t)).border1().borderColor(t.hairline(0.10))
         .flex().flexCol().textColor(t.text)
         .child(div().textSize(rems(15)).fontWeight(600).textColor(t.text).child("Rename device"))
         .child(div().mt(px(12)).child(div().wFull().px(px(12)).py(px(8)).rounded(px(8))
         .border1().borderColor(t.hairline(0.08)).bg(t.ink(0.04)).textSize(rems(14)).child(r.input)))
         .child(div().mt(px(16)).flex().flexRow().justifyEnd().gap(px(8))
-        .child(w.textAction(t, .quiet, "Cancel").id("rename-cancel").onClick(cx.listener(SettingsView.onRenameCancel)))
-        .child(w.textAction(t, .solid, "Rename").id("rename-save").onClick(cx.listener(SettingsView.onRenameSave))));
+        .child(w.textAction(t, .quiet, "Cancel").id("rename-cancel").role(.button).onClick(cx.listener(SettingsView.onRenameCancel)))
+        .child(w.textAction(t, .solid, "Rename").id("rename-save").role(.button).onClick(cx.listener(SettingsView.onRenameSave))));
     const card_shadowed = if (t.isFrost()) card else card.shadowLg();
     const vs = window.viewportSize();
     return zpui.intoAnyElement(zpui.deferred(zpui.anchored().position(.{ .x = 0, .y = 0 })

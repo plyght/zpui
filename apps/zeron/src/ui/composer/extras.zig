@@ -16,8 +16,10 @@
 //!   skills (`ListCommands` + `ListSkills` merged with Zeron's own commands,
 //!   `$` skill completion per the agent's completion preferences).
 //!
-//! Not ported: the queue edit's attachment / appshot restore, the mention
-//! chip projection and hover tooltips, the completion list's scrollbar rail.
+//! The queue edit restores the row's attachments (`ReadAttachmentChunk`
+//! from the chat's host) into the composer and uploads what is staged on
+//! commit. Not ported: the Appshot half of that restore, the mention chip
+//! projection and hover tooltips, the completion list's scrollbar rail.
 
 const std = @import("std");
 const zpui = @import("zpui");
@@ -51,6 +53,7 @@ const Ctx = Context(ComposerView);
 const es = model.engine_state;
 const rems = chrome.rems;
 const Allocator = std.mem.Allocator;
+const att = model.attachments;
 
 const log = std.log.scoped(.zeron_composer);
 
@@ -61,6 +64,44 @@ const renew_interval_ms: u64 = 20_000;
 const answer_recheck_ms: u64 = 2_000;
 
 pub const QueueDrag = struct { key_hash: u64, from: usize };
+
+/// `ComposerEvent::WorktreeSetup`: a new worktree chat's setup action handed
+/// off by the host (`TakeProjectActionSetup`). Strings live until the next
+/// handoff.
+pub const WorktreeSetup = struct {
+    chat_id: []const u8,
+    /// Null when the project has no setup action (or it didn't start).
+    setup_action: ?SetupRun = null,
+    setup_error: ?[]const u8 = null,
+    target_device_id: ?[]const u8 = null,
+};
+
+/// `ProjectActionRun`.
+pub const SetupRun = struct {
+    actionId: []const u8 = "",
+    actionName: []const u8,
+    terminal: protocol.TerminalSession,
+};
+
+/// A queued worktree run waiting for its `commandId`, then for the host's
+/// setup handoff (polled every 250 ms, at most 480 times).
+const SetupPoll = struct {
+    chat_id: []u8,
+    message_id: []u8,
+    target: ?[]u8,
+    command_id: ?[]u8 = null,
+    attempts: u16 = 0,
+
+    fn deinit(p: SetupPoll, gpa: Allocator) void {
+        gpa.free(p.chat_id);
+        gpa.free(p.message_id);
+        if (p.target) |t| gpa.free(t);
+        if (p.command_id) |c| gpa.free(c);
+    }
+};
+
+const setup_poll_ms: u64 = 250;
+const setup_poll_limit: u16 = 480;
 const DragState = struct { from: usize, over: usize, prev_over: usize, epoch: usize };
 
 const QueueEdit = struct {
@@ -71,14 +112,39 @@ const QueueEdit = struct {
     host_device_id: []u8,
     /// The ordinary draft displaced while the row occupies the composer.
     draft: []u8,
+    /// The draft's staged attachments, displaced with it.
+    draft_staged: std.ArrayList(att.Staged) = .empty,
 
-    fn deinit(e: QueueEdit, gpa: Allocator) void {
+    fn deinit(e: QueueEdit, gpa: Allocator, app: *App) void {
         gpa.free(e.id);
         gpa.free(e.lease_id);
         gpa.free(e.base_hash);
         gpa.free(e.chat_id);
         gpa.free(e.host_device_id);
         gpa.free(e.draft);
+        var staged = e.draft_staged;
+        for (staged.items) |*a| a.deinit(gpa, app);
+        staged.deinit(gpa);
+    }
+};
+
+/// An acquired lease waiting for the row's attachments to load.
+const AcquiredEdit = struct {
+    id: []u8,
+    lease_id: []u8,
+    base_hash: []u8,
+    chat_id: []u8,
+    host_device_id: []u8,
+    /// The row's editable text (`queue_visible_text`).
+    text: []u8,
+
+    fn deinit(a: AcquiredEdit, gpa: Allocator) void {
+        gpa.free(a.id);
+        gpa.free(a.lease_id);
+        gpa.free(a.base_hash);
+        gpa.free(a.chat_id);
+        gpa.free(a.host_device_id);
+        gpa.free(a.text);
     }
 };
 
@@ -133,8 +199,22 @@ pub const Extras = struct {
     edit: ?QueueEdit = null,
     edit_pending: ?[]u8 = null,
     edit_finishing: bool = false,
+    /// The lease acquired while its attachments load (`edit_pending` stays set).
+    edit_loading: ?AcquiredEdit = null,
+    load_task: zpui.Task(?[]att.StageOutcome) = .none,
+    /// The commit's attachment upload.
+    commit_task: zpui.Task(att.UploadResult) = .none,
+    commit_text: ?[]u8 = null,
     renew_task: zpui.Task(void) = .none,
     instance_id: [36]u8 = @splat('0'),
+    // ---- worktree setup handoff ----
+    /// FIFO: `QueueCommand` replies pair with the oldest entry.
+    setup_queued: std.ArrayList(SetupPoll) = .empty,
+    /// FIFO: polled one at a time.
+    setup_polls: std.ArrayList(SetupPoll) = .empty,
+    setup_timer: zpui.Task(void) = .none,
+    setup_in_flight: bool = false,
+    setup_event: ?std.heap.ArenaAllocator = null,
     // ---- completions ----
     mention: Mention = .{},
     catalog: Catalog = .{},
@@ -150,9 +230,19 @@ pub const Extras = struct {
         if (self.wizard_focus) |f| f.release(app);
         if (self.store_sub) |*s| s.deinit();
         self.todo.deinit(gpa);
-        if (self.edit) |e| e.deinit(gpa);
+        if (self.edit) |e| e.deinit(gpa, app);
         if (self.edit_pending) |p| gpa.free(p);
+        if (self.edit_loading) |l| l.deinit(gpa);
+        self.load_task.cancel();
+        self.commit_task.cancel();
+        if (self.commit_text) |t| gpa.free(t);
         self.renew_task.cancel();
+        for (self.setup_queued.items) |p| p.deinit(gpa);
+        self.setup_queued.deinit(gpa);
+        for (self.setup_polls.items) |p| p.deinit(gpa);
+        self.setup_polls.deinit(gpa);
+        self.setup_timer.cancel();
+        if (self.setup_event) |*a| a.deinit();
         clearMention(&self.mention, gpa);
         self.mention.query.deinit(gpa);
         self.mention.debounce.cancel();
@@ -442,7 +532,7 @@ pub fn renderWizard(self: *ComposerView, window: *Window, cx: *Ctx) ?zpui.Statef
     var options = div().mt(px(12)).flex().flexCol().gap(px(4));
     for (q.options, 0..) |label, ix| {
         const picked = w.isPicked(ix) and typed_empty;
-        var row = div().id(.{ "wizard-option", ix }).flex().flexRow().itemsCenter().gap(px(12)).px(px(14)).py(px(10)).rounded(px(12))
+        var row = div().id(.{ "wizard-option", ix }).role(if (q.multiSelect) .check_box else .radio_button).ariaLabel(label).ariaToggled(picked).flex().flexRow().itemsCenter().gap(px(12)).px(px(14)).py(px(10)).rounded(px(12))
             .border1().borderColor(if (picked) theme.ink(0.16) else zpui.color.transparent_black)
             .bg(if (picked) theme.ink(0.09) else theme.ink(0.025)).cursorPointer()
             .onClick(cx.listenerWith(ix, onWizardOption))
@@ -467,12 +557,12 @@ pub fn renderWizard(self: *ComposerView, window: *Window, cx: *Ctx) ?zpui.Statef
     if (q.multiSelect) body = body.child(div().mt(px(4)).textSize(rems(12)).textColor(theme.text_muted.opacity(0.65)).child("Select one or more options."));
     body = body.child(options)
         .child(div().mt(px(12)).borderT1().borderColor(theme.hairline(0.06)).pt(px(12)).pb(px(4)).px(px(4)).child(self.input));
-    var submit = div().id("wizard-submit").px(px(16)).py(px(6)).rounded(px(8)).bg(theme.text)
+    var submit = div().id("wizard-submit").role(.button).ariaDisabled(!can_advance).px(px(16)).py(px(6)).rounded(px(8)).bg(theme.text)
         .textSize(rems(13)).fontWeight(500).textColor(theme.on_solid).cursorPointer().hover(sb.opacity(0.9))
         .onClick(cx.listener(onWizardSubmit))
         .child(if (last) "Submit" else "Next");
     if (!can_advance) submit = submit.opacity(0.4);
-    const back: ?zpui.StatefulDiv = if (w.page > 0) div().id("wizard-back").px(px(12)).py(px(6)).rounded(px(8)).textSize(rems(13))
+    const back: ?zpui.StatefulDiv = if (w.page > 0) div().id("wizard-back").role(.button).px(px(12)).py(px(6)).rounded(px(8)).textSize(rems(13))
         .textColor(theme.text_muted).cursorPointer().hover(sb.bg(theme.ink(0.06)).textColor(theme.text))
         .onClick(cx.listener(onWizardBack)).child("Back") else null;
     const footer = div().flex().flexRow().justifyBetween().itemsCenter().px(px(16)).pb(px(16)).pt(px(4))
@@ -565,7 +655,7 @@ pub fn renderTodo(self: *ComposerView, below_queue: bool, cx: *Ctx) ?zpui.Div {
     const theme = &self.theme;
     const finished = summary.finished();
 
-    var toggle = div().id("todo-panel-toggle").flex1().minW0().h(px(32)).px(px(8)).rounded(px(8)).flex().itemsCenter().gap(px(8))
+    var toggle = div().id("todo-panel-toggle").role(.button).ariaLabel(if (expanded) "Collapse todo list" else "Expand todo list").ariaExpanded(expanded).flex1().minW0().h(px(32)).px(px(8)).rounded(px(8)).flex().itemsCenter().gap(px(8))
         .cursorPointer().hover(sb.bg(theme.element_hover))
         .onClick(cx.listenerWith(finished, onTodoToggle))
         .tooltipWith(chrome.TipData{ .text = if (expanded) "Collapse todo list" else "Expand todo list", .dark = theme.appearance.isDark() }, chrome.buildTooltip)
@@ -582,7 +672,7 @@ pub fn renderTodo(self: *ComposerView, below_queue: bool, cx: *Ctx) ?zpui.Div {
     } else toggle = toggle.child(div().flex1());
     toggle = toggle.child(chrome.icon(if (expanded) .alt_arrow_down else .alt_arrow_up, 13, theme.text_muted.opacity(0.7)));
     var header = div().flex().itemsCenter().gap(px(2)).child(toggle);
-    if (!live) header = header.child(div().id("todo-panel-dismiss").size(px(24)).flexNone().flex().itemsCenter().justifyCenter().rounded(px(5))
+    if (!live) header = header.child(div().id("todo-panel-dismiss").role(.button).ariaLabel("Dismiss todo list").size(px(24)).flexNone().flex().itemsCenter().justifyCenter().rounded(px(5))
         .cursorPointer().hover(sb.bg(theme.element_hover))
         .onClick(cx.listener(onTodoDismiss))
         .tooltipWith(chrome.TipData{ .text = "Dismiss", .dark = theme.appearance.isDark() }, chrome.buildTooltip)
@@ -601,7 +691,7 @@ pub fn renderTodo(self: *ComposerView, below_queue: bool, cx: *Ctx) ?zpui.Div {
         var col = div().mt(px(2)).pb(px(6)).flex().flexCol();
         for (list.items) |row| switch (row) {
             .item => |ix| col = col.child(todoItemRow(ix, items[ix], live, theme)),
-            .fold => |f| col = col.child(div().id(.{ "todo-fold", @backingInt(f.side) }).h(px(24)).px(px(8)).rounded(px(6)).flex().itemsCenter().gap(px(8))
+            .fold => |f| col = col.child(div().id(.{ "todo-fold", @backingInt(f.side) }).role(.button).ariaLabel(zpui.fmt("{s} {d} {s} items", .{ if (f.open) "Hide" else "Show", f.count, if (f.side == .earlier) "earlier" else "later" })).ariaExpanded(f.open).h(px(24)).px(px(8)).rounded(px(6)).flex().itemsCenter().gap(px(8))
                 .cursorPointer().hover(sb.bg(theme.element_hover))
                 .onClick(cx.listenerWith(f.side, onTodoFold))
                 .child(div().w(px(14)).flexNone().flex().justifyCenter()
@@ -752,6 +842,8 @@ const EditParams = struct {
     action: ?[]const u8 = null,
     text: ?[]const u8 = null,
     expectedTextHash: ?[]const u8 = null,
+    /// Commit only: the staged attachments' uploaded paths (may be empty).
+    attachments: ?[]const []const u8 = null,
     targetDeviceId: []const u8,
 };
 
@@ -799,34 +891,169 @@ fn str(v: std.json.Value, key: []const u8) ?[]const u8 {
 pub fn onBeginEdit(self: *ComposerView, result: es.CallResult, cx: *Ctx) void {
     const e = ext(self);
     const id = e.edit_pending orelse return;
-    e.edit_pending = null;
-    defer self.gpa.free(id);
     defer cx.notify();
     const v = switch (result) {
         .ok => |v| v,
-        .err => return self.showError("Connect to the chat host to edit this message", cx),
+        .err => {
+            clearPending(self);
+            return self.showError("Connect to the chat host to edit this message", cx);
+        },
     };
     const outcome = str(v, "outcome") orelse "";
+    if (!std.mem.eql(u8, outcome, "acquired")) clearPending(self);
     if (std.mem.eql(u8, outcome, "locked")) return self.showError("That queued message is being edited on another device", cx);
     if (!std.mem.eql(u8, outcome, "acquired")) return self.showError("That queued message is no longer available", cx);
-    const lease = str(v, "leaseId") orelse return self.showError("The chat host returned an invalid edit lease", cx);
-    const hash = str(v, "baseTextHash") orelse return self.showError("The chat host returned an invalid edit lease", cx);
     const ws = self.state.read(cx).workspace.read(cx);
-    const chat = ws.selectedChatRow() orelse return;
-    const text = str(v, "text") orelse "";
-    e.edit = .{
-        .id = self.gpa.dupe(u8, id) catch return,
-        .lease_id = self.gpa.dupe(u8, lease) catch return,
-        .base_hash = self.gpa.dupe(u8, hash) catch return,
-        .chat_id = self.gpa.dupe(u8, chat.id) catch return,
-        .host_device_id = self.gpa.dupe(u8, chat.deviceId) catch return,
-        .draft = self.gpa.dupe(u8, self.input.read(cx).text()) catch return,
+    const chat = ws.selectedChatRow() orelse return clearPending(self);
+    const lease = str(v, "leaseId");
+    // `attachments` must be a string array (Rust: a missing field fails the restore).
+    var arena = std.heap.ArenaAllocator.init(self.gpa);
+    defer arena.deinit();
+    const paths: ?[]const []const u8 = blk: {
+        const f = if (v == .object) v.object.get("attachments") else null;
+        const arr = f orelse break :blk null;
+        if (arr != .array) break :blk null;
+        const out = arena.allocator().alloc([]const u8, arr.array.items.len) catch break :blk null;
+        for (arr.array.items, out) |item, *o| {
+            if (item != .string) break :blk null;
+            o.* = item.string;
+        }
+        break :blk out;
     };
-    const owned = self.gpa.dupe(u8, text) catch return;
-    defer self.gpa.free(owned);
-    self.input.update(cx, TextInput.setText, .{owned});
+    const host = chat.deviceId;
+    const list = paths orelse return failLoad(self, chat.id, id, lease, host, cx);
+    const hash = str(v, "baseTextHash");
+    const raw_text = str(v, "text") orelse "";
+    var text = att.queueVisibleText(arena.allocator(), raw_text, list) catch raw_text;
+    if (list.len > 0 and std.mem.eql(u8, text, att.attachment_only_text)) text = "";
+    if (lease == null or hash == null) {
+        clearPending(self);
+        return self.showError("The chat host returned an invalid edit lease", cx);
+    }
+    const acquired: AcquiredEdit = .{
+        .id = self.gpa.dupe(u8, id) catch return,
+        .lease_id = self.gpa.dupe(u8, lease.?) catch return,
+        .base_hash = self.gpa.dupe(u8, hash.?) catch return,
+        .chat_id = self.gpa.dupe(u8, chat.id) catch return,
+        .host_device_id = self.gpa.dupe(u8, host) catch return,
+        .text = self.gpa.dupe(u8, text) catch return,
+    };
+    if (list.len == 0) return acquire(self, acquired, &.{}, cx);
+    // Read the row's images back from the host before the row moves in.
+    const engine_state = self.state.read(cx).engine.read(cx);
+    const conn = engine_state.conn orelse {
+        defer acquired.deinit(self.gpa);
+        return failLoad(self, acquired.chat_id, acquired.id, acquired.lease_id, acquired.host_device_id, cx);
+    };
+    const owned = self.gpa.alloc([]u8, list.len) catch return acquired.deinit(self.gpa);
+    for (list, owned) |p, *o| o.* = self.gpa.dupe(u8, p) catch @panic("OOM");
+    const job: att.QueuedLoadJob = .{
+        .gpa = self.gpa,
+        .client = conn.client(),
+        .conn = conn.retain(),
+        .paths = owned,
+        .target_device_id = self.gpa.dupe(u8, host) catch null,
+    };
+    e.edit_loading = acquired;
+    e.load_task.cancel();
+    e.load_task = cx.spawn(job, onQueuedLoaded) catch {
+        e.edit_loading = null;
+        defer acquired.deinit(self.gpa);
+        return failLoad(self, acquired.chat_id, acquired.id, acquired.lease_id, acquired.host_device_id, cx);
+    };
+}
+
+fn clearPending(self: *ComposerView) void {
+    const e = ext(self);
+    if (e.edit_pending) |p| self.gpa.free(p);
+    e.edit_pending = null;
+}
+
+/// The restore failed: release the lease and say why (Rust's copy).
+fn failLoad(self: *ComposerView, chat_id: []const u8, id: []const u8, lease: ?[]const u8, host: []const u8, cx: *Ctx) void {
+    es.EngineState.send(self.state.read(cx).engine, cx, .FinishQueuedMessageEdit, EditParams{
+        .chatId = chat_id,
+        .id = id,
+        .leaseId = lease,
+        .action = "cancel",
+        .targetDeviceId = host,
+    }) catch {};
+    clearPending(self);
+    self.showError("Couldn't load the queued attachments or Appshot context. Check the connection and update the chat host.", cx);
+}
+
+fn onQueuedLoaded(self: *ComposerView, result: ?[]att.StageOutcome, cx: *Ctx) void {
+    const e = ext(self);
+    e.load_task.detach();
+    e.load_task = .none;
+    const acquired = e.edit_loading orelse {
+        if (result) |r| att.freeOutcomes(self.gpa, r);
+        return;
+    };
+    e.edit_loading = null;
+    defer cx.notify();
+    const outcomes = result orelse {
+        defer acquired.deinit(self.gpa);
+        return failLoad(self, acquired.chat_id, acquired.id, acquired.lease_id, acquired.host_device_id, cx);
+    };
+    defer att.freeOutcomes(self.gpa, outcomes);
+    const io = self.io orelse {
+        defer acquired.deinit(self.gpa);
+        return failLoad(self, acquired.chat_id, acquired.id, acquired.lease_id, acquired.host_device_id, cx);
+    };
+    var staged: std.ArrayList(att.Staged) = .empty;
+    for (outcomes) |*o| switch (o.*) {
+        .ok => {
+            const st = att.stagedFromOutcome(self.gpa, io, o) catch continue;
+            staged.append(self.gpa, st) catch {
+                var x = st;
+                x.deinit(self.gpa, cx.app);
+            };
+        },
+        .err => {},
+    };
+    acquire(self, acquired, staged.items, cx);
+    staged.deinit(self.gpa);
+}
+
+/// The lease is ours and the row's attachments are loaded: displace the
+/// draft (text + staged images) and load the row (takes `acquired` and the
+/// `staged` items).
+fn acquire(self: *ComposerView, acquired: AcquiredEdit, staged: []att.Staged, cx: *Ctx) void {
+    const e = ext(self);
+    clearPending(self);
+    const selected_matches = if (selectedChat(self, cx)) |c| std.mem.eql(u8, c, acquired.chat_id) else false;
+    if (!selected_matches or e.edit != null or e.wizard != null) {
+        // Navigation or another composer action won acquisition: release now.
+        defer acquired.deinit(self.gpa);
+        for (staged) |*a| a.deinit(self.gpa, cx.app);
+        es.EngineState.send(self.state.read(cx).engine, cx, .FinishQueuedMessageEdit, EditParams{
+            .chatId = acquired.chat_id,
+            .id = acquired.id,
+            .leaseId = acquired.lease_id,
+            .action = "cancel",
+            .targetDeviceId = acquired.host_device_id,
+        }) catch {};
+        return;
+    }
+    e.edit = .{
+        .id = acquired.id,
+        .lease_id = acquired.lease_id,
+        .base_hash = acquired.base_hash,
+        .chat_id = acquired.chat_id,
+        .host_device_id = acquired.host_device_id,
+        .draft = self.gpa.dupe(u8, self.input.read(cx).text()) catch @panic("OOM"),
+        .draft_staged = self.takeStaged(self.current_key.items),
+    };
+    if (staged.len > 0) {
+        const list = self.stagedList(self.current_key.items);
+        list.appendSlice(self.gpa, staged) catch @panic("OOM");
+    }
+    self.input.update(cx, TextInput.setText, .{acquired.text});
+    self.gpa.free(acquired.text);
     e.renew_task.cancel();
     e.renew_task = cx.timer(renew_interval_ms * std.time.ns_per_ms, onRenew) catch .none;
+    cx.notify();
 }
 
 fn onRenew(self: *ComposerView, cx: *Ctx) void {
@@ -854,19 +1081,92 @@ fn onRenewed(self: *ComposerView, result: es.CallResult, cx: *Ctx) void {
     }
 }
 
+/// `commit_queue_edit`: save the composer (text and staged images) into
+/// the row; an entirely empty composer removes it.
 fn commitQueueEdit(self: *ComposerView, cx: *Ctx) void {
     const text = self.gpa.dupe(u8, self.input.read(cx).text()) catch return;
     defer self.gpa.free(text);
-    if (std.mem.trim(u8, text, " \t\r\n").len == 0) finishQueueEdit(self, "discard", null, cx) else finishQueueEdit(self, "commit", text, cx);
+    if (std.mem.trim(u8, text, " \t\r\n").len == 0 and self.staged().len == 0) finishQueueEdit(self, "discard", null, cx) else finishQueueEdit(self, "commit", text, cx);
 }
 
-/// `finish_queue_edit`.
+/// `finish_queue_edit`. A commit first uploads the staged images to the
+/// chat's host, then sends their paths with the text.
 fn finishQueueEdit(self: *ComposerView, action: []const u8, text: ?[]const u8, cx: *Ctx) void {
     const e = ext(self);
     if (e.edit_finishing) return;
     const ed = e.edit orelse return;
+    const committing = std.mem.eql(u8, action, "commit");
+    const staged = self.staged();
+    if (committing and staged.len > 0) {
+        const engine_state = self.state.read(cx).engine.read(cx);
+        const conn = engine_state.conn orelse return self.showError("Couldn't reach the chat host; your edit is still in the editor", cx);
+        const items = self.gpa.alloc(att.UploadItem, staged.len) catch return;
+        const io = self.io orelse {
+            self.gpa.free(items);
+            return;
+        };
+        for (staged, items) |*a, *it| {
+            var uid: [36]u8 = undefined;
+            att.uuidV4(io, &uid);
+            it.* = .{ .upload_id = self.gpa.dupe(u8, &uid) catch @panic("OOM"), .name = self.gpa.dupe(u8, a.name) catch @panic("OOM"), .blob = a.blob.retain() };
+        }
+        const job: att.UploadJob = .{
+            .gpa = self.gpa,
+            .client = conn.client(),
+            .conn = conn.retain(),
+            .items = items,
+            .target_device_id = self.gpa.dupe(u8, ed.host_device_id) catch null,
+        };
+        e.edit_finishing = true;
+        self.input.update(cx, TextInput.setReadOnly, .{true});
+        if (e.commit_text) |t| self.gpa.free(t);
+        e.commit_text = self.gpa.dupe(u8, text orelse "") catch null;
+        e.commit_task = cx.spawn(job, onCommitUploaded) catch {
+            e.edit_finishing = false;
+            self.input.update(cx, TextInput.setReadOnly, .{false});
+            return self.showError("Couldn't reach the chat host; your edit is still in the editor", cx);
+        };
+        cx.notify();
+        return;
+    }
     e.edit_finishing = true;
     self.input.update(cx, TextInput.setReadOnly, .{true});
+    sendFinish(self, action, text, if (committing) &.{} else null, cx);
+}
+
+fn onCommitUploaded(self: *ComposerView, result: att.UploadResult, cx: *Ctx) void {
+    const e = ext(self);
+    defer att.freeUploadResult(self.gpa, result);
+    e.commit_task.detach();
+    e.commit_task = .none;
+    const typed = e.commit_text orelse "";
+    defer {
+        if (e.commit_text) |t| self.gpa.free(t);
+        e.commit_text = null;
+    }
+    switch (result) {
+        .ok => |paths| {
+            const text: []const u8 = if (std.mem.trim(u8, typed, " \t\r\n").len == 0 and paths.len > 0) att.attachment_only_text else typed;
+            const borrowed = self.gpa.alloc([]const u8, paths.len) catch return;
+            defer self.gpa.free(borrowed);
+            for (paths, borrowed) |p, *b| b.* = p;
+            sendFinish(self, "commit", text, borrowed, cx);
+        },
+        .err, .canceled => {
+            e.edit_finishing = false;
+            self.input.update(cx, TextInput.setReadOnly, .{false});
+            self.showError("Couldn't reach the chat host; your edit is still in the editor", cx);
+        },
+    }
+}
+
+fn sendFinish(self: *ComposerView, action: []const u8, text: ?[]const u8, attachments: ?[]const []const u8, cx: *Ctx) void {
+    const e = ext(self);
+    const ed = e.edit orelse {
+        e.edit_finishing = false;
+        self.input.update(cx, TextInput.setReadOnly, .{false});
+        return;
+    };
     es.EngineState.request(self.state.read(cx).engine, cx, ComposerView, cx.entityId(), .FinishQueuedMessageEdit, EditParams{
         .chatId = ed.chat_id,
         .id = ed.id,
@@ -874,6 +1174,7 @@ fn finishQueueEdit(self: *ComposerView, action: []const u8, text: ?[]const u8, c
         .action = action,
         .text = text,
         .expectedTextHash = ed.base_hash,
+        .attachments = attachments,
         .targetDeviceId = ed.host_device_id,
     }, onFinished) catch {
         e.edit_finishing = false;
@@ -903,9 +1204,20 @@ pub fn onFinished(self: *ComposerView, result: es.CallResult, cx: *Ctx) void {
 /// cancels the lease best-effort (navigation).
 fn clearQueueEdit(self: *ComposerView, release: bool, cx: *Ctx) void {
     const e = ext(self);
-    const ed = e.edit orelse return;
+    var ed = e.edit orelse return;
     e.edit = null;
-    defer ed.deinit(self.gpa);
+    e.commit_task.cancel();
+    e.edit_finishing = false;
+    self.input.update(cx, TextInput.setReadOnly, .{false});
+    // The displaced draft's images come back (the row's go away with it).
+    var row_staged = self.takeStaged(self.current_key.items);
+    for (row_staged.items) |*a| a.deinit(self.gpa, cx.app);
+    row_staged.deinit(self.gpa);
+    if (ed.draft_staged.items.len > 0) {
+        self.stagedList(self.current_key.items).appendSlice(self.gpa, ed.draft_staged.items) catch @panic("OOM");
+        ed.draft_staged.clearRetainingCapacity();
+    }
+    defer ed.deinit(self.gpa, cx.app);
     e.renew_task.cancel();
     if (release) es.EngineState.send(self.state.read(cx).engine, cx, .FinishQueuedMessageEdit, EditParams{
         .chatId = ed.chat_id,
@@ -915,6 +1227,131 @@ fn clearQueueEdit(self: *ComposerView, release: bool, cx: *Ctx) void {
         .targetDeviceId = ed.host_device_id,
     }) catch {};
     self.input.update(cx, TextInput.setText, .{ed.draft});
+}
+
+// =============================================================================================
+// Worktree setup handoff (`composer.rs` send: `TakeProjectActionSetup` poll)
+// =============================================================================================
+
+/// Queue a Run that creates a worktree in a project (`worktree.spaceId`):
+/// its `commandId` starts the setup-action handoff poll.
+pub fn queueWorktreeRun(self: *ComposerView, t: Entity(model.TranscriptStore), command: protocol.SessionCommandPayload, transfers: []const protocol.AttachmentTransfer, message_id: []const u8, cx: *Ctx) !void {
+    const e = ext(self);
+    const st = self.state.read(cx);
+    const store = t.read(cx);
+    const ws = st.workspace.read(cx);
+    const local = ws.local_device_id;
+    const host: ?[]const u8 = if (ws.chat(store.chat_id)) |c| (if (local != null and std.mem.eql(u8, local.?, c.deviceId)) null else c.deviceId) else null;
+    try es.EngineState.request(st.engine, cx, ComposerView, cx.entityId(), .QueueCommand, protocol.params.QueueCommand{
+        .chatId = store.chat_id,
+        .command = command,
+        .transfers = transfers,
+    }, onWorktreeQueued);
+    e.setup_queued.append(self.gpa, .{
+        .chat_id = self.gpa.dupe(u8, store.chat_id) catch return,
+        .message_id = self.gpa.dupe(u8, message_id) catch return,
+        .target = if (host) |h| self.gpa.dupe(u8, h) catch null else null,
+    }) catch {};
+}
+
+fn onWorktreeQueued(self: *ComposerView, result: es.CallResult, cx: *Ctx) void {
+    const e = ext(self);
+    if (e.setup_queued.items.len == 0) return;
+    var p = e.setup_queued.orderedRemove(0);
+    switch (result) {
+        .err => |err| {
+            log.warn("QueueCommand for {s} failed: {s}", .{ p.chat_id, err.message });
+            // The transcript store's own failure path: drop the pending send.
+            if (self.state.read(cx).transcript) |t| if (std.mem.eql(u8, t.read(cx).chat_id, p.chat_id)) {
+                t.update(cx, model.TranscriptStore.endPendingSend, .{@as([]const u8, p.message_id)});
+            };
+            p.deinit(self.gpa);
+        },
+        .ok => |v| {
+            const id = str(v, "commandId") orelse return p.deinit(self.gpa);
+            p.command_id = self.gpa.dupe(u8, id) catch return p.deinit(self.gpa);
+            e.setup_polls.append(self.gpa, p) catch return p.deinit(self.gpa);
+            if (!e.setup_in_flight and e.setup_timer.header == null) pollSetup(self, cx);
+        },
+    }
+}
+
+const TakeSetupParams = struct { chatId: []const u8, commandId: []const u8, targetDeviceId: ?[]const u8 = null };
+
+fn pollSetup(self: *ComposerView, cx: *Ctx) void {
+    const e = ext(self);
+    if (e.setup_polls.items.len == 0) return;
+    const p = &e.setup_polls.items[0];
+    es.EngineState.request(self.state.read(cx).engine, cx, ComposerView, cx.entityId(), .TakeProjectActionSetup, TakeSetupParams{
+        .chatId = p.chat_id,
+        .commandId = p.command_id.?,
+        .targetDeviceId = p.target,
+    }, onSetupPolled) catch return scheduleSetupPoll(self, cx);
+    e.setup_in_flight = true;
+}
+
+fn scheduleSetupPoll(self: *ComposerView, cx: *Ctx) void {
+    const e = ext(self);
+    if (e.setup_polls.items.len == 0) return;
+    e.setup_timer.cancel();
+    e.setup_timer = cx.timer(setup_poll_ms * std.time.ns_per_ms, onSetupTimer) catch .none;
+}
+
+fn onSetupTimer(self: *ComposerView, cx: *Ctx) void {
+    const e = ext(self);
+    e.setup_timer.detach();
+    e.setup_timer = .none;
+    pollSetup(self, cx);
+}
+
+fn onSetupPolled(self: *ComposerView, result: es.CallResult, cx: *Ctx) void {
+    const e = ext(self);
+    e.setup_in_flight = false;
+    if (e.setup_polls.items.len == 0) return;
+    const p = &e.setup_polls.items[0];
+    var done = false;
+    switch (result) {
+        .ok => |v| {
+            const ready = v == .object and if (v.object.get("ready")) |r| r == .bool and r.bool else false;
+            if (ready) {
+                emitSetup(self, p.*, v, cx);
+                done = true;
+            }
+        },
+        // An older host: no handoff to wait for.
+        .err => |err| if (std.mem.startsWith(u8, err.message, "unknown method: ")) {
+            done = true;
+        },
+    }
+    if (!done) {
+        p.attempts += 1;
+        if (p.attempts >= setup_poll_limit) {
+            log.warn("worktree setup handoff timed out (chat {s})", .{p.chat_id});
+            done = true;
+        }
+    }
+    if (done) e.setup_polls.orderedRemove(0).deinit(self.gpa);
+    if (done) pollSetup(self, cx) else scheduleSetupPoll(self, cx);
+}
+
+fn emitSetup(self: *ComposerView, p: SetupPoll, v: std.json.Value, cx: *Ctx) void {
+    const e = ext(self);
+    if (e.setup_event) |*a| a.deinit();
+    e.setup_event = std.heap.ArenaAllocator.init(self.gpa);
+    const a = e.setup_event.?.allocator();
+    const run: ?SetupRun = blk: {
+        const sa = v.object.get("setupAction") orelse break :blk null;
+        if (sa == .null) break :blk null;
+        const parsed = std.json.parseFromValueLeaky(SetupRun, a, sa, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch break :blk null;
+        break :blk parsed;
+    };
+    const err_text: ?[]const u8 = if (str(v, "setupError")) |s| a.dupe(u8, s) catch null else null;
+    cx.emit(WorktreeSetup{
+        .chat_id = a.dupe(u8, p.chat_id) catch return,
+        .setup_action = run,
+        .setup_error = err_text,
+        .target_device_id = if (p.target) |t| a.dupe(u8, t) catch null else null,
+    });
 }
 
 // =============================================================================================
@@ -1382,6 +1819,7 @@ pub fn renderPopup(self: *ComposerView, window: *Window, cx: *Ctx) ?zpui.Div {
                 const name = if (is_skill) r.name else zpui.fmt("/{s}", .{r.name});
                 const desc = if (r.input_hint) |hint| (if (r.description.len == 0) zpui.fmt("<{s}>", .{hint}) else zpui.fmt("{s} · <{s}>", .{ r.description, hint })) else r.description;
                 list = list.child(chrome.menuRow(&theme, .{ "slash-result", ix }, ix == self.slash_active)
+                    .role(.list_box_option).ariaLabel(name).ariaSelected(ix == self.slash_active)
                     .onClick(cx.listenerWith(ix, onSlashRow))
                     .child(div().wFull().minW0().flex().itemsCenter().gap(px(8))
                     .child(chrome.icon(if (is_skill) .magic_stick_3 else .command, 16, theme.text_muted))
@@ -1410,6 +1848,7 @@ pub fn renderPopup(self: *ComposerView, window: *Window, cx: *Ctx) ?zpui.Div {
                 const dir = if (slash_ix) |s| path[0..s] else "";
                 const base = if (slash_ix) |s| path[s + 1 ..] else path;
                 list = list.child(chrome.menuRow(&theme, .{ "file-mention-result", ix }, ix == mn.active)
+                    .role(.list_box_option).ariaLabel(path).ariaSelected(ix == mn.active)
                     .onClick(cx.listenerWith(ix, onMentionRow))
                     .child(div().wFull().minW0().flex().itemsCenter().gap(px(8))
                     .child(chrome.icon(if (r.isDir) .folder else .document, 16, theme.text_muted))

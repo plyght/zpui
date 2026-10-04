@@ -834,6 +834,12 @@ pub const Window = struct {
         return self.next_frame.a11y.push(spec);
     }
 
+    /// Audit hook: an interactive element without a role (see `a11y.Tree.unroled`).
+    pub fn a11yNoteUnroled(self: *Window, gid: u64, b: Bounds, el: []const u8, clickable: bool, focusable: bool) void {
+        if (!self.next_frame.a11y.isBuilding()) return;
+        self.next_frame.a11y.noteUnroled(gid, b, el, clickable, focusable);
+    }
+
     pub fn a11yPopNode(self: *Window) void {
         self.next_frame.a11y.pop();
     }

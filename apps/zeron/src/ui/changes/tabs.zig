@@ -43,7 +43,7 @@ pub fn newTabMenu(theme: *const Theme) zpui.Div {
     var menu = ui.popover.card(theme).w(px(168));
     const rows = [_]struct { []const u8, Icon }{ .{ "Files", .document }, .{ "Browser", .globe }, .{ "Terminal", .terminal }, .{ "Diffs", .list }, .{ "History", .git_branch } };
     for (rows, 0..) |r, i| {
-        menu = menu.child(ui.popover.menuRow(theme, false).id(.{ "newtab-row", i })
+        menu = menu.child(ui.popover.menuRow(theme, false).id(.{ "newtab-row", i }).role(.menu_item)
             .child(ui.icon.of(r[1], 16, theme.text_muted)).child(r[0]));
     }
     return menu;
@@ -60,7 +60,7 @@ pub fn launcher(theme: *const Theme, git: bool) zpui.Div {
 }
 
 pub fn surfaceCard(theme: *const Theme, id: []const u8, i: Icon, title: []const u8) zpui.StatefulDiv {
-    return div().id(id).wFull().h(px(44)).px(px(14)).rounded(px(10))
+    return div().id(id).role(.button).ariaLabel(title).wFull().h(px(44)).px(px(14)).rounded(px(10))
         .border1().borderColor(theme.border).bg(theme.ink(0.02))
         .flex().flexRow().itemsCenter().gap(px(10)).cursorPointer()
         .hover(sb.bg(theme.ink(0.05)).borderColor(theme.border_strong))

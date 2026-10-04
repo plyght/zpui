@@ -103,6 +103,64 @@ pub fn projectPinChange(a: Allocator, sections: *std.ArrayList(Section), change:
     }
 }
 
+/// `SidebarPinChange::project`: rebase one intent on a pin list (strings
+/// borrowed from `change`). A stale move never resurrects an unpinned item;
+/// a surviving right anchor wins, else the left anchor, else append. A
+/// section assignment takes the chat out of the pins.
+pub fn projectPins(a: Allocator, ids: *std.ArrayList([]const u8), change: PinChange) Allocator.Error!void {
+    const Anchor = struct { after: ?[]const u8, before: ?[]const u8 };
+    const id: []const u8, const anchor: ?Anchor = switch (change) {
+        .section => |sc| {
+            if (sc.change == .assign) removeId(ids, sc.change.assign.sessionId);
+            return;
+        },
+        .unpin => |u| .{ u.sessionId, null },
+        .pin => |pc| .{ pc.sessionId, Anchor{ .after = pc.after, .before = pc.before } },
+        .move => |mv| blk: {
+            if (indexOf(ids.items, mv.sessionId) == null) return;
+            break :blk .{ mv.sessionId, Anchor{ .after = mv.after, .before = mv.before } };
+        },
+    };
+    removeId(ids, id);
+    const an = anchor orelse return;
+    const index = (if (an.before) |b| indexOf(ids.items, b) else null) orelse
+        (if (an.after) |af| (if (indexOf(ids.items, af)) |i| i + 1 else null) else null) orelse ids.items.len;
+    try ids.insert(a, index, id);
+}
+
+fn indexOf(ids: []const []const u8, id: []const u8) ?usize {
+    for (ids, 0..) |x, i| if (std.mem.eql(u8, x, id)) return i;
+    return null;
+}
+
+fn removeId(ids: *std.ArrayList([]const u8), id: []const u8) void {
+    var n: usize = 0;
+    for (ids.items) |x| if (!std.mem.eql(u8, x, id)) {
+        ids.items[n] = x;
+        n += 1;
+    };
+    ids.shrinkRetainingCapacity(n);
+}
+
+/// `MAX_SIDEBAR_PINS`.
+pub const max_pins: usize = 200;
+
+/// `validate_sidebar_pin_update`: null when `next` may replace `current`.
+pub fn validatePins(current: []const []const u8, next: []const []const u8) ?[]const u8 {
+    for (next, 0..) |id, i| {
+        if (id.len == 0) return "Sidebar pins must be non-empty and unique";
+        for (next[0..i]) |prev| if (std.mem.eql(u8, prev, id)) return "Sidebar pins must be non-empty and unique";
+    }
+    if (next.len > max_pins) for (next) |id| if (indexOf(current, id) == null) return "You can pin up to 200 sessions";
+    return null;
+}
+
+fn eqlIds(a: []const []const u8, b: []const []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (!std.mem.eql(u8, x, y)) return false;
+    return true;
+}
+
 /// The section holding `chat_id`, if any.
 pub fn sectionOf(sections: []const Section, chat_id: []const u8) ?usize {
     for (sections, 0..) |s, i| for (s.session_ids) |id| if (std.mem.eql(u8, id, chat_id)) return i;
@@ -143,6 +201,11 @@ fn cloneValue(comptime T: type, gpa: Allocator, v: T) ?json.Parsed(T) {
 pub const notice_syncing = "Sidebar is still syncing. Try again shortly.";
 pub const notice_no_engine = "Engine not connected. Sidebar was not changed.";
 pub const notice_waiting = "Waiting for the engine to confirm the previous sidebar change.";
+pub const notice_unconfirmed = "Couldn't confirm sidebar changes. Queued edits were cancelled; waiting for the engine before allowing more changes.";
+pub const notice_pins_syncing = "Pins are still syncing";
+
+/// A write unanswered this long stops the queue (`mark_pin_write_unconfirmed`).
+pub const write_timeout_ns: u64 = 20 * std.time.ns_per_s;
 
 // ---- controller (the Shell's `sidebar_pin_write` for section intents) ------------------
 
@@ -160,7 +223,10 @@ pub const Pending = struct {
     profile_key: []u8,
     /// `EngineState.generation` the queue was started on (`same_connection`).
     generation: u64,
-    queue: std.ArrayList(json.Parsed(SectionChange)) = .empty,
+    queue: std.ArrayList(json.Parsed(PinChange)) = .empty,
+    /// The head outlived `write_timeout_ns`: no overlay, no new writes until
+    /// it resolves (its execution order is uncertain).
+    unconfirmed: bool = false,
 
     fn deinit(self: *Pending, gpa: Allocator) void {
         for (self.queue.items) |*p| p.deinit();
@@ -217,12 +283,58 @@ pub const Controller = struct {
             return (try cloneSections(a, stored)).items;
         }
         var list = try cloneSections(a, ws.sidebarPreferences().sections);
-        if (self.pending) |*p| {
-            var buf: [512]u8 = undefined;
-            var fba: std.heap.FixedBufferAllocator = .init(&buf);
-            if (self.isCurrent(p, env, fba.allocator())) for (p.queue.items) |c| try project(a, &list, c.value);
-        }
+        if (self.overlay(env)) |p| for (p.queue.items) |c| try projectPinChange(a, &list, c.value);
         return list.items;
+    }
+
+    /// The pending writes when they project (current and confirmed).
+    fn overlay(self: *Controller, env: Env) ?*Pending {
+        const p = if (self.pending) |*x| x else return null;
+        if (p.unconfirmed) return null;
+        var buf: [512]u8 = undefined;
+        var fba: std.heap.FixedBufferAllocator = .init(&buf);
+        return if (self.isCurrent(p, env, fba.allocator())) p else null;
+    }
+
+    /// `raw_sidebar_pins`: the overlay on the synced snapshot; a local
+    /// workspace's pins from `ui-settings.json`; null without a workspace
+    /// scope (no engine yet / fixtures: the caller keeps its own list).
+    pub fn rawPins(self: *Controller, a: Allocator, env: Env) Allocator.Error!?[]const []const u8 {
+        const ws = env.workspace.read(env.app);
+        const scope = ws.workspace_scope orelse return null;
+        if (scope == .local) {
+            const key = profileKey(a, scope, env.auth) orelse return &.{};
+            const s = model.settings_store.current(env.app) orelse return &.{};
+            return s.sidebarPins(key);
+        }
+        var ids: std.ArrayList([]const u8) = .empty;
+        try ids.appendSlice(a, ws.sidebarPreferences().pinnedSessionIds);
+        if (self.overlay(env)) |p| for (p.queue.items) |c| try projectPins(a, &ids, c.value);
+        return ids.items;
+    }
+
+    /// `apply_sidebar_pin_change` (pin / move / unpin): validated against
+    /// the pins shown (`active`), written locally or queued for the engine.
+    /// `shown` are the pins minus section members.
+    pub fn changePin(self: *Controller, ch: PinChange, shown: []const []const u8, env: Env) Result {
+        var arena_state: std.heap.ArenaAllocator = .init(env.gpa);
+        defer arena_state.deinit();
+        const a = arena_state.allocator();
+        const ws = env.workspace.read(env.app);
+        const scope = ws.workspace_scope orelse return .refused;
+        const key = profileKey(a, scope, env.auth) orelse return .refused;
+        const raw = (self.rawPins(a, env) catch return .refused) orelse return .refused;
+        var next: std.ArrayList([]const u8) = .empty;
+        next.appendSlice(a, raw) catch return .refused;
+        projectPins(a, &next, ch) catch return .refused;
+        if (scope != .local and !ws.sidebarPreferences().canEdit()) return .{ .notice = notice_pins_syncing };
+        if (validatePins(shown, next.items)) |msg| return .{ .notice = msg };
+        if (eqlIds(raw, next.items)) return .refused;
+        if (scope == .local) {
+            writeLocalPins(env.app, key, next.items);
+            return .applied;
+        }
+        return self.queue(key, ch, env);
     }
 
     /// `change_sidebar_section`: apply locally, or queue the synced write.
@@ -245,21 +357,34 @@ pub const Controller = struct {
             };
             project(a, &list, ch) catch return .refused;
             writeLocal(env.app, key, list.items);
+            // Joining a section takes the chat out of this device's pins
+            // (clearing membership after a local pin keeps the pin).
+            if (ch == .assign) if (ch.assign.sectionId != null) {
+                if (model.settings_store.current(env.app)) |st| {
+                    var pins: std.ArrayList([]const u8) = .empty;
+                    pins.appendSlice(a, st.sidebarPins(key)) catch return .applied;
+                    const before = pins.items.len;
+                    removeId(&pins, ch.assign.sessionId);
+                    if (pins.items.len != before) writeLocalPins(env.app, key, pins.items);
+                }
+            };
             return .applied;
         }
         if (!ws.sidebarPreferences().canEdit()) return .{ .notice = notice_syncing };
-        return self.queue(key, ch, env);
+        return self.queue(key, .{ .section = .{ .change = ch } }, env);
     }
 
     /// `send`: a new write started, the caller sends `head()`.
     pub const Result = union(enum) { applied, send, refused, notice: []const u8 };
 
-    /// `queue_sidebar_pin_write` (section intents only).
-    fn queue(self: *Controller, key: []const u8, ch: SectionChange, env: Env) Result {
+    /// `queue_sidebar_pin_write`: pins and section intents share one queue
+    /// so moves cannot overtake one another.
+    fn queue(self: *Controller, key: []const u8, ch: PinChange, env: Env) Result {
         self.discardStale(env);
         const es = env.engine.read(env.app);
         if (!attached(es)) return .{ .notice = notice_no_engine };
-        const owned = cloneValue(SectionChange, env.gpa, ch) orelse return .refused;
+        if (self.pending) |p| if (p.unconfirmed) return .{ .notice = notice_waiting };
+        const owned = cloneValue(PinChange, env.gpa, ch) orelse return .refused;
         if (self.pending) |*p| {
             p.queue.append(env.gpa, owned) catch {
                 var o = owned;
@@ -288,8 +413,21 @@ pub const Controller = struct {
         return .{ .send = {} };
     }
 
+    /// `mark_pin_write_unconfirmed`: the head outlived the deadline. Queued
+    /// edits are dropped and nothing new is accepted until it resolves.
+    /// True when `id` was still the pending write (show `notice_unconfirmed`).
+    pub fn markUnconfirmed(self: *Controller, id: u64, env: Env) bool {
+        self.discardStale(env);
+        const p = if (self.pending) |*x| x else return false;
+        if (p.id != id) return false;
+        for (p.queue.items) |*c| c.deinit();
+        p.queue.clearRetainingCapacity();
+        p.unconfirmed = true;
+        return true;
+    }
+
     /// The change at the head of the queue (to send).
-    pub fn head(self: *const Controller) ?SectionChange {
+    pub fn head(self: *const Controller) ?PinChange {
         const p = self.pending orelse return null;
         if (p.queue.items.len == 0) return null;
         return p.queue.items[0].value;
@@ -307,7 +445,7 @@ pub const Controller = struct {
         const p = if (self.pending) |*x| x else return .{};
         if (p.id != id) return .{};
         var out: Finish = .{};
-        const was_import = p.queue.items.len > 0 and p.queue.items[0].value == .import;
+        const was_import = p.queue.items.len > 0 and p.queue.items[0].value == .section and p.queue.items[0].value.section.change == .import;
         switch (result) {
             .ok => |v| {
                 const prefs = if (v == .object) v.object.get("sidebarPreferences") else null;
@@ -355,7 +493,7 @@ pub const Controller = struct {
         const s = model.settings_store.current(env.app) orelse return .refused;
         const stored = s.sidebarSectionsByProfile.map.get(key) orelse return .refused;
         if (stored.len == 0) return .refused;
-        const r = self.queue(key, .{ .import = .{ .sections = stored } }, env);
+        const r = self.queue(key, .{ .section = .{ .change = .{ .import = .{ .sections = stored } } } }, env);
         if (r == .send or r == .applied) {
             if (self.migrated) |m| env.gpa.free(m.key);
             self.migrated = .{ .key = env.gpa.dupe(u8, key) catch return r, .generation = es.generation };
@@ -363,6 +501,29 @@ pub const Controller = struct {
         return r;
     }
 };
+
+/// Store `pins` as the profile's local pins (`schedule_save`; empty removes).
+pub fn writeLocalPins(app: *zpui.App, key: []const u8, pins: []const []const u8) void {
+    const Ctx = struct { key: []const u8, pins: []const []const u8 };
+    const W = struct {
+        fn f(c: Ctx, s: *model.UiSettings, a: Allocator) void {
+            var map: std.StringArrayHashMapUnmanaged([]const []const u8) = .empty;
+            var it = s.sidebarPinnedSessionIdsByProfile.map.iterator();
+            while (it.next()) |e| {
+                if (std.mem.eql(u8, e.key_ptr.*, c.key)) continue;
+                map.put(a, e.key_ptr.*, e.value_ptr.*) catch return;
+            }
+            if (c.pins.len > 0) {
+                const k = a.dupe(u8, c.key) catch return;
+                const v = a.alloc([]const u8, c.pins.len) catch return;
+                for (c.pins, v) |src, *dst| dst.* = a.dupe(u8, src) catch return;
+                map.put(a, k, v) catch return;
+            }
+            s.sidebarPinnedSessionIdsByProfile = .{ .map = map };
+        }
+    };
+    _ = model.settings_store.update(app, .debounced, Ctx{ .key = key, .pins = pins }, W.f);
+}
 
 /// Store `sections` as the profile's local sections (`schedule_save`).
 pub fn writeLocal(app: *zpui.App, key: []const u8, sections: []const Section) void {

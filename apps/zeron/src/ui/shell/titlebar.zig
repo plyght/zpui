@@ -78,7 +78,8 @@ var drag_armed: bool = false;
 
 /// Make `el` a window-drag strip (double-click zooms).
 fn dragRegion(id: []const u8, el: zpui.Div, cx: *Context(Shell)) zpui.StatefulDiv {
-    return el.id(id)
+    // A window drag strip (double-click zooms): a toolbar node for assistive technology.
+    return el.id(id).role(.toolbar).ariaLabel("Title bar")
         .onMouseDown(.left, cx.listener(onStripDown))
         .onMouseUp(.left, cx.listener(onStripUp))
         .onMouseMove(cx.listener(onStripMove))

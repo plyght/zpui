@@ -491,6 +491,7 @@ pub const RightPane = struct {
         const f = self.filesClient(cx) orelse return null;
         const e = cx.newWith(files.FilesPanel, files.FilesPanel.init, .{ f, files.panel.Options{ .show_all_files = filesSettings(cx).filesShowAll } }) catch return null;
         t.explorer = e;
+        if (self.key(cx)) |k| e.update(cx, files.FilesPanel.setDragOwner, .{k});
         t.explorer_sub = cx.subscribe(e, onExplorerOpenFile) catch null;
         if (cx.subscribe(e, onExplorerShowAll)) |sub| t.explorer_subs.add(self.gpa, sub) catch {} else |_| {}
         // Rename/delete propagation to open editors (`shell/file_mutations.rs`).
@@ -855,7 +856,7 @@ pub const RightPane = struct {
                     drag.path_len = @intCast(fp.len);
                 }
             }
-            var chip = div().id(.{ "right-surface-tab", ix }).group(group)
+            var chip = div().id(.{ "right-surface-tab", ix }).role(.button).ariaLabel(if (dirty(tab, cx)) zpui.fmt("{s}, unsaved changes", .{title}) else title).ariaSelected(is_active).group(group)
                 .h(px(24)).w(px(chip_w)).flexNone().px(px(4)).rounded(px(6))
                 .flex().flexRow().itemsCenter().gap(px(3)).cursorPointer()
                 .blockMouseExceptScroll()
@@ -871,7 +872,7 @@ pub const RightPane = struct {
                         zpui.intoAnyElement(ui.icon.of(iconOf(tab, cx), 12, if (is_active) theme.text_muted else theme.text_muted.opacity(0.7)))))
                 .child(div().flex1().minW0().truncate().whitespaceNowrap().textSize(ui.rems(11.5))
                     .textColor(if (is_active) theme.text else theme.text_muted).child(title))
-                .child(div().id(.{ "right-surface-close", ix }).flexNone().size(px(18)).rounded(px(4)).relative()
+                .child(div().id(.{ "right-surface-close", ix }).role(.button).ariaLabel("Close tab").flexNone().size(px(18)).rounded(px(4)).relative()
                     .hover(sb.bg(theme.wash(0.12)))
                     .tooltipWith(@as([]const u8, "Close tab"), ui.tooltip.build)
                     .onMouseDown(.left, onCloseDown)
@@ -904,7 +905,7 @@ pub const RightPane = struct {
         }
 
         // The `+`: a small menu offering the available surfaces.
-        var plus = div().id("right-surface-add").relative().size(px(24)).flexNone().flex().itemsCenter().justifyCenter()
+        var plus = div().id("right-surface-add").role(.button).ariaLabel("New tab").ariaExpanded(self.plus_open).relative().size(px(24)).flexNone().flex().itemsCenter().justifyCenter()
             .rounded(px(6)).cursorPointer()
             .blockMouseExceptScroll()
             .onMouseDown(.left, onChipDown)
@@ -938,7 +939,7 @@ pub const RightPane = struct {
         const git = self.gitDetected(cx);
         for (entries) |e| {
             if ((e[0] == .diffs or e[0] == .history) and !git) continue;
-            rows = rows.child(ui.popover.menuRow(pt, false).id(.{ "right-plus-row", @intFromEnum(e[0]) })
+            rows = rows.child(ui.popover.menuRow(pt, false).id(.{ "right-plus-row", @intFromEnum(e[0]) }).role(.menu_item)
                 .onClick(cx.listenerWith(e[0], onMenuRow))
                 .child(ui.icon.of(e[2], 13, pt.text_muted))
                 .child(e[1]));
@@ -980,7 +981,7 @@ pub const RightPane = struct {
 };
 
 fn surfaceCard(theme: *const Theme, id: []const u8, i: Icon, title: []const u8) zpui.StatefulDiv {
-    return div().id(id).wFull().h(px(44)).px(px(14)).rounded(px(10))
+    return div().id(id).role(.button).ariaLabel(title).wFull().h(px(44)).px(px(14)).rounded(px(10))
         .border1().borderColor(theme.border).bg(theme.ink(0.02))
         .flex().flexRow().itemsCenter().gap(px(10)).cursorPointer()
         .hover(sb.bg(theme.ink(0.05)).borderColor(theme.border_strong))

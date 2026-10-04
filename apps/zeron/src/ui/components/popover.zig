@@ -3,7 +3,7 @@
 //!
 //! ```zig
 //! const card = popover.card(theme).w(px(240)).child(popover.heading(theme, "Actions"))
-//!     .child(popover.menuRow(theme, false).id("new").onClick(...).child(icon.of(.plus, 16, muted)).child("New chat"));
+//!     .child(popover.menuRow(theme, false).id("new").role(.menu_item).onClick(...).child(icon.of(.plus, 16, muted)).child("New chat"));
 //! // Mounted from the trigger (relative) while open:
 //! trigger.child(popover.anchoredAbove(card))      // opens upward, left-aligned
 //! trigger.child(popover.anchoredBelow(card))      // dropdown

@@ -717,72 +717,210 @@ pub const ReadJob = struct {
     }
 };
 
-pub fn readAttachment(gpa: Allocator, client: *Client, target: ?[]const u8, path: []const u8, expected_mime: ?[]const u8) ReadResult {
+/// The raw bytes of a read-back attachment (owned).
+pub const RawAttachment = struct {
+    name: []u8,
+    mime_buf: [64]u8 = undefined,
+    mime_len: u8 = 0,
+    bytes: []u8,
+
+    pub fn mime(self: *const RawAttachment) []const u8 {
+        return self.mime_buf[0..self.mime_len];
+    }
+
+    pub fn deinit(self: *RawAttachment, gpa: Allocator) void {
+        gpa.free(self.name);
+        gpa.free(self.bytes);
+    }
+};
+
+/// The `ReadAttachmentChunk` loop alone: name, mime and decoded bytes.
+pub fn readAttachmentBytes(gpa: Allocator, client: *Client, target: ?[]const u8, path: []const u8, expected_mime: ?[]const u8) ?RawAttachment {
     var b64: std.ArrayList(u8) = .empty;
     defer b64.deinit(gpa);
     var name: std.ArrayList(u8) = .empty;
     defer name.deinit(gpa);
-    var mime_buf: [64]u8 = undefined;
-    var mime: []const u8 = "";
+    var out: RawAttachment = .{ .name = &.{}, .bytes = &.{} };
     var offset: u64 = 0;
     var done = false;
     var diag: engine_mod.Diagnostic = .{};
     var i: usize = 0;
     while (i < max_read_chunks) : (i += 1) {
-        const call = client.start(.ReadAttachmentChunk, ReadParams{ .path = path, .offset = offset, .targetDeviceId = target }) catch return .failed;
+        const call = client.start(.ReadAttachmentChunk, ReadParams{ .path = path, .offset = offset, .targetDeviceId = target }) catch return null;
         defer call.deinit();
-        const reply = waitFor(client, call, read_chunk_timeout_ns, &diag) catch return .failed;
+        const reply = waitFor(client, call, read_chunk_timeout_ns, &diag) catch return null;
         defer reply.deinit();
-        const o = if (reply.value == .object) reply.value.object else return .failed;
-        const n = o.get("name") orelse return .failed;
-        const m = o.get("mimeType") orelse return .failed;
-        if (n != .string or m != .string) return .failed;
+        const o = if (reply.value == .object) reply.value.object else return null;
+        const n = o.get("name") orelse return null;
+        const m = o.get("mimeType") orelse return null;
+        if (n != .string or m != .string) return null;
         name.clearRetainingCapacity();
-        name.appendSlice(gpa, n.string) catch return .failed;
-        if (m.string.len > mime_buf.len) return .failed;
-        @memcpy(mime_buf[0..m.string.len], m.string);
-        mime = mime_buf[0..m.string.len];
-        if (expected_mime) |e| if (!std.mem.eql(u8, e, mime)) return .failed;
-        const data = o.get("data") orelse return .failed;
-        if (data != .string) return .failed;
-        if (expected_mime != null and b64.items.len + data.string.len > (max_attachment_bytes + 2) / 3 * 4) return .failed;
-        b64.appendSlice(gpa, data.string) catch return .failed;
-        const d = o.get("done") orelse return .failed;
-        if (d != .bool) return .failed;
+        name.appendSlice(gpa, n.string) catch return null;
+        if (m.string.len > out.mime_buf.len) return null;
+        @memcpy(out.mime_buf[0..m.string.len], m.string);
+        out.mime_len = @intCast(m.string.len);
+        if (expected_mime) |e| if (!std.mem.eql(u8, e, out.mime())) return null;
+        const data = o.get("data") orelse return null;
+        if (data != .string) return null;
+        if (expected_mime != null and b64.items.len + data.string.len > (max_attachment_bytes + 2) / 3 * 4) return null;
+        b64.appendSlice(gpa, data.string) catch return null;
+        const d = o.get("done") orelse return null;
+        if (d != .bool) return null;
         done = d.bool;
         if (done) break;
-        const nx = o.get("nextOffset") orelse return .failed;
+        const nx = o.get("nextOffset") orelse return null;
         const next: u64 = switch (nx) {
-            .integer => |v| if (v < 0) return .failed else @intCast(v),
-            else => return .failed,
+            .integer => |v| if (v < 0) return null else @intCast(v),
+            else => return null,
         };
-        if (next <= offset) return .failed;
+        if (next <= offset) return null;
         offset = next;
     }
-    if (!done or b64.items.len == 0) return .failed;
+    if (!done or b64.items.len == 0) return null;
     const dec = std.base64.standard.Decoder;
-    const size = dec.calcSizeForSlice(b64.items) catch return .failed;
-    const bytes = gpa.alloc(u8, size) catch return .failed;
-    defer gpa.free(bytes);
-    dec.decode(bytes, b64.items) catch return .failed;
+    const size = dec.calcSizeForSlice(b64.items) catch return null;
+    const bytes = gpa.alloc(u8, size) catch return null;
+    dec.decode(bytes, b64.items) catch {
+        gpa.free(bytes);
+        return null;
+    };
+    out.name = gpa.dupe(u8, if (name.items.len == 0) nameFromPath(path) else name.items) catch {
+        gpa.free(bytes);
+        return null;
+    };
+    out.bytes = bytes;
+    return out;
+}
+
+pub fn readAttachment(gpa: Allocator, client: *Client, target: ?[]const u8, path: []const u8, expected_mime: ?[]const u8) ReadResult {
+    var raw = readAttachmentBytes(gpa, client, target, path, expected_mime) orelse return .failed;
+    defer gpa.free(raw.bytes);
+    const bytes = raw.bytes;
     var options: image.DecodeOptions = .{ .animate = false };
     if (expected_mime) |e| {
         // Generated previews: only static rasters whose bytes match the metadata, ≤ 2048 px.
         const ok_mime = std.mem.eql(u8, e, "image/png") or std.mem.eql(u8, e, "image/jpeg") or std.mem.eql(u8, e, "image/webp") or std.mem.eql(u8, e, "image/gif");
-        if (!ok_mime or bytes.len > max_attachment_bytes) return .failed;
-        const actual = image.guessFormat(bytes) orelse return .failed;
-        if (!std.mem.eql(u8, actual.mimeType(), e)) return .failed;
-        const info = image.probe(bytes) orelse return .failed;
-        if (info.width > 4096 or info.height > 4096) return .failed;
+        if (!ok_mime or bytes.len > max_attachment_bytes) return failRead(gpa, &raw);
+        const actual = image.guessFormat(bytes) orelse return failRead(gpa, &raw);
+        if (!std.mem.eql(u8, actual.mimeType(), e)) return failRead(gpa, &raw);
+        const info = image.probe(bytes) orelse return failRead(gpa, &raw);
+        if (info.width > 4096 or info.height > 4096) return failRead(gpa, &raw);
         options.max_dimension = 2048;
     }
-    const decoded = image.decode(gpa, bytes, options) catch return .failed;
-    const owned_name = gpa.dupe(u8, if (name.items.len == 0) nameFromPath(path) else name.items) catch {
-        var d = decoded;
-        d.deinit(gpa);
-        return .failed;
-    };
-    return .{ .ok = .{ .name = owned_name, .decoded = decoded } };
+    const decoded = image.decode(gpa, bytes, options) catch return failRead(gpa, &raw);
+    return .{ .ok = .{ .name = raw.name, .decoded = decoded } };
+}
+
+fn failRead(gpa: Allocator, raw: *RawAttachment) ReadResult {
+    gpa.free(raw.name);
+    return .failed;
+}
+
+/// The format a read-back mime maps to (`ImageFormat::from_mime_type`).
+pub fn formatFromMime(mime: []const u8) ?Format {
+    for ([_]Format{ .png, .jpeg, .gif, .webp, .svg, .bmp, .tiff }) |v| {
+        if (std.ascii.eqlIgnoreCase(mime, v.mime())) return v;
+    }
+    if (std.ascii.eqlIgnoreCase(mime, "image/jpg")) return .jpeg;
+    return null;
+}
+
+/// A queued message's attachments loaded back for an edit (Rust
+/// `begin_queue_edit`: `read_attachment_image` per path from the chat's host,
+/// in order; any failure fails the whole restore).
+pub const QueuedLoadJob = struct {
+    gpa: Allocator,
+    client: *Client,
+    conn: ?*es.Connection = null,
+    paths: [][]u8,
+    target_device_id: ?[]u8 = null,
+
+    /// Null = a read failed (the edit is cancelled).
+    pub fn run(self: *QueuedLoadJob) ?[]StageOutcome {
+        var out: std.ArrayList(StageOutcome) = .empty;
+        for (self.paths) |path| {
+            var raw = readAttachmentBytes(self.gpa, self.client, self.target_device_id, path, null) orelse {
+                freeOutcomes(self.gpa, out.toOwnedSlice(self.gpa) catch &.{});
+                return null;
+            };
+            const format = formatFromMime(raw.mime()) orelse Format.fromPath(raw.name) orelse Format.fromPath(path) orelse {
+                raw.deinit(self.gpa);
+                freeOutcomes(self.gpa, out.toOwnedSlice(self.gpa) catch &.{});
+                return null;
+            };
+            const name = ensureExtension(self.gpa, raw.name, format) catch {
+                raw.deinit(self.gpa);
+                freeOutcomes(self.gpa, out.toOwnedSlice(self.gpa) catch &.{});
+                return null;
+            };
+            self.gpa.free(raw.name);
+            out.append(self.gpa, .{ .ok = .{ .name = name, .format = format, .bytes = raw.bytes, .decoded = previewDecode(self.gpa, raw.bytes, format) } }) catch {
+                var o: StageOutcome = .{ .ok = .{ .name = name, .format = format, .bytes = raw.bytes, .decoded = null } };
+                freeOutcome(self.gpa, &o);
+                freeOutcomes(self.gpa, out.toOwnedSlice(self.gpa) catch &.{});
+                return null;
+            };
+        }
+        return out.toOwnedSlice(self.gpa) catch null;
+    }
+
+    pub fn discard(self: *QueuedLoadJob, result: ?[]StageOutcome) void {
+        if (result) |r| freeOutcomes(self.gpa, r);
+    }
+
+    pub fn deinit(self: *QueuedLoadJob) void {
+        for (self.paths) |p| self.gpa.free(p);
+        self.gpa.free(self.paths);
+        if (self.target_device_id) |t| self.gpa.free(t);
+        if (self.conn) |c| c.release();
+    }
+};
+
+/// A message's attachment trailer split off (`parse_user_message_images`,
+/// paths only; borrowed from `content` / `a`).
+pub const Trailer = struct { text: []const u8, paths: []const []const u8 };
+
+pub fn parseTrailer(a: Allocator, content: []const u8) Allocator.Error!Trailer {
+    const lower = try std.ascii.allocLowerString(a, content);
+    const needle = "\n\nattached images (local files";
+    var from: usize = 0;
+    while (std.mem.indexOfPos(u8, lower, from, needle)) |gap| {
+        const line_start = gap + 2;
+        const line_end = std.mem.indexOfScalarPos(u8, content, line_start, '\n') orelse content.len;
+        const line = std.mem.trimEnd(u8, content[line_start..line_end], "\r");
+        if (std.mem.endsWith(u8, line, "):")) {
+            const refs_start = @min(line_end + 1, content.len);
+            var paths: std.ArrayList([]const u8) = .empty;
+            var it = std.mem.splitScalar(u8, content[refs_start..], '\n');
+            while (it.next()) |l| {
+                const t = std.mem.trimStart(u8, l, " \t");
+                if (!std.mem.startsWith(u8, t, "- ")) continue;
+                const path = std.mem.trim(u8, t[2..], " \t\r");
+                if (path.len == 0) continue;
+                try paths.append(a, path);
+            }
+            if (paths.items.len == 0) return .{ .text = content, .paths = &.{} };
+            const body = std.mem.trimEnd(u8, content[0..gap], " \t\r\n");
+            return .{ .text = body, .paths = paths.items };
+        }
+        from = line_start;
+    }
+    return .{ .text = content, .paths = &.{} };
+}
+
+/// `queue_visible_text`: a queued row's editable text. New rows hold only
+/// the user's text; a row stored by an older client may still carry the
+/// attachment trailer, hidden only when its paths match the row's
+/// `attachments` exactly.
+pub fn queueVisibleText(a: Allocator, text_in: []const u8, attachments: []const []const u8) Allocator.Error![]const u8 {
+    const text = @import("appshots.zig").stripContextForDisplay(text_in);
+    if (std.mem.trim(u8, text, " \t\r\n").len == 0 and attachments.len > 0) return attachment_only_text;
+    if (attachments.len == 0) return text;
+    const parsed = try parseTrailer(a, text);
+    if (parsed.paths.len != attachments.len) return text;
+    for (parsed.paths, attachments) |p, s| if (!std.mem.eql(u8, p, s)) return text;
+    if (std.mem.trim(u8, parsed.text, " \t\r\n").len == 0) return attachment_only_text;
+    return parsed.text;
 }
 
 // ---------------------------------------------------------------------------
@@ -1130,6 +1268,22 @@ pub fn scheduleRepaint(app: *App, delay_ns: u64) void {
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "queued rows hide only a matching attachment trailer" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const stored = try withAttachments(a, "look at this", &.{ "/h/a.png", "/h/b.png" });
+    try testing.expectEqualStrings("look at this", try queueVisibleText(a, stored, &.{ "/h/a.png", "/h/b.png" }));
+    try testing.expectEqualStrings(stored, try queueVisibleText(a, stored, &.{"/h/a.png"}));
+    try testing.expectEqualStrings("plain", try queueVisibleText(a, "plain", &.{}));
+    try testing.expectEqualStrings(attachment_only_text, try queueVisibleText(a, "  ", &.{"/h/a.png"}));
+    const only = try withAttachments(a, "", &.{"/h/a.png"});
+    try testing.expectEqualStrings(attachment_only_text, try queueVisibleText(a, only, &.{"/h/a.png"}));
+    try testing.expectEqual(Format.jpeg, formatFromMime("image/jpeg").?);
+    try testing.expectEqual(Format.png, formatFromMime("IMAGE/PNG").?);
+    try testing.expect(formatFromMime("text/plain") == null);
+}
 
 test "with_attachments transport" {
     const gpa = testing.allocator;
