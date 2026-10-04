@@ -32,6 +32,12 @@ jobs:
       - run: zig build test --summary all
       # Apple Silicon runners expose no Metal device, so macOS only builds here; renders run on Intel below.
       - run: zig build --summary all
+      # The macOS AppKit/CoreText backend must keep compiling from non-macOS hosts (object only, no SDK).
+      - name: Cross-compile macOS platform backend (mac-check)
+        if: runner.os == 'Linux'
+        run: |
+          zig build mac-check -Dtarget=aarch64-macos --summary all
+          zig build mac-check -Dtarget=x86_64-macos --summary all
 
   # Renders the showcase scene with the real GPU backend and uploads the PNG.
   render:
@@ -61,4 +67,31 @@ jobs:
         with:
           name: render-${{ matrix.backend }}
           path: zig-out/*.png
+          if-no-files-found: warn
+
+  # macOS platform backend smoke test: opens a real NSWindow (blurred, transparent
+  # titlebar), renders 30 display-link frames through Metal, writes
+  # zig-out/mac-window-offscreen.png (offscreen render of the same scene, pixel-checked)
+  # and zig-out/mac-window.png (window capture, best effort), then exits.
+  # Intel runner: Apple Silicon runners expose no Metal device.
+  mac-window:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Build (all macOS artifacts, including mac-window)
+        run: zig build --summary all
+      - name: Smoke test mac-window (30 frames)
+        timeout-minutes: 5
+        env:
+          ZPUI_SMOKE_FRAMES: "30"
+        # On failure the demo prints FAIL: <reason> (no frames / blank render / openWindow error).
+        run: ./zig-out/bin/mac-window
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mac-window-smoke
+          path: zig-out/mac-window*.png
           if-no-files-found: warn

@@ -59,6 +59,7 @@ pub const TextAlign = line.TextAlign;
 /// The OS text backend module (`create(gpa) !platform.TextSystem`, `destroy(ts)`).
 pub const backend = switch (builtin.os.tag) {
     .linux => @import("freetype.zig"),
+    .macos => @import("coretext.zig"),
     else => struct {
         pub fn create(_: std.mem.Allocator) !platform.TextSystem {
             return error.Unsupported;

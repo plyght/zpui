@@ -21,6 +21,7 @@ pub fn build(b: *std.Build) void {
     addMetalRenderer(b, target, optimize, zpui);
     addLinuxText(b, target, optimize, zpui);
     addLinuxPlatform(b, target, optimize, zpui);
+    addMacPlatform(b, target, optimize, zpui);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -296,5 +297,56 @@ fn addLinuxPlatform(
     const run = b.addRunArtifact(demo);
     run.addPassthruArgs();
     const step = b.step("linux-window", "Open the Linux platform demo window (Wayland or X11)");
+    step.dependOn(&run.step);
+}
+
+/// macOS platform backend (src/platform/mac/) + CoreText (src/text/coretext.zig):
+/// AppKit/CoreText/CoreVideo/Carbon frameworks, the `mac-window` demo
+/// (`zig build mac-window`; `ZPUI_SMOKE_FRAMES=30` makes it render 30 frames,
+/// write zig-out/mac-window*.png and exit), and `mac-check`, an object-only
+/// compile of the backend that works from non-macOS hosts without an SDK.
+fn addMacPlatform(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    if (target.result.os.tag != .macos) return;
+    const native = @import("builtin").os.tag == .macos;
+
+    const check = b.addObject(.{
+        .name = "mac-check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/mac_check.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    const install_check = b.addInstallFile(check.getEmittedBin(), "mac-check.o");
+    const check_step = b.step("mac-check", "Compile the macOS platform backend + demo to zig-out/mac-check.o (no SDK needed)");
+    check_step.dependOn(&install_check.step);
+    if (!native) {
+        b.getInstallStep().dependOn(&install_check.step);
+        return;
+    }
+
+    zpui.link_libc = true;
+    for ([_][]const u8{ "AppKit", "CoreFoundation", "CoreText", "CoreVideo", "Carbon" }) |name| zpui.linkFramework(name, .{});
+
+    const demo = b.addExecutable(.{
+        .name = "mac-window",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/mac_window.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    b.installArtifact(demo);
+    const run = b.addRunArtifact(demo);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    const step = b.step("mac-window", "Run the macOS window demo (ZPUI_SMOKE_FRAMES=N for the CI smoke test)");
     step.dependOn(&run.step);
 }
