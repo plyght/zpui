@@ -24,7 +24,8 @@
 //!   ZERON_LIQUID_GLASS=1    force Settings → Appearance → Glass → Liquid Glass for this
 //!                           run (macOS 26+; frosted elsewhere; docs/LIQUID_GLASS.md);
 //!                           =0 keeps "Theme default" frosted (it means Liquid on 26+)
-//!   ZERON_SIDEBAR_GLASS=glass|vev, ZERON_SIDEBAR_LAYOUT=floating|flush
+//!   ZERON_SIDEBAR_GLASS=glass|vev, ZERON_SIDEBAR_LAYOUT=floating|flush,
+//!   ZERON_SIDEBAR_OPACITY=<0..1> (theme layer under the sidebar glass, default 0.55)
 //!                           Liquid Glass sidebar recipe / layout (docs/LIQUID_GLASS.md)
 //!   --smoke-frames <n>      CI smoke test (also ZERON_SMOKE_FRAMES): render n frames,
 //!                           capture the window to zig-out/zeron-<os>[-light].png and
@@ -174,6 +175,7 @@ fn onLaunch(l: *Launch, app: *App) void {
     if (l.environ.get("ZERON_SIDEBAR_GLASS")) |v| {
         if (std.meta.stringToEnum(shell_mod.SidebarGlassMode, v)) |m| shell_mod.sidebar_glass_mode = m;
     }
+    if (l.environ.get("ZERON_SIDEBAR_OPACITY")) |v| shell_mod.sidebar_opacity = std.fmt.parseFloat(f32, v) catch shell_mod.sidebar_opacity;
     if (l.environ.get("ZERON_SIDEBAR_LAYOUT")) |v| {
         if (std.meta.stringToEnum(shell_mod.SidebarLayout, v)) |m| shell_mod.sidebar_layout_override = m;
     }

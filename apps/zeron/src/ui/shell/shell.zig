@@ -892,6 +892,9 @@ pub const SidebarLayout = enum { floating, flush };
 pub var sidebar_glass_mode: SidebarGlassMode = .glass;
 /// `ZERON_SIDEBAR_LAYOUT=floating|flush` (main.zig); null = flush.
 pub var sidebar_layout_override: ?SidebarLayout = null;
+/// Opacity of the theme-colored layer under the sidebar glass (`ZERON_SIDEBAR_OPACITY`,
+/// 0 = glass straight on the desktop). Keeps `.regular` glass, just less see-through.
+pub var sidebar_opacity: f32 = 0.55;
 
 pub fn sidebarLayout(cx: anytype) SidebarLayout {
     if (sidebar_layout_override) |l| return l;
@@ -952,7 +955,12 @@ fn liquidSidebar(theme: *const Theme, sidebar_now: f32, window: *Window, cx: any
     // Regular (translucent) glass in both recipes: Apple's `.clear` is the permanently
     // transparent variant for media, and over the sidebar material it reads as plain blur.
     const style: zpui.LiquidGlassStyle = .regular;
+    const backing: ?zpui.Div = if (mode == .glass and sidebar_opacity > 0)
+        div().absolute().inset0().rounded(px(g.r)).bg(tint.alpha(@min(sidebar_opacity, 1)))
+    else
+        null;
     const pane = div().absolute().left(px(g.x)).top(px(g.y)).w(px(glass_w)).h(px(g.h))
+        .child(backing)
         .child(if (mode == .vev) zpui.sidebarMaterial("sidebar-material", .{ .corner_radius = if (lay == .floating) g.r else 0 }, div().sizeFull()) else null)
         .child(zpui.liquidGlass("sidebar-glass", .{ .style = style, .shape = .{ .rounded = g.r }, .tint = theme.glassTint() }, div().sizeFull()));
     column = column.child(pane);
