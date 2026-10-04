@@ -27,6 +27,8 @@ pub const events = @import("events.zig");
 pub const cf = @import("cf.zig");
 pub const appkit = ak;
 pub const objc_runtime = objc;
+/// [glass-lab] Liquid Glass diagnostics (accessibility, layer-tree dump, reference views).
+pub const glass_debug = @import("glass_debug.zig");
 
 const log = std.log.scoped(.mac_platform);
 

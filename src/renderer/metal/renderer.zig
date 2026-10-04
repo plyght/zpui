@@ -226,6 +226,12 @@ pub const MetalRenderer = struct {
     /// [liquid-glass] The top plane: a third transparent layer above floating native
     /// glass (`createTopLayer` / `drawTop`).
     top_layer: ?id = null,
+    /// [glass-lab] Diagnostics: copy each window plane's next drawable to the CPU
+    /// (`armLayerCapture` / `takeLayerCapture`), to separate what zpui drew from
+    /// what AppKit composited on top (native glass).
+    layer_capture_armed: bool = false,
+    drawing_plane: Plane = .main,
+    layer_captures: [3]?LayerCapture = .{ null, null, null },
     /// Offscreen mode: the render target (private storage).
     offscreen_target: ?id = null,
     /// Shared buffer offscreen targets are blitted into by `readPixels`.
@@ -253,6 +259,60 @@ pub const MetalRenderer = struct {
     warned_unsupported: std.EnumSet(enum { surfaces, subpixel, mps }) = .empty,
 
     const atlas_kind_count = @typeInfo(AtlasTextureKind).@"enum".field_names.len;
+
+    /// [glass-lab] The window planes (main surface, overlay plane, top plane).
+    pub const Plane = enum(u2) { main, overlay, top };
+    /// [glass-lab] A plane's drawable as presented: premultiplied RGBA8, rows top-down.
+    pub const LayerCapture = struct { width: u32, height: u32, rgba: []u8 };
+
+    /// [glass-lab] Capture every plane drawn from now on (until `disarmLayerCapture`);
+    /// drops older captures.
+    pub fn armLayerCapture(self: *MetalRenderer) void {
+        for (&self.layer_captures) |*c| if (c.*) |cap| {
+            self.gpa.free(cap.rgba);
+            c.* = null;
+        };
+        self.layer_capture_armed = true;
+    }
+
+    pub fn disarmLayerCapture(self: *MetalRenderer) void {
+        self.layer_capture_armed = false;
+    }
+
+    /// [glass-lab] The latest capture of `plane` (caller owns `rgba`, gpa), or null.
+    pub fn takeLayerCapture(self: *MetalRenderer, plane: Plane) ?LayerCapture {
+        const c = self.layer_captures[@backingInt(plane)] orelse return null;
+        self.layer_captures[@backingInt(plane)] = null;
+        return c;
+    }
+
+    /// [glass-lab] Encode a copy of `texture` into a new shared buffer (returned, +1).
+    fn encodeLayerCapture(self: *MetalRenderer, command_buffer: id, texture: id, viewport: DeviceSize) ?id {
+        const width: usize = @intCast(viewport.width);
+        const height: usize = @intCast(viewport.height);
+        const buf = mtl.Device.newBuffer(self.device, width * height * 4, mtl.ResourceOptions.storage_mode_shared) orelse return null;
+        const blit = mtl.CommandBuffer.blitCommandEncoder(command_buffer) orelse {
+            buf.release();
+            return null;
+        };
+        mtl.BlitEncoder.copyTextureToBuffer(blit, texture, .{ .width = width, .height = height }, buf, width * 4);
+        mtl.BlitEncoder.endEncoding(blit);
+        return buf;
+    }
+
+    fn finishLayerCapture(self: *MetalRenderer, command_buffer: id, buf: id, viewport: DeviceSize) void {
+        defer buf.release();
+        mtl.CommandBuffer.waitUntilCompleted(command_buffer);
+        if (mtl.CommandBuffer.status(command_buffer) != .completed) return;
+        const width: usize = @intCast(viewport.width);
+        const height: usize = @intCast(viewport.height);
+        const len = width * height * 4;
+        const out = self.gpa.alloc(u8, len) catch return;
+        bgraToRgba(out, mtl.Buffer.contents(buf)[0..len]);
+        const slot = &self.layer_captures[@backingInt(self.drawing_plane)];
+        if (slot.*) |old| self.gpa.free(old.rgba);
+        slot.* = .{ .width = @intCast(width), .height = @intCast(height), .rgba = out };
+    }
 
     pub fn init(gpa: Allocator, options: renderer.Options) !MetalRenderer {
         const pool = objc.AutoreleasePool.push();
@@ -331,6 +391,7 @@ pub const MetalRenderer = struct {
         if (self.metal_layer) |l| l.release();
         if (self.overlay_layer) |l| l.release();
         if (self.top_layer) |l| l.release();
+        for (self.layer_captures) |c| if (c) |cap| self.gpa.free(cap.rgba);
         self.pipelines.deinit();
         self.unit_vertices.release();
         self.library.release();
@@ -378,11 +439,15 @@ pub const MetalRenderer = struct {
 
     /// [liquid-glass] Render `scene` into the top layer (like `drawOverlay`).
     pub fn drawTop(self: *MetalRenderer, scene: *const Scene, viewport: DeviceSize, scale_factor: f32) !void {
+        self.drawing_plane = .top;
+        defer self.drawing_plane = .main;
         return self.drawTransparentLayer(self.top_layer orelse return error.NoTopLayer, scene, viewport, scale_factor);
     }
 
     /// Render `scene` into the overlay layer, cleared to transparent, and present it.
     pub fn drawOverlay(self: *MetalRenderer, scene: *const Scene, viewport: DeviceSize, scale_factor: f32) !void {
+        self.drawing_plane = .overlay;
+        defer self.drawing_plane = .main;
         return self.drawTransparentLayer(self.overlay_layer orelse return error.NoOverlayLayer, scene, viewport, scale_factor);
     }
 
@@ -487,6 +552,8 @@ pub const MetalRenderer = struct {
             };
 
             if (drawable) |d| {
+                // [glass-lab] Diagnostics readback of what this plane presents.
+                const capture: ?id = if (self.layer_capture_armed) self.encodeLayerCapture(command_buffer, target, viewport) else null;
                 if (self.presents_with_transaction) {
                     mtl.CommandBuffer.commit(command_buffer);
                     mtl.CommandBuffer.waitUntilScheduled(command_buffer);
@@ -495,6 +562,7 @@ pub const MetalRenderer = struct {
                     mtl.CommandBuffer.presentDrawable(command_buffer, d);
                     mtl.CommandBuffer.commit(command_buffer);
                 }
+                if (capture) |buf| self.finishLayerCapture(command_buffer, buf, viewport);
             } else {
                 mtl.CommandBuffer.commit(command_buffer);
             }
@@ -848,7 +916,7 @@ pub const MetalRenderer = struct {
     /// Create/replace GPU textures for changed atlas slots and copy pending uploads.
     fn syncAtlas(self: *MetalRenderer) !void {
         for (std.enums.values(AtlasTextureKind)) |kind| {
-            const list = &self.atlas_textures[@intFromEnum(kind)];
+            const list = &self.atlas_textures[@backingInt(kind)];
             const slots = self.sprite_atlas.textureSlots(kind);
             while (list.items.len > slots) if (list.pop().?) |t| t.texture.release();
             if (list.items.len < slots) {
@@ -892,7 +960,7 @@ pub const MetalRenderer = struct {
     }
 
     fn atlasTexture(self: *const MetalRenderer, texture_id: AtlasTextureId) ?AtlasTexture {
-        const list = self.atlas_textures[@intFromEnum(texture_id.kind)].items;
+        const list = self.atlas_textures[@backingInt(texture_id.kind)].items;
         if (texture_id.index >= list.len) return null;
         return list[texture_id.index];
     }

@@ -24,6 +24,8 @@
 //!   --smoke-frames <n>      CI smoke test (also ZERON_SMOKE_FRAMES): render n frames,
 //!                           capture the window to zig-out/zeron-<os>[-light].png and
 //!                           exit 0, or exit 1 after a FAIL: line (see smoke.zig)
+//!   ZERON_GLASS_LAB=1       open the Liquid Glass lab instead (glass_lab.zig; with
+//!                           --smoke-frames: diagnostics + captures to zig-out/glass-lab)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -39,6 +41,7 @@ const fixtures_mod = @import("ui/shell/fixtures.zig");
 const shell_mod = @import("ui/shell/shell.zig");
 const settings_ui = @import("ui/settings/root.zig");
 const smoke = @import("smoke.zig");
+const glass_lab = @import("glass_lab.zig"); // [glass-lab]
 const lifecycle = @import("lifecycle/root.zig"); // [lifecycle] menus, quit/reopen, deep links, updates, logs
 const engine_bin = @import("engine_bin.zig");
 
@@ -59,6 +62,8 @@ const Launch = struct {
     fixtures_dir: ?[]const u8 = null,
     max_frames: ?u64 = null,
     smoke_frames: ?u64 = null, // --smoke-frames / ZERON_SMOKE_FRAMES (smoke.zig)
+    /// [glass-lab] ZERON_GLASS_LAB=1: open the Liquid Glass lab instead of the app.
+    glass_lab: bool = false,
     size: zpui.Size(f32) = .{ .width = 1320, .height = 880 },
     appearance: ?zt.Appearance = null,
     server_decorations: bool = false,
@@ -90,6 +95,16 @@ fn registerFonts(app: *App) void {
 
 fn onLaunch(l: *Launch, app: *App) void {
     registerFonts(app);
+    if (l.glass_lab) { // [glass-lab] diagnostics window (glass_lab.zig)
+        const bg = l.environ.get("ZERON_GLASS_LAB_BG") orelse "opaque";
+        glass_lab.open(l.gpa, l.io, app, .{
+            .dark = (l.appearance orelse .light) == .dark,
+            .background = std.meta.stringToEnum(glass_lab.Background, bg) orelse .@"opaque",
+            .frames = l.smoke_frames,
+            .out_dir = l.environ.get("ZERON_GLASS_LAB_OUT") orelse "zig-out/glass-lab",
+        });
+        return;
+    }
     actions.registerAll(app) catch |err| log.err("actions: {t}", .{err});
 
     // Settings (skipped in fixture mode so screenshots are reproducible).
@@ -141,6 +156,12 @@ fn onLaunch(l: *Launch, app: *App) void {
         settings_ui.store.force_liquid = true;
         const native = zpui.platformSupportsLiquidGlass(app);
         std.debug.print("zeron: liquid glass forced: {s}\n", .{if (native) "native (NSGlassEffectView)" else "unsupported, frosted fallback"});
+        // With Reduce Transparency on, AppKit draws glass (and the window's material) solid:
+        // expected, not a zpui bug. Logged so screenshots can be read correctly.
+        if (is_mac) if (native) {
+            const a = zpui.mac_platform.glass_debug.accessibility();
+            std.debug.print("zeron: accessibility reduceTransparency={} increaseContrast={}\n", .{ a.reduce_transparency, a.increase_contrast });
+        };
     };
     // Settings: theme from ui-settings.json (or an in-memory store in fixture mode).
     settings_ui.store.boot(app, l.io, if (l.fixtures != null) appearance else l.appearance);
@@ -177,7 +198,7 @@ fn onLaunch(l: *Launch, app: *App) void {
     if (l.open_url) |url| zpui.lifecycle.openUrls(app, &.{url});
     // --- smoke test (CI): render N frames, capture, exit (smoke.zig) ---
     if (l.smoke_frames) |n|
-        smoke.start(l.gpa, l.io, window, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT"), .browser_url = l.environ.get("ZERON_SMOKE_BROWSER_URL") });
+        smoke.start(l.gpa, l.io, window, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT"), .browser_url = l.environ.get("ZERON_SMOKE_BROWSER_URL"), .diag = l.environ.get("ZERON_SMOKE_DIAG") != null });
     if (l.max_frames) |n| {
         const Quit = struct {
             left: u64,
@@ -291,6 +312,7 @@ pub fn main(init: std.process.Init) !void {
     if (launch.smoke_frames == null) if (init.environ_map.get("ZERON_SMOKE_FRAMES")) |v| {
         launch.smoke_frames = try std.fmt.parseInt(u64, v, 10);
     };
+    if (init.environ_map.get("ZERON_GLASS_LAB")) |v| launch.glass_lab = v.len > 0 and !std.mem.eql(u8, v, "0");
     // Client-side decorations need a compositor (gpui falls back to server
     // decorations without one). With no desktop session at all (bare Xvfb,
     // CI) keep the square, compositor-framed window; `--csd` forces CSD.
@@ -321,7 +343,10 @@ pub fn main(init: std.process.Init) !void {
         gpa.destroy(f);
     }
     if (launch.data_dir) |d| gpa.free(d);
-    if (launch.smoke_frames != null) {
+    if (launch.glass_lab) {
+        const code = glass_lab.exitCode(); // [glass-lab]
+        if (code != 0) std.process.exit(code);
+    } else if (launch.smoke_frames != null) {
         const code = smoke.exitCode(); // smoke test result (smoke.zig)
         if (code != 0) std.process.exit(code);
     }
@@ -330,6 +355,7 @@ pub fn main(init: std.process.Init) !void {
 test {
     _ = @import("lifecycle/root.zig");
     _ = @import("smoke.zig");
+    _ = @import("glass_lab.zig");
     _ = @import("engine_bin.zig");
     _ = @import("ui/shell/shell_test.zig");
     _ = @import("ui/settings/root.zig");

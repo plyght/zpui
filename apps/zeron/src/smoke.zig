@@ -33,6 +33,11 @@ pub const Options = struct {
     timeout_s: i64 = 90,
     /// Open a Browser tab on this URL before capturing (ZERON_SMOKE_BROWSER_URL).
     browser_url: ?[]const u8 = null,
+    /// [glass-lab] ZERON_SMOKE_DIAG=1 (macOS): also print the glass diagnostics and write
+    /// `<out>-metal-{main,overlay,top}.png` (what zpui's Metal planes presented),
+    /// `<out>-onscreen.png` (the display in the window's rect) and
+    /// `<out>-screencapture.png` (`screencapture -x`) next to the window capture.
+    diag: bool = false,
 };
 
 const shell_mod = @import("ui/shell/shell.zig");
@@ -53,8 +58,7 @@ var state: ?State = null;
 pub fn start(gpa: std.mem.Allocator, io: std.Io, win: *Window, opts: Options) void {
     state = .{ .gpa = gpa, .io = io, .opts = opts };
     std.debug.print("zeron smoke: rendering {d} frames, then capturing (watchdog {d}s)\n", .{ opts.frames, opts.timeout_s });
-    if (std.Thread.spawn(.{}, watchdog, .{ io, opts.timeout_s, opts.frames })) |t| t.detach() else |err|
-        std.debug.print("WARN: smoke watchdog thread: {t}\n", .{err});
+    if (std.Thread.spawn(.{}, watchdog, .{ io, opts.timeout_s, opts.frames })) |t| t.detach() else |err| std.debug.print("WARN: smoke watchdog thread: {t}\n", .{err});
     win.onNextFrame(Tick{ .left = opts.frames }, Tick.tick);
 }
 
@@ -72,11 +76,23 @@ var frames_seen: std.atomic.Value(u64) = .init(0);
 
 const Tick = struct {
     left: u64,
+    /// [glass-lab] Frames waited for the Metal readback (diag); 0 = not armed yet.
+    waited: u32 = 0,
     fn tick(self: *const Tick, win: *Window, app: *App) void {
         _ = frames_seen.fetchAdd(1, .monotonic);
         if (self.left > 0) return win.onNextFrame(Tick{ .left = self.left - 1 }, tick);
         const s = &state.?;
         if (s.opts.browser_url) |url| return openBrowser(s, win, app, url);
+        if (builtin.os.tag == .macos and s.opts.diag) {
+            // Arm a readback of the next presented frame's planes, then wait for it.
+            const mw = zpui.mac_platform.MacWindow.fromWindow(win.platform_window);
+            if (self.waited == 0) mw.renderer.armLayerCapture();
+            if (mw.renderer.layer_captures[0] == null and self.waited < 20) {
+                win.refresh();
+                return win.onNextFrame(Tick{ .left = 0, .waited = self.waited + 1 }, tick);
+            }
+            mw.renderer.disarmLayerCapture();
+        }
         finish(s, win, app);
     }
 
@@ -170,18 +186,65 @@ fn capture(s: *State, win: *Window) !void {
     try std.Io.Dir.cwd().writeFile(s.io, .{ .sub_path = path, .data = encoded });
     std.debug.print("zeron smoke: wrote {s} ({d}x{d})\n", .{ path, img.width, img.height });
 
+    if (builtin.os.tag == .macos and s.opts.diag) diagnostics(s, win, path);
+
     const st = stats(img.pixels);
     std.debug.print("zeron smoke: {d:.2}% of pixels differ from the corner color, {d} distinct colors (quantized)\n", .{ st.differing * 100, st.distinct });
     if (st.differing < 0.01 or st.distinct < 8) return error.BlankFrame;
 }
 
-const Image = struct { width: u32, height: u32, pixels: []u8 };
+/// [glass-lab] ZERON_SMOKE_DIAG: glass diagnostics + the extra captures (see `Options.diag`).
+fn diagnostics(s: *State, win: *Window, window_png: []const u8) void {
+    if (builtin.os.tag != .macos) return;
+    const gpa = s.gpa;
+    const mac = zpui.mac_platform;
+    const cf = mac.cf;
+    const mw = mac.MacWindow.fromWindow(win.platform_window);
+    mac.glass_debug.dump(mw, window_png);
+    const stem = if (std.mem.endsWith(u8, window_png, ".png")) window_png[0 .. window_png.len - 4] else window_png;
+    var buf: [256]u8 = undefined;
+    inline for (.{ .{ .main, "metal-main" }, .{ .overlay, "metal-overlay" }, .{ .top, "metal-top" } }) |pl| {
+        if (mw.renderer.takeLayerCapture(pl[0])) |cap| {
+            defer gpa.free(cap.rgba);
+            unpremultiply(cap.rgba);
+            if (std.fmt.bufPrint(&buf, "{s}-{s}.png", .{ stem, pl[1] })) |p| writePngFile(s, p, cap.width, cap.height, cap.rgba) else |_| {}
+        } else std.debug.print("zeron smoke: no {s} readback (plane not drawn while armed)\n", .{pl[1]});
+    }
+    if (captureMacImage(gpa, mac.glass_debug.windowRectCG(mw), cf.kCGWindowListOptionOnScreenOnly, cf.kCGNullWindowID, cf.kCGWindowImageBestResolution)) |img| {
+        defer gpa.free(img.pixels);
+        if (std.fmt.bufPrint(&buf, "{s}-onscreen.png", .{stem})) |p| writePngFile(s, p, img.width, img.height, img.pixels) else |_| {}
+    } else |err| std.debug.print("zeron smoke: on-screen capture: {t}\n", .{err});
+    const path = std.fmt.bufPrint(&buf, "{s}-screencapture.png", .{stem}) catch return;
+    const res = std.process.run(gpa, s.io, .{
+        .argv = &.{ "screencapture", "-x", "-t", "png", path },
+        .stdout_limit = .limited(1 << 20),
+        .stderr_limit = .limited(1 << 20),
+    }) catch |err| {
+        std.debug.print("zeron smoke: screencapture: {t}\n", .{err});
+        return;
+    };
+    defer gpa.free(res.stdout);
+    defer gpa.free(res.stderr);
+    if (res.term.success()) std.debug.print("zeron smoke: wrote {s} (screencapture -x)\n", .{path}) else std.debug.print("zeron smoke: screencapture failed: {s}\n", .{res.stderr});
+}
 
-const Stats = struct { differing: f64, distinct: usize };
+fn writePngFile(s: *State, path: []const u8, width: u32, height: u32, rgba: []const u8) void {
+    const encoded = encodePng(s.gpa, width, height, rgba) catch return;
+    defer s.gpa.free(encoded);
+    std.Io.Dir.cwd().writeFile(s.io, .{ .sub_path = path, .data = encoded }) catch |err| {
+        std.debug.print("zeron smoke: write {s}: {t}\n", .{ path, err });
+        return;
+    };
+    std.debug.print("zeron smoke: wrote {s} ({d}x{d})\n", .{ path, width, height });
+}
+
+pub const Image = struct { width: u32, height: u32, pixels: []u8 };
+
+pub const Stats = struct { differing: f64, distinct: usize };
 
 /// Fraction of pixels that differ from pixel 0 (by > 8 in any channel) and the
 /// number of distinct colors after quantizing to 4 bits per channel.
-fn stats(rgba: []const u8) Stats {
+pub fn stats(rgba: []const u8) Stats {
     const n = rgba.len / 4;
     if (n == 0) return .{ .differing = 0, .distinct = 0 };
     var seen: std.StaticBitSet(1 << 16) = .empty;
@@ -204,8 +267,17 @@ fn captureMac(gpa: std.mem.Allocator, pw: zpui.platform.Window) !Image {
     const mac = zpui.mac_platform;
     const cf = mac.cf;
     const number = mac.MacWindow.fromWindow(pw).windowNumber();
+    return captureMacImage(gpa, cf.CGRectNull, cf.kCGWindowListOptionIncludingWindow, number, cf.kCGWindowImageBoundsIgnoreFraming | cf.kCGWindowImageBestResolution);
+}
+
+/// `CGWindowListCreateImage(rect, list_option, window_number, image_option)` as straight
+/// RGBA8 (the window alone: `CGRectNull` + IncludingWindow; what the display shows in a
+/// rect: the rect + OnScreenOnly + window 0).
+pub fn captureMacImage(gpa: std.mem.Allocator, rect: zpui.mac_platform.cf.CGRect, list_option: u32, window_number: u32, image_option: u32) !Image {
+    if (builtin.os.tag != .macos) unreachable;
+    const cf = zpui.mac_platform.cf;
     const create_image = cf.cgWindowListCreateImage() orelse return error.CGWindowListCreateImageUnavailable;
-    const image = create_image(cf.CGRectNull, cf.kCGWindowListOptionIncludingWindow, number, cf.kCGWindowImageBoundsIgnoreFraming | cf.kCGWindowImageBestResolution) orelse
+    const image = create_image(rect, list_option, window_number, image_option) orelse
         return error.CGWindowListCreateImageReturnedNull; // no Screen Recording permission?
     defer cf.CGImageRelease(image);
     const w = cf.CGImageGetWidth(image);
@@ -225,7 +297,7 @@ fn captureMac(gpa: std.mem.Allocator, pw: zpui.platform.Window) !Image {
 
 /// X11 only: crops the window's rectangle out of the root window with
 /// ImageMagick's `import` (PPM on stdout, parsed here).
-fn captureX11(gpa: std.mem.Allocator, io: std.Io, pw: zpui.platform.Window) !Image {
+pub fn captureX11(gpa: std.mem.Allocator, io: std.Io, pw: zpui.platform.Window) !Image {
     const b = pw.bounds();
     const scale = pw.scaleFactor();
     const content = pw.contentSize();
@@ -283,7 +355,7 @@ fn parsePpm(gpa: std.mem.Allocator, bytes: []const u8) !Image {
     return .{ .width = w, .height = h, .pixels = pixels };
 }
 
-fn unpremultiply(rgba: []u8) void {
+pub fn unpremultiply(rgba: []u8) void {
     var i: usize = 0;
     while (i + 4 <= rgba.len) : (i += 4) {
         const a: u32 = rgba[i + 3];
@@ -293,7 +365,7 @@ fn unpremultiply(rgba: []u8) void {
 }
 
 // Minimal RGBA8 PNG encoder (same as examples/png.zig, which this module can't import).
-fn encodePng(gpa: std.mem.Allocator, width: u32, height: u32, pixels: []const u8) ![]u8 {
+pub fn encodePng(gpa: std.mem.Allocator, width: u32, height: u32, pixels: []const u8) ![]u8 {
     const flate = std.compress.flate;
     const stride = @as(usize, width) * 4;
     var raw = try gpa.alloc(u8, (stride + 1) * height);

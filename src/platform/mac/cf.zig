@@ -138,11 +138,15 @@ pub const kCGImageAlphaOnly: u32 = 7;
 pub const kCGBitmapByteOrder32Big: u32 = 4 << 12;
 pub const kCGTextFill: i32 = 0;
 
+pub const kCGWindowListOptionOnScreenOnly: u32 = 1 << 0;
 pub const kCGWindowListOptionIncludingWindow: u32 = 1 << 3;
+pub const kCGNullWindowID: CGWindowID = 0;
+pub const kCGWindowImageDefault: u32 = 0;
 pub const kCGWindowImageBoundsIgnoreFraming: u32 = 1 << 0;
 pub const kCGWindowImageBestResolution: u32 = 1 << 3;
 
 pub extern "c" const CGRectNull: CGRect;
+pub extern "c" const CGRectInfinite: CGRect;
 
 pub extern "c" fn CGColorSpaceCreateDeviceRGB() ?CGColorSpaceRef;
 pub extern "c" fn CGColorSpaceCreateDeviceGray() ?CGColorSpaceRef;

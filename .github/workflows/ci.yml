@@ -151,6 +151,8 @@ jobs:
   # Silicon runners expose no Metal device): build, the Liquid Glass unit tests, and a
   # smoke run with the setting forced that must report native glass. The window
   # capture (zig-out/zeron-macos26-liquid.png) is uploaded for a visual check.
+  # [glass-lab] Plus evidence for flat-looking glass: environment diagnostics, the
+  # zeron smoke with ZERON_SMOKE_DIAG=1 and the glass lab; all in artifact `glass-lab`.
   zeron-liquid-glass-macos26:
     runs-on: macos-26-intel
     steps:
@@ -164,21 +166,64 @@ jobs:
         run: zig build zpui-test -Dtest-filter=liquid -Dtest-filter=overlayPlane -Dtest-filter="native views" --summary all
       - name: Build zeron (ReleaseSafe)
         run: zig build zeron -Doptimize=ReleaseSafe --summary all
+      # Environment evidence for "why does the glass look flat": display accommodations
+      # (Reduce Transparency / Increase Contrast make AppKit draw glass solid), the GPU /
+      # display WindowServer composites with, and the desktop behind the window.
+      - name: Glass environment diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p zig-out/glass-lab
+          {
+            echo "== sw_vers"; sw_vers
+            for k in reduceTransparency increaseContrast differentiateWithoutColor reduceMotion; do
+              printf 'defaults read com.apple.universalaccess %s: ' "$k"
+              defaults read com.apple.universalaccess "$k" 2>&1 || true
+            done
+            echo "== defaults read com.apple.universalaccess"; defaults read com.apple.universalaccess 2>&1 || true
+            printf 'AppleInterfaceStyle: '; defaults read -g AppleInterfaceStyle 2>&1 || true
+            printf 'AppleReduceDesktopTinting: '; defaults read -g AppleReduceDesktopTinting 2>&1 || true
+            echo "== system_profiler SPDisplaysDataType"; system_profiler SPDisplaysDataType 2>&1 || true
+            echo "== desktop picture"; osascript -e 'tell application "System Events" to get picture of every desktop' 2>&1 || true
+          } | tee zig-out/glass-lab/environment.log
       - name: Smoke test zeron with native Liquid Glass (dark + light)
         timeout-minutes: 8
         shell: bash
         run: |
           for mode in dark light; do
-            ZERON_LIQUID_GLASS=1 ZERON_SMOKE_OUT=zig-out/zeron-macos26-liquid-$mode.png \
-              ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --$mode 2>&1 | tee "$RUNNER_TEMP/liquid-$mode.log"
-            grep -q "liquid glass forced: native (NSGlassEffectView)" "$RUNNER_TEMP/liquid-$mode.log" \
+            ZERON_LIQUID_GLASS=1 ZERON_SMOKE_DIAG=1 ZERON_SMOKE_OUT=zig-out/zeron-macos26-liquid-$mode.png \
+              ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --$mode 2>&1 | tee "zig-out/glass-lab/zeron-liquid-$mode.log"
+            grep -q "liquid glass forced: native (NSGlassEffectView)" "zig-out/glass-lab/zeron-liquid-$mode.log" \
               || { echo "FAIL: macOS 26 did not report native Liquid Glass"; exit 1; }
           done
+      # [glass-lab] The glass lab (apps/zeron/src/glass_lab.zig): glass panels over striped,
+      # moving content plus AppKit reference views, captured four ways (window alone,
+      # display rect, whole display, screencapture -x) next to a readback of zpui's Metal
+      # planes, with per-panel numbers and the layer-tree dump in the logs.
+      - name: Glass lab (opaque light, opaque dark, blurred light)
+        if: always()
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          for v in opaque:light opaque:dark blurred:light; do
+            bg=${v%%:*}; mode=${v##*:}
+            ZERON_GLASS_LAB=1 ZERON_GLASS_LAB_BG=$bg ZERON_GLASS_LAB_OUT=zig-out/glass-lab \
+              ./zig-out/bin/zeron --smoke-frames 90 --$mode 2>&1 | tee "zig-out/glass-lab/lab-$bg-$mode.log" || true
+          done
+          echo "== per-panel numbers"; grep -h "glass lab: " zig-out/glass-lab/lab-*.log | grep -E "panel|sd|p-|ctl|group" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: zeron-macos26-liquid-glass
           path: zig-out/zeron-macos26*.png
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: glass-lab
+          path: |
+            zig-out/glass-lab/
+            zig-out/zeron-macos26*.png
           if-no-files-found: warn
 
   # Same smoke test on Linux: Xvfb (X11, server decorations) + Vulkan lavapipe.

@@ -1386,11 +1386,21 @@ fn blurredViewUpdateLayer(this: id, _: SEL) callconv(.c) void {
     var sup = superOf(this, "NSVisualEffectView");
     objc.msgSendSuper(void, &sup, objc.sel("updateLayer"), .{});
     const layer = this.msg(?id, "layer", .{}) orelse return;
+    // Reduce Transparency: AppKit swaps the backdrop for a solid material fill. Keep it,
+    // as AppKit's own materials (and native Liquid Glass) do; stripping its backgrounds
+    // here would leave the window black instead of the accessible solid surface.
+    if (reduceTransparency()) return;
     removeLayerBackground(layer);
     // An opaque dark base behind the backdrop keeps Mission Control snapshots
     // (which omit backdrop layers) reading as a solid surface.
     const black = ak.class("NSColor").msg(id, "blackColor", .{});
     layer.msg(void, "setBackgroundColor:", .{black.msg(?*anyopaque, "CGColor", .{})});
+}
+
+/// `-[NSWorkspace accessibilityDisplayShouldReduceTransparency]`.
+pub fn reduceTransparency() bool {
+    const ws = ak.class("NSWorkspace").msg(id, "sharedWorkspace", .{});
+    return ws.msg(BOOL, "accessibilityDisplayShouldReduceTransparency", .{}) == YES;
 }
 
 fn removeLayerBackground(layer: id) void {

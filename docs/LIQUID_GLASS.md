@@ -88,7 +88,50 @@ top plane               transparent CAMetalLayer: foreground of floating glass
 * CI `zeron-app` (macos-15-intel) runs the app with `ZERON_LIQUID_GLASS=1` and asserts
   the frosted fallback.
 * CI `zeron-liquid-glass-macos26` (macos-26-intel) runs the unit tests and a native
-  glass smoke run, and uploads `zeron-macos26-liquid-{dark,light}.png`.
+  glass smoke run, and uploads `zeron-macos26-liquid-{dark,light}.png`. It also runs
+  the glass lab and the smoke run with `ZERON_SMOKE_DIAG=1`, and uploads the captures,
+  the Metal readbacks and the logs as `glass-lab`.
+
+## Why glass can look flat, and the glass lab
+
+Liquid Glass shows what is *behind* it: it blurs, lenses and highlights the content
+beneath its edges. Over a uniform surface it correctly renders as a near-uniform panel
+(near-white in light mode, near-black in dark) with only a faint rim. zeron's chrome
+mostly sits over its own window tint (`Theme.glass()`, high alpha in light mode) and a
+plain transcript card, so screenshots of an idle zeron show little lensing even when
+everything works. Other causes, and how to tell them apart:
+
+| Cause | What you see | Evidence |
+|---|---|---|
+| Nothing varied behind the glass | flat panel, rim only | glass lab panels over stripes are *not* flat |
+| Reduce Transparency / Increase Contrast | solid panels everywhere, also AppKit's own | `reduceTransparency=true` in the logs; the AppKit reference views are solid too |
+| The capture path | window capture flat, display capture glassy | `-window.png` vs `-onscreen.png` / `-screencapture.png` |
+| WindowServer without backdrop effects (VM GPU) | no blur even in the in-window `NSVisualEffectView` reference | `metal device:` line; reference views flat |
+| zpui layering | zpui glass flat, the direct `NSGlassEffectView` reference glassy | layer-tree dump: opaque / masked / rasterized layer above the Metal surface |
+
+Reduce Transparency is honoured the way AppKit does it: AppKit draws the glass (and
+the window's behind-window material) solid, and zpui does not override that.
+`ZPUIBlurredView` leaves AppKit's solid fill alone while the setting is on, and zeron
+logs `zeron: accessibility reduceTransparency=...` when Liquid Glass is forced.
+
+**Glass lab** (`ZERON_GLASS_LAB=1`, or `zig build glass-lab`): a window full of
+gradient, diagonal stripes, saturated blocks, large text and a band that moves every
+frame, with native glass over it (regular / clear, rounded / capsule, tinted, a merged
+group). On macOS it adds three reference views that bypass zpui's hosting: an
+`NSGlassEffectView` added straight to the content view, a within-window
+`NSVisualEffectView`, and an AppKit-only scene (CALayer stripes under glass).
+
+```sh
+ZERON_GLASS_LAB=1 ZERON_GLASS_LAB_BG=opaque ./zig-out/bin/zeron --smoke-frames 90 --light
+```
+
+With `--smoke-frames N` it prints the diagnostics (accessibility flags, Metal device,
+window and layer flags, each glass view's properties and private layer tree), writes
+`zig-out/glass-lab/<bg>-<appearance>-{window,onscreen,display,screencapture}.png` and a
+readback of zpui's Metal planes (`-metal-{main,overlay,top}.png`), and prints per-panel
+numbers: the luminance spread inside each glass and its mean difference from the Metal
+readback. `ZERON_SMOKE_DIAG=1` adds the same diagnostics and captures to the normal
+zeron smoke test. CI uploads all of it as the `glass-lab` artifact.
 
 ## Known limitations
 
