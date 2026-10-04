@@ -1409,3 +1409,16 @@ test "local list, read, write with hash guard, move and delete" {
     defer found.deinit();
     try testing.expectEqual(@as(usize, 1), found.value.?.len);
 }
+
+test "readLocal reads a regular file under a real tmp dir" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "a.txt", .data = "hello\n" });
+    var buf: [4096]u8 = undefined;
+    const n = try tmp.dir.realPath(io, &buf);
+    var r = readLocal(testing.allocator, io, buf[0..n], "a.txt");
+    defer r.deinit();
+    if (r.text == null) std.debug.print("readLocal root={s} result={any}\n", .{ buf[0..n], r.base });
+    try testing.expectEqualStrings("hello\n", r.text orelse "");
+}

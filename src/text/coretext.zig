@@ -334,9 +334,14 @@ pub const CoreTextSystem = struct {
         const y0 = @floor(-(r.origin.y + r.size.height) * s);
         const x1 = @ceil((r.origin.x + r.size.width) * s);
         const y1 = @ceil(-r.origin.y * s);
+        // zui widens the bitmap by one pixel per shifted axis inside `rasterize_glyph` and returns
+        // the new size; our contract returns only bytes, so the extra pixel belongs in the bounds
+        // (the atlas tile is sized from them).
+        const extra_x: DevicePixels = if (params.subpixel_variant_x > 0) 1 else 0;
+        const extra_y: DevicePixels = if (params.subpixel_variant_y > 0) 1 else 0;
         return .{
             .origin = .{ .x = @as(DevicePixels, @intFromFloat(x0)) - 1, .y = @as(DevicePixels, @intFromFloat(y0)) - 1 },
-            .size = .{ .width = @as(DevicePixels, @intFromFloat(x1 - x0)) + 2, .height = @as(DevicePixels, @intFromFloat(y1 - y0)) + 2 },
+            .size = .{ .width = @as(DevicePixels, @intFromFloat(x1 - x0)) + 2 + extra_x, .height = @as(DevicePixels, @intFromFloat(y1 - y0)) + 2 + extra_y },
         };
     }
 
@@ -350,11 +355,10 @@ pub const CoreTextSystem = struct {
     /// zui `rasterize_glyph`. `dilation` (0..4, see `glyphDilationForColor`) enables font smoothing.
     fn rasterize(self: *CoreTextSystem, gpa: Allocator, params: types.RenderGlyphParams, bounds: geometry.Bounds(DevicePixels), dilation: u8) ![]u8 {
         if (bounds.size.width <= 0 or bounds.size.height <= 0) return error.EmptyGlyphBounds;
-        // One extra pixel when shifted by a subpixel variant, for the antialiased edge.
-        var w: usize = @intCast(bounds.size.width);
-        var h: usize = @intCast(bounds.size.height);
-        if (params.subpixel_variant_x > 0) w += 1;
-        if (params.subpixel_variant_y > 0) h += 1;
+        // `bounds` already includes the extra pixel for subpixel-shifted variants (rasterBounds),
+        // so the bitmap matches the atlas tile exactly.
+        const w: usize = @intCast(bounds.size.width);
+        const h: usize = @intCast(bounds.size.height);
 
         const bpp: usize = if (params.is_emoji) 4 else 1;
         const bytes = try gpa.alloc(u8, w * h * bpp);
@@ -854,7 +858,13 @@ test "CoreText end to end (macOS only)" {
     try std.testing.expect(bounds.size.width > 2 and bounds.size.height > 2);
     const bitmap = try v.rasterizeGlyph(ts.ptr, gpa, params, bounds);
     defer gpa.free(bitmap);
-    try std.testing.expectEqual(@as(usize, @intCast((bounds.size.width + 1) * bounds.size.height)), bitmap.len);
+    // The bitmap must match the raster bounds exactly: the atlas tile is sized from them.
+    try std.testing.expectEqual(@as(usize, @intCast(bounds.size.width * bounds.size.height)), bitmap.len);
+    // A shifted variant is one pixel wider than the unshifted glyph.
+    var p0 = params;
+    p0.subpixel_variant_x = 0;
+    const b0 = try v.glyphRasterBounds(ts.ptr, p0);
+    try std.testing.expectEqual(b0.size.width + 1, bounds.size.width);
     var coverage: u64 = 0;
     for (bitmap) |b| coverage += b;
     try std.testing.expect(coverage > 0);

@@ -230,6 +230,13 @@ fn addMetalRenderer(
     }
 
     zpui.link_libc = true;
+    // An explicit -Dtarget (e.g. x86_64 on an arm64 Mac) drops the native SDK search paths;
+    // pass `-Dmacos-sdk=$(xcrun --show-sdk-path)` to point the linker at the SDK explicitly.
+    if (b.option([]const u8, "macos-sdk", "macOS SDK path for explicit -Dtarget builds on a Mac")) |sdk| {
+        zpui.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "System/Library/Frameworks" }) });
+        zpui.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/lib" }) });
+        zpui.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{ sdk, "usr/include" }) });
+    }
     zpui.linkSystemLibrary("objc", .{});
     for ([_][]const u8{ "Foundation", "CoreGraphics", "QuartzCore", "Metal" }) |name| zpui.linkFramework(name, .{});
     // Only reached through objc_getClass("MPSImageGaussianBlur"); keep it linked.

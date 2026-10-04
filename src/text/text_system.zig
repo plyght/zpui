@@ -238,6 +238,14 @@ pub const TextSystem = struct {
             pub fn build(b: *@This()) !?atlas_mod.BuiltTile {
                 const r = try b.ts.rasterizeGlyph(b.ts.gpa, b.params);
                 b.bytes = r.bytes;
+                // A backend whose bitmap disagrees with its raster bounds would upload a sheared
+                // tile; drop the glyph loudly instead (this hid a CoreText subpixel-variant bug).
+                const bpp: usize = if (b.params.is_emoji or b.params.subpixel_rendering) 4 else 1;
+                const want = @as(usize, @intCast(r.bounds.size.width)) * @as(usize, @intCast(r.bounds.size.height)) * bpp;
+                if (r.bytes.len != want) {
+                    std.log.scoped(.text).err("glyph {d} bitmap is {d} bytes, raster bounds need {d}; skipping", .{ b.params.glyph_id, r.bytes.len, want });
+                    return null;
+                }
                 return .{ .size = r.bounds.size, .bytes = r.bytes };
             }
         };

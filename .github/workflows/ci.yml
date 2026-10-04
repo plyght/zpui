@@ -176,8 +176,8 @@ jobs:
           version: 0.17.0
       - name: Build Zeron.app (x86_64, then aarch64 + lipo → universal)
         run: |
-          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=x86_64-macos --summary all
-          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=aarch64-macos --summary all
+          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=x86_64-macos -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
+          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=aarch64-macos -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
       - name: Verify bundle
         run: |
           app=zig-out/Zeron.app
