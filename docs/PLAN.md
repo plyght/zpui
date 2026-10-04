@@ -46,7 +46,9 @@ The zeron Rust engine/daemon is unchanged; the client talks to it over its local
 7. Packaging: auto-update, Linux installer, signing/notarization. Done: `zig build zeron-app-bundle`
    (Zeron.app, universal via lipo), `zig build zeron-dist` (Linux tarball), CI real-app smoke
    (`zeron --smoke-frames N`, jobs `zeron-app`, `zeron-app-linux`, `zeron-bundle`)
-8. zui tracking: scheduled workflow diffing zui against the pinned rev (`667d0aa`) and opening port issues
+8. Upstream tracking: done — `tools/upstream/check.py` + `.github/workflows/upstream.yml` diff zui (`667d0aa`)
+   and zeron (`9e1a111`) against their pins weekly and keep one "Upstream changes to port" issue (docs/UPSTREAM.md).
+   Feature-by-feature gap list vs the Rust app: docs/PARITY.md
 
 ## Conventions
 

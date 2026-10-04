@@ -1,0 +1,3050 @@
+{
+ "version": 1,
+ "comment": "Upstream tracking map for zpui / apps/zeron (docs/UPSTREAM.md). Patterns are globs relative to the upstream repo root ('*' = within one path segment, '**' = any depth). The most specific match wins (most literal characters, then fewest wildcards); catch_all entries only apply when nothing else matches and are reported as unmapped. status: ported | partial | not-ported | n/a. zig: the zpui / apps/zeron files that port the upstream file (empty = nothing ported yet, or nothing to port).",
+ "upstreams": {
+  "zui": {
+   "url": "https://github.com/zeronsh/zui",
+   "branch": "main",
+   "pinned": "667d0aaf9531d2d1b2d0674a5e55f977df1b09f6",
+   "pinned_date": "2026-09-30",
+   "local": "/home/user/research/zui"
+  },
+  "zeron": {
+   "url": "https://github.com/zeronsh/zeron",
+   "branch": "main",
+   "pinned": "9e1a11158b0626237c814f4bd36f5948483ed797",
+   "pinned_date": "2026-10-02",
+   "local": "/home/user/zeron"
+  },
+  "gpui-component": {
+   "url": "https://github.com/zeronsh/gpui-component",
+   "branch": "main",
+   "pinned": "2f73e5c2bc03d6768cb5fcc92442c4cf4b963b70",
+   "local": "/home/user/research/gpui-component",
+   "optional": true
+  }
+ },
+ "pins": [
+  {
+   "upstream": "zeron",
+   "file": "Cargo.toml",
+   "tracks": "zui",
+   "regex": "gpui = \\{ git = \"https://github.com/zeronsh/zui\", rev = \"([0-9a-f]{7,40})\""
+  },
+  {
+   "upstream": "zeron",
+   "file": "Cargo.toml",
+   "tracks": "gpui-component",
+   "regex": "gpui-base = \\{ git = \"https://github.com/zeronsh/gpui-component\", rev = \"([0-9a-f]{7,40})\""
+  }
+ ],
+ "deps": [
+  {
+   "upstream": "zeron",
+   "lockfile": "Cargo.lock",
+   "crate": "pulldown-cmark",
+   "action": "markdown parser is a line-for-line port of pulldown-cmark 0.12.2: re-port apps/zeron/src/markdown/cmark/, re-run apps/zeron/scripts/gen_cmark_tables.py and gen_md_corpus.py + markdown_parity.rs"
+  },
+  {
+   "upstream": "zeron",
+   "lockfile": "Cargo.lock",
+   "crate": "similar",
+   "action": "apps/zeron/src/diff/similar.zig ports similar 2.7.0: re-check algorithms, re-run diff parity"
+  },
+  {
+   "upstream": "zeron",
+   "lockfile": "Cargo.lock",
+   "crate": "tree-sitter",
+   "action": "bump vendor/tree-sitter/runtime to match, re-run syntax parity"
+  },
+  {
+   "upstream": "zeron",
+   "lockfile": "Cargo.lock",
+   "crate": "tree-sitter-highlight",
+   "action": "apps/zeron/src/syntax/highlight.zig ports tree-sitter-highlight: re-check, re-run syntax parity"
+  },
+  {
+   "upstream": "zeron",
+   "lockfile": "Cargo.lock",
+   "crate": "tree-sitter-*",
+   "action": "update the grammar in vendor/tree-sitter/grammars (and its queries), re-run syntax parity"
+  },
+  {
+   "upstream": "zeron",
+   "lockfile": "Cargo.lock",
+   "crate": "mermaid-rs-renderer",
+   "action": "informational: Mermaid rendering is not ported yet"
+  }
+ ],
+ "generators": [
+  {
+   "name": "gen_styled",
+   "upstream": "zui",
+   "patterns": [
+    "crates/gpui_macros/src/styles.rs"
+   ],
+   "run": "python3 scripts/gen_styled.py --zui {zui}",
+   "outputs": [
+    "src/style/styled_generated.zig",
+    "src/style/builder.zig"
+   ]
+  },
+  {
+   "name": "shaders",
+   "upstream": "zui",
+   "patterns": [
+    "crates/gpui/src/scene.rs",
+    "crates/gpui_macos/src/shaders.metal",
+    "crates/gpui_wgpu/src/shaders.wgsl",
+    "crates/gpui_wgpu/src/shaders_subpixel.wgsl",
+    "crates/gpui_wgpu/src/blur_kernel.rs"
+   ],
+   "run": "manual: re-sync src/scene.zig GPU structs, copy shaders.metal (keep the license header) to src/renderer/metal/shaders.metal, hand-port WGSL changes to src/renderer/vulkan/shaders/*.glsl, then `zig build test` (golden image)",
+   "outputs": [
+    "src/scene.zig",
+    "src/renderer/metal/shaders.metal",
+    "src/renderer/vulkan/shaders/"
+   ]
+  },
+  {
+   "name": "gen_themes",
+   "upstream": "zeron",
+   "patterns": [
+    "crates/theme/src/builtins.rs"
+   ],
+   "run": "python3 apps/zeron/scripts/gen_themes.py {zeron} > apps/zeron/src/theme/builtins.zig",
+   "outputs": [
+    "apps/zeron/src/theme/builtins.zig"
+   ]
+  },
+  {
+   "name": "theme_parity",
+   "upstream": "zeron",
+   "patterns": [
+    "crates/theme/src/**",
+    "crates/ui/src/theme.rs",
+    "crates/ui/src/typography.rs",
+    "crates/ui/src/settings/wallpaper_colors.rs"
+   ],
+   "run": "rebuild apps/zeron/scripts/theme_parity.rs against {zeron}/target (see its header) > apps/zeron/src/theme/parity_data.zig",
+   "outputs": [
+    "apps/zeron/src/theme/parity_data.zig"
+   ]
+  },
+  {
+   "name": "gen_assets",
+   "upstream": "zeron",
+   "patterns": [
+    "crates/ui/src/icons.rs",
+    "crates/ui/assets/**",
+    "crates/ui/src/file-icons.json"
+   ],
+   "run": "copy changed crates/ui/assets/{icons,fonts,file-icons} into apps/zeron/assets/, then python3 apps/zeron/scripts/gen_assets.py {zeron} > apps/zeron/src/assets.zig",
+   "outputs": [
+    "apps/zeron/src/assets.zig",
+    "apps/zeron/assets/"
+   ]
+  },
+  {
+   "name": "gen_methods",
+   "upstream": "zeron",
+   "patterns": [
+    "crates/rpc/src/lib.rs",
+    "crates/engine/src/rpc.rs"
+   ],
+   "run": "python3 apps/zeron/scripts/gen_methods.py {zeron} > apps/zeron/src/engine/methods.zig",
+   "outputs": [
+    "apps/zeron/src/engine/methods.zig"
+   ]
+  },
+  {
+   "name": "view_parity",
+   "upstream": "zeron",
+   "patterns": [
+    "crates/proto/src/view.rs",
+    "crates/proto/src/entities.rs"
+   ],
+   "run": "rebuild apps/zeron/scripts/view_parity.rs against {zeron}/target (see its header) > apps/zeron/src/model/testdata/view_parity.json",
+   "outputs": [
+    "apps/zeron/src/model/testdata/view_parity.json"
+   ]
+  },
+  {
+   "name": "markdown_parity",
+   "upstream": "zeron",
+   "patterns": [
+    "crates/markdown/src/**"
+   ],
+   "run": "python3 apps/zeron/scripts/gen_md_corpus.py <pulldown-cmark-0.12.2> apps/zeron/src/markdown/testdata && rebuild apps/zeron/scripts/markdown_parity.rs (see its header)",
+   "outputs": [
+    "apps/zeron/src/markdown/testdata/"
+   ]
+  },
+  {
+   "name": "syntax_parity",
+   "upstream": "zeron",
+   "patterns": [
+    "crates/syntax/src/**"
+   ],
+   "run": "rebuild apps/zeron/scripts/syntax_parity.rs against {zeron}/target (see its header) > apps/zeron/src/syntax/testdata/parity.json",
+   "outputs": [
+    "apps/zeron/src/syntax/testdata/parity.json"
+   ]
+  },
+  {
+   "name": "diff_parity",
+   "upstream": "zeron",
+   "patterns": [
+    "crates/ui/src/changes.rs"
+   ],
+   "run": "python3 apps/zeron/scripts/gen_diff_corpus.py {zeron} apps/zeron/src/diff/testdata && rebuild apps/zeron/scripts/diff_parity.rs (see its header)",
+   "outputs": [
+    "apps/zeron/src/diff/testdata/"
+   ]
+  }
+ ],
+ "mappings": [
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/action.rs",
+   "zig": [
+    "src/app/action.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/app.rs",
+   "zig": [
+    "src/app/app.zig"
+   ],
+   "status": "partial",
+   "note": "no set_menus/on_open_urls/on_reopen/on_app_quit/prompt APIs on App"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/app/context.rs",
+   "zig": [
+    "src/app/context.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/app/entity_map.rs",
+   "zig": [
+    "src/app/entity.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/app/async_context.rs",
+   "zig": [
+    "src/app/executor.zig",
+    "src/app/context.zig"
+   ],
+   "status": "partial",
+   "note": "no futures; callbacks instead of async contexts"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/app/test_context.rs",
+   "zig": [
+    "src/app/test_platform.zig",
+    "src/app/app_tests.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/app/test_app.rs",
+   "zig": [
+    "src/app/test_platform.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/app/headless_app_context.rs",
+   "zig": [
+    "src/app/test_platform.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/app/visual_test_context.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/app/bench_context.rs",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/arena.rs",
+   "zig": [
+    "src/window/arena.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/asset_cache.rs",
+   "zig": [
+    "src/image/cache.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/assets.rs",
+   "zig": [
+    "src/image/image.zig",
+    "src/image/cache.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/bounds_tree.rs",
+   "zig": [
+    "src/bounds_tree.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/color.rs",
+   "zig": [
+    "src/color.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/colors.rs",
+   "zig": [
+    "src/color.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/element.rs",
+   "zig": [
+    "src/window/element.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/anchored.rs",
+   "zig": [
+    "src/elements/anchored.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/animation.rs",
+   "zig": [
+    "src/elements/animation.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/canvas.rs",
+   "zig": [
+    "src/elements/canvas.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/deferred.rs",
+   "zig": [
+    "src/elements/deferred.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/div.rs",
+   "zig": [
+    "src/elements/div.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/img.rs",
+   "zig": [
+    "src/elements/img.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/list.rs",
+   "zig": [
+    "src/elements/list.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/svg.rs",
+   "zig": [
+    "src/elements/svg.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/text.rs",
+   "zig": [
+    "src/elements/text.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/uniform_list.rs",
+   "zig": [
+    "src/elements/uniform_list.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/image_cache.rs",
+   "zig": [
+    "src/image/cache.zig",
+    "src/window/image.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/mod.rs",
+   "zig": [
+    "src/elements/mod.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/container_query.rs",
+   "zig": [],
+   "status": "not-ported",
+   "note": "used by zeron history.rs"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/elements/surface.rs",
+   "zig": [
+    "src/elements/native_view.zig"
+   ],
+   "status": "not-ported",
+   "note": "CVPixelBuffer surfaces; native_view.zig is unrelated host for native child views"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/executor.rs",
+   "zig": [
+    "src/app/executor.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/geometry.rs",
+   "zig": [
+    "src/geometry.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/gestures.rs",
+   "zig": [],
+   "status": "not-ported",
+   "note": "pinch/rotate gestures (zeron image_viewer.rs)"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/global.rs",
+   "zig": [
+    "src/app/app.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/gpui.rs",
+   "zig": [
+    "src/zpui.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/prelude.rs",
+   "zig": [
+    "src/zpui.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/input.rs",
+   "zig": [
+    "src/window/input_handler.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/inspector.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/interactive.rs",
+   "zig": [
+    "src/input.zig",
+    "src/window/events.zig",
+    "src/window/dispatch.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/key_dispatch.rs",
+   "zig": [
+    "src/app/dispatch_tree.zig",
+    "src/window/dispatch.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/keymap.rs",
+   "zig": [
+    "src/app/keymap.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/keymap/binding.rs",
+   "zig": [
+    "src/app/keymap.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/keymap/context.rs",
+   "zig": [
+    "src/app/key_context.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/path_builder.rs",
+   "zig": [
+    "src/window/paint.zig",
+    "src/scene.zig"
+   ],
+   "status": "partial",
+   "note": "paintPath exists; no PathBuilder stroke/tessellation API"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform.rs",
+   "zig": [
+    "src/platform/platform.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform/app_menu.rs",
+   "zig": [
+    "src/platform/mac/mac.zig"
+   ],
+   "status": "not-ported",
+   "note": "zpui builds a fixed app menu; no MenuItem/set_menus model"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform/keyboard.rs",
+   "zig": [
+    "src/platform/linux/keyboard.zig",
+    "src/platform/mac/events.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform/keystroke.rs",
+   "zig": [
+    "src/input.zig",
+    "src/app/keymap.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform/layer_shell.rs",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform/popup.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform/scap_screen_capture.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform/bench_dispatcher.rs",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform/test.rs",
+   "zig": [
+    "src/app/test_platform.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform/test/**",
+   "zig": [
+    "src/app/test_platform.zig",
+    "src/text/test_platform.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform/visual_test.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/platform_scheduler.rs",
+   "zig": [
+    "src/app/executor.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/queue.rs",
+   "zig": [
+    "src/app/executor.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/profiler.rs",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/profiler/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/scene.rs",
+   "zig": [
+    "src/scene.zig"
+   ],
+   "status": "ported",
+   "note": "GPU structs must stay byte-compatible with both shader sets"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/shared_uri.rs",
+   "zig": [
+    "src/image/cache.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/style.rs",
+   "zig": [
+    "src/style.zig",
+    "src/layout/style.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/styled.rs",
+   "zig": [
+    "src/styled.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/subscription.rs",
+   "zig": [
+    "src/app/subscriber_set.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/svg_renderer.rs",
+   "zig": [
+    "src/image/svg.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/tab_stop.rs",
+   "zig": [
+    "src/window/focus.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/taffy.rs",
+   "zig": [
+    "src/layout/layout.zig",
+    "src/layout/flex.zig",
+    "src/layout/block.zig",
+    "src/layout/absolute.zig",
+    "src/layout/style.zig"
+   ],
+   "status": "partial",
+   "note": "pure-Zig flex/block engine; no grid"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/test.rs",
+   "zig": [
+    "src/app/test_platform.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/text_system.rs",
+   "zig": [
+    "src/text/text_system.zig",
+    "src/text/types.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/text_system/font_fallbacks.rs",
+   "zig": [
+    "src/text/fallback.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/text_system/font_features.rs",
+   "zig": [
+    "src/text/types.zig",
+    "src/style.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/text_system/line.rs",
+   "zig": [
+    "src/text/line.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/text_system/line_layout.rs",
+   "zig": [
+    "src/text/line_layout.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/text_system/line_wrapper.rs",
+   "zig": [
+    "src/text/line_wrapper.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/util.rs",
+   "zig": [
+    "src/window/paint.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/view.rs",
+   "zig": [
+    "src/window/view.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/window.rs",
+   "zig": [
+    "src/window/window.zig",
+    "src/window/dispatch.zig",
+    "src/window/paint.zig",
+    "src/window/focus.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/window/a11y.rs",
+   "zig": [],
+   "status": "not-ported",
+   "note": "zeron sets roles/aria labels in ~35 files; zpui has no accessibility tree"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/window/a11y/**",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/window/prompts.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/src/_*.rs",
+   "zig": [],
+   "status": "n/a",
+   "note": "docs modules"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/examples/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/tests/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/Cargo.toml",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/**",
+   "zig": [],
+   "status": "not-ported",
+   "note": "unmapped gpui file",
+   "catch_all": true
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/dispatcher.rs",
+   "zig": [
+    "src/platform/mac/dispatcher.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/display.rs",
+   "zig": [
+    "src/platform/mac/mac.zig"
+   ],
+   "status": "partial",
+   "note": "no display uuid"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/display_link.rs",
+   "zig": [
+    "src/platform/mac/display_link.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/events.rs",
+   "zig": [
+    "src/platform/mac/events.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/keyboard.rs",
+   "zig": [
+    "src/platform/mac/events.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/gpui_macos.rs",
+   "zig": [
+    "src/platform/mac/mac.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/metal_atlas.rs",
+   "zig": [
+    "src/atlas.zig",
+    "src/renderer/metal/renderer.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/metal_renderer.rs",
+   "zig": [
+    "src/renderer/metal/renderer.zig",
+    "src/renderer/metal/backdrop.zig",
+    "src/renderer/metal/instance_buffer_pool.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/shaders.metal",
+   "zig": [
+    "src/renderer/metal/shaders.metal"
+   ],
+   "status": "ported",
+   "note": "copied with a license header; also hand-port to src/renderer/vulkan/shaders/"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/open_type.rs",
+   "zig": [
+    "src/text/coretext.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/pasteboard.rs",
+   "zig": [
+    "src/platform/mac/mac.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/platform.rs",
+   "zig": [
+    "src/platform/mac/mac.zig"
+   ],
+   "status": "partial",
+   "note": "menus, prompts, URL scheme, notifications missing"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/screen_capture.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/system_notifications.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/text_system.rs",
+   "zig": [
+    "src/text/coretext.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/window.rs",
+   "zig": [
+    "src/platform/mac/window.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/src/window_appearance.rs",
+   "zig": [
+    "src/platform/mac/appkit.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/build.rs",
+   "zig": [
+    "build.zig"
+   ],
+   "status": "partial",
+   "note": "shader compilation"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/**",
+   "zig": [
+    "src/platform/mac/mac.zig"
+   ],
+   "status": "partial",
+   "note": "unmapped gpui_macos file",
+   "catch_all": true
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/gpui_linux.rs",
+   "zig": [
+    "src/platform/linux/linux.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux.rs",
+   "zig": [
+    "src/platform/linux/linux.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/dispatcher.rs",
+   "zig": [
+    "src/platform/linux/dispatcher.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/platform.rs",
+   "zig": [
+    "src/platform/linux/linux.zig",
+    "src/platform/linux/event_loop.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/keyboard.rs",
+   "zig": [
+    "src/platform/linux/keyboard.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/text_system.rs",
+   "zig": [
+    "src/text/freetype.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/xdg_desktop_portal.rs",
+   "zig": [
+    "src/platform/linux/appearance.zig",
+    "src/platform/linux/dbus.zig",
+    "src/platform/linux/file_dialog.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/system_notifications.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/headless.rs",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/headless/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/wayland.rs",
+   "zig": [
+    "src/platform/linux/wayland.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/wayland/layer_shell.rs",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/wayland/popup.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/wayland/**",
+   "zig": [
+    "src/platform/linux/wayland.zig",
+    "src/platform/linux/window_common.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/x11.rs",
+   "zig": [
+    "src/platform/linux/x11.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/src/linux/x11/**",
+   "zig": [
+    "src/platform/linux/x11.zig",
+    "src/platform/linux/window_common.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_linux/**",
+   "zig": [
+    "src/platform/linux/linux.zig"
+   ],
+   "status": "partial",
+   "note": "unmapped gpui_linux file",
+   "catch_all": true
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_wgpu/src/wgpu_renderer.rs",
+   "zig": [
+    "src/renderer/vulkan/Renderer.zig"
+   ],
+   "status": "partial",
+   "note": "semantic port to raw Vulkan"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_wgpu/src/wgpu_context.rs",
+   "zig": [
+    "src/renderer/vulkan/Device.zig",
+    "src/renderer/vulkan/Swapchain.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_wgpu/src/wgpu_atlas.rs",
+   "zig": [
+    "src/atlas.zig",
+    "src/renderer/vulkan/Renderer.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_wgpu/src/shaders.wgsl",
+   "zig": [
+    "src/renderer/vulkan/shaders/"
+   ],
+   "status": "ported",
+   "note": "hand-ported to GLSL"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_wgpu/src/shaders_subpixel.wgsl",
+   "zig": [
+    "src/renderer/vulkan/shaders/subpixel_sprite.frag",
+    "src/renderer/vulkan/shaders/subpixel_sprite_fallback.frag"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_wgpu/src/blur_kernel.rs",
+   "zig": [
+    "src/renderer/vulkan/shaders/blur_pass.frag",
+    "src/renderer/metal/backdrop.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_wgpu/src/cosmic_text_system.rs",
+   "zig": [
+    "src/text/freetype.zig",
+    "src/text/fallback.zig"
+   ],
+   "status": "partial",
+   "note": "FreeType/HarfBuzz/fontconfig instead of cosmic-text"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_wgpu/src/gpui_wgpu.rs",
+   "zig": [
+    "src/renderer/renderer.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_wgpu/src/solid_quad_tests.rs",
+   "zig": [
+    "tests/"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_wgpu/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macros/src/styles.rs",
+   "zig": [
+    "src/style/styled_generated.zig",
+    "src/style/builder.zig"
+   ],
+   "status": "ported",
+   "note": "generated by scripts/gen_styled.py"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macros/src/derive_refineable.rs",
+   "zig": [
+    "src/style/refine.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macros/**",
+   "zig": [],
+   "status": "n/a",
+   "note": "proc macros; Zig uses comptime"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/refineable/**",
+   "zig": [
+    "src/style/refine.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_platform/**",
+   "zig": [
+    "src/zpui.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_windows/**",
+   "zig": [],
+   "status": "n/a",
+   "note": "Windows backend not ported"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_web/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_tokio/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_shared_string/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_util/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/media/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/collections/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/http_client/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/http_client_tls/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/path/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/reqwest_client/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/scheduler/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/sum_tree/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/util/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/util_macros/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "assets/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/build.rs",
+   "zig": [
+    "build.zig"
+   ],
+   "status": "partial",
+   "note": "shader/bindgen build steps"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/docs/**",
+   "zig": [
+    "docs/core-model.md",
+    "docs/elements.md"
+   ],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui/resources/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/gpui_macos/tests/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/*/Cargo.toml",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/*/LICENSE*",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "crates/*/README.md",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": ".*",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": ".cargo/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": ".github/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "LICENSE*",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "NOTICE",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "rust-toolchain.toml",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "docs/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "tooling/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "Cargo.toml",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "Cargo.lock",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zui",
+   "pattern": "*.md",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/account_usage.rs",
+   "zig": [],
+   "status": "not-ported",
+   "note": "plan-usage ring + account switcher in the composer footer"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/app_menus.rs",
+   "zig": [
+    "apps/zeron/src/actions.zig",
+    "apps/zeron/src/keymap.zig"
+   ],
+   "status": "partial",
+   "note": "actions + bindings only; menu bar is zpui's fixed menu, zeron:: actions unhandled"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/app_update.rs",
+   "zig": [
+    "apps/zeron/src/model/status.zig",
+    "apps/zeron/src/ui/sidebar/sidebar.zig"
+   ],
+   "status": "partial",
+   "note": "shows the engine's UpdateStatus; no app self-update/install-on-quit"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/appearance.rs",
+   "zig": [
+    "apps/zeron/src/theme/settings.zig",
+    "apps/zeron/src/ui/settings/store.zig",
+    "apps/zeron/src/ui/components/theme.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/appshots.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/appshots.zig"
+   ],
+   "status": "not-ported",
+   "note": "settings page only"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/appshots/**",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/attachments.rs",
+   "zig": [
+    "apps/zeron/src/ui/composer/composer.zig",
+    "apps/zeron/src/ui/transcript/view.zig"
+   ],
+   "status": "partial",
+   "note": "staged chips + local thumbnails; no upload/read-back/lightbox"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/badges.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/browser/**",
+   "zig": [
+    "apps/zeron/src/ui/shell/right_pane.zig",
+    "apps/zeron/src/actions.zig"
+   ],
+   "status": "not-ported",
+   "note": "empty 'Preview your work' page only"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/change_requests.rs",
+   "zig": [
+    "apps/zeron/src/ui/components/badge.zig",
+    "apps/zeron/src/ui/sidebar/sidebar.zig"
+   ],
+   "status": "partial",
+   "note": "badge renders from fixtures only"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/changes.rs",
+   "zig": [
+    "apps/zeron/src/ui/changes/pane.zig",
+    "apps/zeron/src/ui/changes/model.zig",
+    "apps/zeron/src/ui/changes/rows.zig",
+    "apps/zeron/src/ui/changes/highlight.zig",
+    "apps/zeron/src/ui/changes/store.zig",
+    "apps/zeron/src/ui/changes/tabs.zig",
+    "apps/zeron/src/diff/patch.zig",
+    "apps/zeron/src/ui/transcript/diff_view.zig"
+   ],
+   "status": "partial",
+   "note": "no review comments"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/comment_ui.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/comments.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/composer.rs",
+   "zig": [
+    "apps/zeron/src/ui/composer/composer.zig",
+    "apps/zeron/src/ui/composer/metrics.zig",
+    "apps/zeron/src/ui/composer/slash.zig",
+    "apps/zeron/src/ui/composer/chrome.zig",
+    "apps/zeron/src/ui/input/text_input.zig",
+    "apps/zeron/src/ui/input/editor.zig",
+    "apps/zeron/src/ui/input/segment.zig",
+    "apps/zeron/src/actions.zig",
+    "apps/zeron/src/keymap.zig"
+   ],
+   "status": "partial",
+   "note": "no question wizard, mention chips, provider slash commands, uploads, dictation capture"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/composer/**",
+   "zig": [
+    "apps/zeron/src/ui/composer/tests.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/composer_dictation_tests.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/composer_dock.rs",
+   "zig": [
+    "apps/zeron/src/ui/shell/main_panel.zig"
+   ],
+   "status": "not-ported",
+   "note": "canvas<->thread dock choreography"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/composer_dock/**",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/composer_markdown.rs",
+   "zig": [
+    "apps/zeron/src/ui/input/editor.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/context_usage.rs",
+   "zig": [
+    "apps/zeron/src/ui/composer/composer.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/dictation.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/voice.zig"
+   ],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/dictation/**",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/edge_fade.rs",
+   "zig": [
+    "apps/zeron/src/ui/components/effects.zig"
+   ],
+   "status": "ported",
+   "note": "+ src/elements/effects.zig"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/file_icons.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/icons.zig",
+    "apps/zeron/src/ui/markdown/file_icons.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/client.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/client.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/watch.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/client.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/context_menu.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/panel.zig",
+    "apps/zeron/src/ui/editor/view.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/document.rs",
+   "zig": [
+    "apps/zeron/src/ui/editor/view.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/drag.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/panel.zig"
+   ],
+   "status": "not-ported",
+   "note": "no tree drag-move / drag into chat"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/editor.rs",
+   "zig": [
+    "apps/zeron/src/ui/editor/root.zig",
+    "apps/zeron/src/ui/editor/view.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/editor_adapter.rs",
+   "zig": [
+    "apps/zeron/src/ui/editor/highlight.zig",
+    "apps/zeron/src/ui/editor/view.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/git_status.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/decorations.zig",
+    "apps/zeron/src/ui/files/client.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/image_preview.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/markdown_media.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/markdown_preview.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/mod.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/panel.zig",
+    "apps/zeron/src/ui/editor/view.zig",
+    "apps/zeron/src/ui/files/root.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/model.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/model.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/mutations.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/client.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/preview.rs",
+   "zig": [
+    "apps/zeron/src/ui/editor/view.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/rename.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/panel.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/search.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/search.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/sections.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/panel.zig"
+   ],
+   "status": "partial",
+   "note": "empty states only; never fed"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/tree.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/panel.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/files/test_support.rs",
+   "zig": [
+    "apps/zeron/src/ui/files/panel_test.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/frost.rs",
+   "zig": [
+    "apps/zeron/src/ui/components/effects.zig"
+   ],
+   "status": "ported",
+   "note": "+ src/elements/effects.zig"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/glass.rs",
+   "zig": [
+    "apps/zeron/src/ui/composer/chrome.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/haptics.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/history.rs",
+   "zig": [
+    "apps/zeron/src/ui/history/pane.zig",
+    "apps/zeron/src/ui/history/graph.zig",
+    "apps/zeron/src/ui/history/store.zig",
+    "apps/zeron/src/ui/history/types.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/icons.rs",
+   "zig": [
+    "apps/zeron/src/assets.zig",
+    "apps/zeron/src/ui/components/icon.zig"
+   ],
+   "status": "ported",
+   "note": "assets.zig generated by scripts/gen_assets.py"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/image_media.rs",
+   "zig": [],
+   "status": "partial",
+   "note": "zpui src/image/ decodes; no bounded/async media pipeline"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/image_viewer.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/lib.rs",
+   "zig": [
+    "apps/zeron/src/main.zig"
+   ],
+   "status": "partial",
+   "note": "no URL routing, reopen, quit hooks, window geometry, appshot service"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/links.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/loaders.rs",
+   "zig": [
+    "apps/zeron/src/ui/components/loaders.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/inline_code_links.rs",
+   "zig": [
+    "apps/zeron/src/markdown/inline_code_links.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/link_destination.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/link_interaction.rs",
+   "zig": [
+    "apps/zeron/src/ui/markdown/rich_text.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/link_presentation.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/links.rs",
+   "zig": [
+    "apps/zeron/src/ui/markdown/rich_text.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/mermaid.rs",
+   "zig": [
+    "apps/zeron/src/markdown/root.zig"
+   ],
+   "status": "not-ported",
+   "note": "fences detected, rendered as source"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/mermaid_cache.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/mod.rs",
+   "zig": [
+    "apps/zeron/src/markdown/root.zig",
+    "apps/zeron/src/ui/markdown/root.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/render.rs",
+   "zig": [
+    "apps/zeron/src/ui/markdown/root.zig",
+    "apps/zeron/src/ui/markdown/rich_text.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/selection.rs",
+   "zig": [
+    "apps/zeron/src/ui/markdown/rich_text.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/markdown/veil.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/motion.rs",
+   "zig": [
+    "apps/zeron/src/theme/motion.zig",
+    "apps/zeron/src/ui/components/anim.zig",
+    "apps/zeron/src/ui/components/hover.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/motion/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/new_thread_background_*.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/notice.rs",
+   "zig": [
+    "apps/zeron/src/ui/transcript/view.zig",
+    "apps/zeron/src/ui/composer/composer.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/notify.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/pickers.rs",
+   "zig": [
+    "apps/zeron/src/ui/pickers/pickers.zig",
+    "apps/zeron/src/ui/pickers/paths.zig",
+    "apps/zeron/src/ui/pickers/menu.zig",
+    "apps/zeron/src/ui/composer/model_picker.zig",
+    "apps/zeron/src/ui/composer/run_config.zig"
+   ],
+   "status": "partial",
+   "note": "no repo clone/create, worktree create/delete"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/pickers/compact.rs",
+   "zig": [
+    "apps/zeron/src/ui/composer/model_picker.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/popover.rs",
+   "zig": [
+    "apps/zeron/src/ui/components/popover.zig",
+    "apps/zeron/src/ui/components/dialog.zig",
+    "apps/zeron/src/ui/pickers/menu.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/popover/**",
+   "zig": [
+    "apps/zeron/src/ui/settings/select.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/project_actions.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/queue.rs",
+   "zig": [
+    "apps/zeron/src/ui/composer/composer.zig",
+    "apps/zeron/src/model/queue_store.zig"
+   ],
+   "status": "partial",
+   "note": "no drag reorder, no edit lease"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/rail.rs",
+   "zig": [
+    "apps/zeron/src/ui/transcript/view.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings.rs",
+   "zig": [
+    "apps/zeron/src/model/settings.zig",
+    "apps/zeron/src/model/settings_store.zig",
+    "apps/zeron/src/theme/settings.zig",
+    "apps/zeron/src/ui/settings/view.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/accounts.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/appearance.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/appearance.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/appshots.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/appshots.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/archived.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/archived.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/completion.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/composer.rs",
+   "zig": [
+    "apps/zeron/src/model/composer_defaults.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/devices.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/devices.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/files.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/files.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/harnesses.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/providers.zig"
+   ],
+   "status": "partial",
+   "note": "no install/cancel install"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/notifications.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/notifications.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/shortcuts.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/shortcuts.zig",
+    "apps/zeron/src/keymap.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/thread_naming.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/general.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/wallpaper.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/wallpaper_colors.rs",
+   "zig": [
+    "apps/zeron/src/theme/wallpaper.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/settings/widgets.rs",
+   "zig": [
+    "apps/zeron/src/ui/settings/widgets.zig",
+    "apps/zeron/src/ui/settings/select.zig",
+    "apps/zeron/src/ui/components/switch.zig",
+    "apps/zeron/src/ui/components/tooltip.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell.rs",
+   "zig": [
+    "apps/zeron/src/ui/shell/shell.zig",
+    "apps/zeron/src/ui/shell/main_panel.zig",
+    "apps/zeron/src/ui/shell/right_pane.zig",
+    "apps/zeron/src/ui/shell/titlebar.zig",
+    "apps/zeron/src/ui/shell/gates.zig",
+    "apps/zeron/src/ui/shell/terminal_dock.zig",
+    "apps/zeron/src/ui/sidebar/sidebar.zig",
+    "apps/zeron/src/ui/components/button.zig",
+    "apps/zeron/src/actions.zig",
+    "apps/zeron/src/keymap.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/actions_ui.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/chat_dropzone.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/command_palette.rs",
+   "zig": [
+    "apps/zeron/src/ui/shell/palette.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/file_mutations.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/files_panel.rs",
+   "zig": [
+    "apps/zeron/src/ui/shell/right_pane.zig",
+    "apps/zeron/src/ui/files/panel.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/harness_updates.rs",
+   "zig": [],
+   "status": "not-ported",
+   "note": "data in model/status.zig; no home island"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/navigation_focus.rs",
+   "zig": [
+    "apps/zeron/src/ui/shell/shell.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/project_icon.rs",
+   "zig": [
+    "apps/zeron/src/ui/sidebar/project_icon.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/side_chats.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/sidebar_pins.rs",
+   "zig": [
+    "apps/zeron/src/ui/sidebar/sidebar.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/sidebar_sections.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/spaces.rs",
+   "zig": [
+    "apps/zeron/src/ui/sidebar/sidebar.zig",
+    "apps/zeron/src/ui/pickers/add_project.zig"
+   ],
+   "status": "partial",
+   "note": "no space rename/delete"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/tabs.rs",
+   "zig": [
+    "apps/zeron/src/ui/shell/titlebar.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/*_tests.rs",
+   "zig": [
+    "apps/zeron/src/ui/shell/shell_test.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/sound.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/state.rs",
+   "zig": [
+    "apps/zeron/src/model/app_state.zig",
+    "apps/zeron/src/model/engine_state.zig",
+    "apps/zeron/src/model/workspace.zig",
+    "apps/zeron/src/model/status.zig",
+    "apps/zeron/src/model/transcript_store.zig",
+    "apps/zeron/src/model/queue_store.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/surface_chrome.rs",
+   "zig": [
+    "apps/zeron/src/ui/changes/tabs.zig",
+    "apps/zeron/src/theme/layout.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/syntax_cache.rs",
+   "zig": [
+    "apps/zeron/src/ui/changes/highlight.zig",
+    "apps/zeron/src/ui/editor/highlight.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/terminal/dock.rs",
+   "zig": [
+    "apps/zeron/src/ui/shell/terminal_dock.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/terminal/emulator.rs",
+   "zig": [
+    "apps/zeron/src/terminal/Emulator.zig",
+    "apps/zeron/src/terminal/snapshot.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/terminal/mod.rs",
+   "zig": [
+    "apps/zeron/src/terminal/root.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/terminal/panel.rs",
+   "zig": [
+    "apps/zeron/src/terminal/session.zig",
+    "apps/zeron/src/ui/shell/terminal_dock.zig"
+   ],
+   "status": "partial",
+   "note": "local PTY; engine OpenTerminal/SubscribeTerminal not wired"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/terminal/view.rs",
+   "zig": [
+    "apps/zeron/src/terminal/keys.zig",
+    "apps/zeron/src/terminal/input.zig",
+    "apps/zeron/src/terminal/paint.zig",
+    "apps/zeron/src/terminal/palette.zig",
+    "apps/zeron/src/ui/shell/terminal_dock.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/theme.rs",
+   "zig": [
+    "apps/zeron/src/theme/theme.zig",
+    "apps/zeron/src/theme/colorspace.zig",
+    "apps/zeron/src/theme/layout.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/theme_library.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/todo_panel.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/transcript.rs",
+   "zig": [
+    "apps/zeron/src/ui/transcript/view.zig",
+    "apps/zeron/src/ui/transcript/rows.zig",
+    "apps/zeron/src/ui/transcript/tools.zig",
+    "apps/zeron/src/ui/transcript/thought.zig",
+    "apps/zeron/src/ui/transcript/diff_view.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/typography.rs",
+   "zig": [
+    "apps/zeron/src/theme/typography.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/workspace_links.rs",
+   "zig": [
+    "apps/zeron/src/ui/transcript/workspace_links.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/**",
+   "zig": [],
+   "status": "not-ported",
+   "note": "new/unmapped zeron UI file",
+   "catch_all": true
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/assets/icons/**",
+   "zig": [
+    "apps/zeron/assets/icons/",
+    "apps/zeron/src/assets.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/assets/fonts/**",
+   "zig": [
+    "apps/zeron/assets/fonts/",
+    "apps/zeron/src/assets.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/assets/file-icons/**",
+   "zig": [
+    "apps/zeron/assets/file-icons/",
+    "apps/zeron/src/assets.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/assets/sounds/**",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/file-icons.json",
+   "zig": [
+    "apps/zeron/assets/file-icons/file-icons.json",
+    "apps/zeron/src/ui/markdown/file_icons.zig",
+    "apps/zeron/src/ui/files/icons.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/examples/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/tests/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/Cargo.toml",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/build.rs",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/theme/src/lib.rs",
+   "zig": [
+    "apps/zeron/src/theme/model.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/theme/src/builtins.rs",
+   "zig": [
+    "apps/zeron/src/theme/builtins.zig",
+    "apps/zeron/src/theme/derive.zig"
+   ],
+   "status": "ported",
+   "note": "builtins.zig generated by gen_themes.py"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/theme/src/library.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/theme/src/vscode.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/theme/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/markdown/src/lib.rs",
+   "zig": [
+    "apps/zeron/src/markdown/root.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/markdown/src/parser.rs",
+   "zig": [
+    "apps/zeron/src/markdown/parser.zig",
+    "apps/zeron/src/markdown/model.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/markdown/src/mend.rs",
+   "zig": [
+    "apps/zeron/src/markdown/mend.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/markdown/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/syntax/src/lib.rs",
+   "zig": [
+    "apps/zeron/src/syntax/root.zig",
+    "apps/zeron/src/syntax/language.zig",
+    "apps/zeron/src/syntax/highlight.zig",
+    "apps/zeron/src/syntax/query.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/syntax/**",
+   "zig": [
+    "apps/zeron/src/syntax/root_test.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/src/view.rs",
+   "zig": [
+    "apps/zeron/src/model/view.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/src/motion.rs",
+   "zig": [
+    "apps/zeron/src/theme/motion.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/src/entities.rs",
+   "zig": [
+    "apps/zeron/src/engine/protocol.zig",
+    "apps/zeron/src/ui/files/protocol.zig",
+    "apps/zeron/src/ui/history/types.zig",
+    "apps/zeron/src/model/types.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/src/workspace.rs",
+   "zig": [
+    "apps/zeron/src/engine/protocol.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/src/agent.rs",
+   "zig": [
+    "apps/zeron/src/engine/protocol.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/src/sidebar_pins.rs",
+   "zig": [
+    "apps/zeron/src/engine/protocol.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/src/lib.rs",
+   "zig": [
+    "apps/zeron/src/engine/protocol.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/src/invocation.rs",
+   "zig": [
+    "apps/zeron/src/engine/protocol.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/src/file_mentions.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/src/preview.rs",
+   "zig": [],
+   "status": "not-ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/proto/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/rpc/src/lib.rs",
+   "zig": [
+    "apps/zeron/src/engine/methods.zig",
+    "apps/zeron/src/engine/rpc.zig"
+   ],
+   "status": "ported",
+   "note": "methods.zig generated by gen_methods.py"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/rpc/src/client.rs",
+   "zig": [
+    "apps/zeron/src/engine/rpc.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/rpc/src/server.rs",
+   "zig": [
+    "apps/zeron/src/engine/ws.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/rpc/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/doc/src/transcript_delta.rs",
+   "zig": [
+    "apps/zeron/src/engine/transcript.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/doc/src/queue.rs",
+   "zig": [
+    "apps/zeron/src/model/queue_store.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/doc/**",
+   "zig": [],
+   "status": "n/a",
+   "note": "engine-side document layer"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/engine/src/rpc.rs",
+   "zig": [
+    "apps/zeron/src/engine/methods.zig",
+    "apps/zeron/src/engine/protocol.zig"
+   ],
+   "status": "partial",
+   "note": "stream classification + wire shapes"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/engine/**",
+   "zig": [],
+   "status": "n/a",
+   "note": "engine is unchanged; only its wire surface matters"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/update/**",
+   "zig": [],
+   "status": "not-ported",
+   "note": "app self-update"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/voice/**",
+   "zig": [],
+   "status": "not-ported",
+   "note": "Parakeet dictation"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/harness/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/mcp/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/mobile/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/client/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/sync/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/preview/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/text/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "apps/zeron/src/main.rs",
+   "zig": [
+    "apps/zeron/src/main.zig",
+    "apps/zeron/src/engine_bin.zig"
+   ],
+   "status": "partial",
+   "note": "no URL argument; CLI subcommands live in the engine binary"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "apps/zeron/src/paths.rs",
+   "zig": [
+    "apps/zeron/src/model/settings.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "apps/zeron/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "dist/**",
+   "zig": [
+    "apps/zeron/dist/"
+   ],
+   "status": "partial",
+   "note": "Info.plist, .desktop, icons"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "apps/ios/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "apps/landing/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "apps/www-redirect/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "edge/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "docs/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "scripts/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": ".github/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "Cargo.lock",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "Cargo.toml",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "*.md",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "rust-toolchain.toml",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "LICENSE",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": ".*",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "gpui-component",
+   "pattern": "crates/base/src/input/**",
+   "zig": [
+    "apps/zeron/src/ui/editor/core.zig",
+    "apps/zeron/src/ui/editor/view.zig",
+    "apps/zeron/src/ui/editor/actions.zig",
+    "apps/zeron/src/ui/editor/wrap.zig",
+    "apps/zeron/src/ui/editor/buffer.zig"
+   ],
+   "status": "partial"
+  },
+  {
+   "upstream": "gpui-component",
+   "pattern": "crates/base/src/scrollbar.rs",
+   "zig": [
+    "src/elements/scrollbar.zig"
+   ],
+   "status": "ported"
+  },
+  {
+   "upstream": "gpui-component",
+   "pattern": "**",
+   "zig": [],
+   "status": "n/a",
+   "note": "only the editor input and scrollbar are ported"
+  }
+ ]
+}

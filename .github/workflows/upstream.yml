@@ -1,0 +1,98 @@
+name: Upstream tracking
+
+# Weekly: diff zui (zeronsh/zui) and zeron (zeronsh/zeron) from the revisions
+# pinned in tools/upstream/map.json to their current heads, and keep a single
+# open issue, "Upstream changes to port", up to date with the report.
+# See docs/UPSTREAM.md.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays 06:17 UTC
+  workflow_dispatch:
+    inputs:
+      include_optional:
+        description: "Also diff gpui-component (the editor upstream)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-tracking
+  cancel-in-progress: false
+
+env:
+  ISSUE_TITLE: Upstream changes to port
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Restore upstream clones
+        uses: actions/cache@v4
+        with:
+          path: .upstream-cache
+          key: upstream-cache-${{ github.run_id }}
+          restore-keys: upstream-cache-
+
+      - name: Diff upstreams against the pinned revisions
+        id: check
+        env:
+          INCLUDE_OPTIONAL: ${{ inputs.include_optional && '--include-optional' || '' }}
+        run: |
+          python3 tools/upstream/check.py $INCLUDE_OPTIONAL \
+            --out upstream-report.md \
+            --issue-out upstream-issue.md \
+            --json upstream-report.json
+          {
+            echo "## Upstream tracking"
+            cat upstream-report.md
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        uses: actions/upload-artifact@v4
+        with:
+          name: upstream-report
+          path: |
+            upstream-report.md
+            upstream-report.json
+
+      - name: Open or update the tracking issue
+        if: steps.check.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$ISSUE_TITLE\"" \
+            --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -n1)
+          if [ -n "$number" ]; then
+            gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --body-file upstream-issue.md
+            echo "Updated issue #$number"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$ISSUE_TITLE" --body-file upstream-issue.md
+          fi
+
+      - name: Close the tracking issue when caught up
+        if: steps.check.outputs.has_changes == 'false' && steps.check.outputs.has_errors == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          number=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "in:title \"$ISSUE_TITLE\"" \
+            --json number,title --jq ".[] | select(.title == \"$ISSUE_TITLE\") | .number" | head -n1)
+          if [ -n "$number" ]; then
+            gh issue close "$number" --repo "$GITHUB_REPOSITORY" \
+              --comment "All upstreams are at their pinned revisions (run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+          fi
+
+      - name: Fail on fetch errors
+        if: steps.check.outputs.has_errors == 'true'
+        run: |
+          echo "::error::check.py could not fetch or diff an upstream; see the report."
+          exit 1
