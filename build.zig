@@ -25,6 +25,7 @@ pub fn build(b: *std.Build) void {
     addZeronSyntax(b, target, optimize, test_step);
     addZeronMarkdownDiff(b, target, optimize, test_step);
     addImageSupport(b, target, optimize, zpui);
+    addZeronModel(b, target, optimize, zpui, test_step);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -424,4 +425,62 @@ fn addImageSupport(
     run.addPassthruArgs();
     const step = b.step("icon-sheet", "Rasterize every zeron icon + sample images to zig-out/icon-sheet.png");
     step.dependOn(&run.step);
+}
+
+/// zeron app state (apps/zeron/src/model: view logic, settings, engine-backed
+/// stores as zpui entities) and the `zeron_actions` module
+/// (apps/zeron/src/actions.zig + keymap.zig). `zig build zeron-view-test`
+/// runs only the pure parts (no zpui); `zig build zeron-model-test` runs all.
+/// `-Dzeron-live=/path/to/zeron` adds a live test against `zeron headless`.
+fn addZeronModel(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
+) void {
+    const engine = b.modules.get("zeron_engine").?;
+    const theme = b.modules.get("zeron_theme").?;
+    const options = b.addOptions();
+    options.addOption(?[]const u8, "live_zeron", b.option([]const u8, "zeron-live", "Path to a zeron binary for the live model test"));
+
+    const pure = b.createModule(.{
+        .root_source_file = b.path("apps/zeron/src/model/pure_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zeron_engine", .module = engine },
+            .{ .name = "zeron_theme", .module = theme },
+        },
+    });
+    const run_pure = b.addRunArtifact(b.addTest(.{ .name = "zeron_view", .root_module = pure }));
+    b.step("zeron-view-test", "Run the pure zeron model tests (view parity, settings)").dependOn(&run_pure.step);
+
+    const model = b.addModule("zeron_model", .{
+        .root_source_file = b.path("apps/zeron/src/model/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zpui", .module = zpui },
+            .{ .name = "zeron_engine", .module = engine },
+            .{ .name = "zeron_theme", .module = theme },
+            .{ .name = "model_options", .module = options.createModule() },
+        },
+    });
+    const actions = b.addModule("zeron_actions", .{
+        .root_source_file = b.path("apps/zeron/src/actions.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zpui", .module = zpui },
+            .{ .name = "zeron_model", .module = model },
+        },
+    });
+    const run_model = b.addRunArtifact(b.addTest(.{ .name = "zeron_model", .root_module = model }));
+    const run_actions = b.addRunArtifact(b.addTest(.{ .name = "zeron_actions", .root_module = actions }));
+    const model_step = b.step("zeron-model-test", "Run the zeron model + actions tests");
+    model_step.dependOn(&run_pure.step);
+    model_step.dependOn(&run_model.step);
+    model_step.dependOn(&run_actions.step);
+    test_step.dependOn(model_step);
 }
