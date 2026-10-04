@@ -101,8 +101,20 @@ const Fixture = struct {
         }
     }
 
-    fn key(f: *Fixture, ks: []const u8) void {
-        f.tw.typeKey(ks);
+    /// Types a keystroke written with Linux bindings; on macOS, word motion
+    /// becomes alt-* and the remaining ctrl-* shortcuts become cmd-*.
+    fn key(f: *Fixture, comptime ks: []const u8) void {
+        f.tw.typeKey(comptime platformKey(ks));
+    }
+
+    fn platformKey(comptime ks: []const u8) []const u8 {
+        if (@import("builtin").os.tag != .macos) return ks;
+        const word = [_][]const u8{ "ctrl-left", "ctrl-right", "ctrl-backspace", "ctrl-delete" };
+        inline for (word) |w| {
+            if (std.mem.endsWith(u8, ks, w)) return ks[0 .. ks.len - w.len] ++ "alt-" ++ w["ctrl-".len..];
+        }
+        if (std.mem.find(u8, ks, "ctrl-")) |i| return ks[0..i] ++ "cmd-" ++ ks[i + "ctrl-".len ..];
+        return ks;
     }
 
     fn mouseDown(f: *Fixture, x: f32, y: f32, clicks: u32, shift: bool) void {
