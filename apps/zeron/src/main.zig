@@ -413,6 +413,7 @@ test {
     _ = @import("glass_lab.zig");
     _ = @import("engine_bin.zig");
     _ = @import("ui/shell/shell_test.zig");
+    _ = @import("ui/shell/harness_updates_test.zig");
     _ = @import("ui/settings/root.zig");
     _ = @import("ui/background/root.zig");
     _ = @import("ui/pickers/root.zig");

@@ -2334,9 +2334,10 @@
   {
    "upstream": "zeron",
    "pattern": "crates/ui/src/shell/harness_updates.rs",
-   "zig": [],
-   "status": "not-ported",
-   "note": "data in model/status.zig; no home island"
+   "zig": [
+    "apps/zeron/src/ui/shell/harness_updates.zig"
+   ],
+   "status": "ported"
   },
   {
    "upstream": "zeron",

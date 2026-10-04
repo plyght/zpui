@@ -16,6 +16,7 @@ const slots = @import("slots.zig");
 const terminal_dock = @import("terminal_dock.zig");
 const background = @import("../background/root.zig");
 const settings_store_ui = @import("../settings/store.zig");
+const harness_updates = @import("harness_updates.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -39,6 +40,8 @@ pub const MainPanel = struct {
     terminal_sub: ?zpui.Subscription = null,
     /// The new-thread hero's crossfade state (`new_thread_artwork_ready`).
     artwork_ready: background.hero.Readiness = .{},
+    /// Home's agent-update island (`render_harness_update_card`).
+    harness_updates: Entity(harness_updates.HarnessUpdateIsland),
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, cx: *Context(MainPanel)) !MainPanel {
         var self: MainPanel = .{
@@ -46,7 +49,10 @@ pub const MainPanel = struct {
             .state = state.retain(cx),
             .fixtures = fixtures,
             .slots = try slots.Slots.init(state, fixtures, cx),
+            .harness_updates = undefined,
         };
+        self.harness_updates = try cx.newWith(harness_updates.HarnessUpdateIsland, harness_updates.HarnessUpdateIsland.init, .{state});
+        errdefer self.harness_updates.release(cx);
         const s = state.read(cx);
         try self.subs.add(cx.gpa(), try cx.observe(s.workspace, onChanged));
         try self.subs.add(cx.gpa(), try cx.subscribe(state, onStores));
@@ -59,6 +65,7 @@ pub const MainPanel = struct {
         if (self.terminal_sub) |*t| t.deinit();
         if (self.terminal) |t| t.release(app);
         self.slots.deinit(app);
+        self.harness_updates.release(app);
         self.state.release(app);
     }
 
@@ -106,8 +113,24 @@ pub const MainPanel = struct {
                 .child(div().mb(px(12)).child(self.slots.composer(width, cx)))
                 .child(div().flex1().minH0());
         }
+        const terminal_open = prefs_mod.get(cx).terminal_open;
+        if (has_chat) {
+            // Leaving Home collapses the island (Rust: `has_selection`).
+            if (self.harness_updates.read(cx).expanded) _ = self.harness_updates.update(cx, harness_updates.HarnessUpdateIsland.collapse, .{});
+        } else if (!terminal_open) {
+            // Anchored to the window bottom, behind the terminal dock (fully
+            // covered while the dock is open, so it is not mounted then).
+            {
+                var l = self.harness_updates.lease(cx);
+                defer l.end();
+                l.value.main_width = width;
+                l.value.viewport_height = window.viewportSize().height;
+            }
+            col = col.child(div().absolute().left(px(0)).right(px(0)).bottom(px(harness_updates.bottom_inset))
+                .flex().justifyCenter().child(self.harness_updates));
+        }
         col = col.child(attachmentDropOverlay(theme));
-        if (prefs_mod.get(cx).terminal_open) {
+        if (terminal_open) {
             if (self.terminal == null) {
                 const chat = ws.selectedChatRow();
                 const cwd: ?[]const u8 = if (chat) |c| (c.cwd orelse if (ws.spaceForChat(c)) |sp| sp.path else null) else if (ws.selectedSpaceRow()) |sp| sp.path else null;

@@ -65,6 +65,41 @@ pub fn frosted(radius: f32, blur: f32, child: anytype) Frosted {
 }
 
 // ---------------------------------------------------------------------------
+// Layered
+// ---------------------------------------------------------------------------
+
+/// zeron `frost::layered`: paint `child` in its own layer. Inside a frosted
+/// card every primitive shares one draw order and equal orders render grouped
+/// by kind (quads, then icons, then images), so a circle painted "after" an
+/// icon still shows up under it; a nested layer restores the intended stacking
+/// (the overlapping brand marks of the Home agent-update island).
+pub const Layered = struct {
+    child: AnyElement,
+
+    pub fn intoAnyElement(self: Layered) AnyElement {
+        return AnyElement.new(self);
+    }
+
+    pub fn requestLayout(self: *Layered, _: ?GlobalElementId, _: *void, window: *Window, cx: *App) LayoutId {
+        return self.child.requestLayout(window, cx);
+    }
+
+    pub fn prepaint(self: *Layered, _: ?GlobalElementId, _: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        self.child.prepaint(window, cx);
+    }
+
+    pub fn paint(self: *Layered, _: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        const layer = window.pushLayer(bounds);
+        defer window.popLayer(layer);
+        self.child.paint(window, cx);
+    }
+};
+
+pub fn layered(child: anytype) Layered {
+    return .{ .child = zpui.intoAnyElement(child) };
+}
+
+// ---------------------------------------------------------------------------
 // EdgeFaded
 // ---------------------------------------------------------------------------
 

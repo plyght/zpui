@@ -17,7 +17,7 @@ Legend: ✅ done · 🟡 partial (what is missing) · ❌ missing · ➖ not app
 Paths: Zig paths are under `apps/zeron/src/` unless they start with `src/` (zpui). Rust paths are
 under `crates/ui/src/` unless noted.
 
-Scorecard (table rows below): ✅ 111 · 🟡 36 · ❌ 46 · ➖ 5.
+Scorecard (table rows below): ✅ 112 · 🟡 36 · ❌ 45 · ➖ 5.
 
 The ported core is strong: engine client, theme (bit-exact), syntax (span-exact), markdown and
 diff (exact), transcript rows, Changes / History panes, file explorer + editor, pickers, settings
@@ -99,7 +99,7 @@ handlers. Customizable combos come from `KeymapConfig` (`mod` = cmd on macOS, ct
 | Org gate: create workspace / pick org / sign out | `render_org_gate` | `ui/shell/gates.zig` + `ui/shell/wiring.zig`: name field (Enter or Create → `CreateOrg`, name validation), org rows → `SelectOrg`, `ListOrgs` on first show, errors under the field | ✅ |
 | Signed-out restart prompt, sync overlay, local-workspace import (`ImportLocalWorkspace`) | `render_signed_out_restart`, `render_sync_overlay`, `render_import_dialog` | — | ❌ |
 | Persist pane layout (sidebar width/collapsed, right pane width/open, files panel width, terminal height/open) | `settings.rs` debounced saves | `ui/shell/prefs.zig` `mut` → `writeSettings` (debounced): sidebar width/collapsed, right pane width, view-menu choices. `rightPaneOpen`/`terminalOpen` are legacy in Rust too; files panel and terminal have no resizer yet (values kept as loaded) | ✅ |
-| Harness-updates island on Home | `shell/harness_updates.rs` | — (data in `model/status.zig` `HarnessUpdates`) | ❌ |
+| Harness-updates island on Home ("4 agent updates · MacBook Pro (2)" capsule: overlapping brand marks, title, spinner / check / danger glyph, chevron → 360px list of per-agent rows with Update / Cancel / Check again / View steps) | `shell/harness_updates.rs` | `ui/shell/harness_updates.zig`, mounted by `main_panel.zig` 24px above the window bottom on Home (not under an open terminal dock): one `WatchHarnessUpdates{targetDeviceId}` per `harness-updates-v1` host (registry + connected engine) with Rust's presence reconciliation and 1→15s retry backoff; actions send `ApplyHarnessUpdate` / `CancelHarnessUpdate` / `CheckHarnessUpdates` `{harness, targetDeviceId}` (the RPCs Settings → Agents uses); failures → sidebar notice; View steps → Settings → Agents (`wiring.zig`); Escape and outside clicks collapse; RESIZE tween for size / radius / mark collapse / row reveal; marks layered via `effects.layered`. Parity: `harness_updates_test.zig` against a fixture dumped from the Rust helpers (`scripts/harness_updates_parity.rs`) | ✅ (no focus ring / aria, no overlay scroll rail; View steps does not pre-select a remote device: the Agents page has no device target) |
 | GitHub star banner | `render_github_star_banner` | — | ❌ |
 | Project actions (titlebar Run/Setup menu, edit/delete/import, `RunProjectAction`) | `project_actions.rs`, `shell/actions_ui.rs` | — | ❌ |
 | Chat drop zone (drop files onto the conversation) | `shell/chat_dropzone.rs` | — | ❌ (also blocked on zpui external drops) |
@@ -297,6 +297,9 @@ org-gate buttons don't call them; `CompleteSignIn` has no UI.)
 Since wired (shell/composer/transcript wiring pass): `ListSkills ListCommands RetryDelivery ForkSideChat
 BeginQueuedMessageEdit RenewQueuedMessageEdit FinishQueuedMessageEdit SearchFiles FetchToolBlob`, plus
 `CreateOrg`/`SelectOrg`/`ListOrgs` from the org gate and `MoveQueuedMessage` from the queue tray.
+Since wired (Home agent-update island + Settings → Agents): `ApplyHarnessUpdate CancelHarnessUpdate`
+(with `targetDeviceId` from the island), `InstallHarness CancelInstall`; `DismissHarnessUpdate` is
+unused in Rust's UI too.
 
 ## 15. Settings that persist but have no runtime effect
 
@@ -403,5 +406,5 @@ Sizes: **S** ≤ 1 day · **M** 2–4 days · **L** 1–2 weeks · **XL** > 2 we
 23. **Appearance extras**: theme library + VS Code import, wallpaper folder rotation, new-thread
     background + effects. — L
 24. **Polish**: composer dock choreography, streaming veil, link destination disclosure,
-    harness-updates island, GitHub star banner, sync overlay / local import, moving-row
+    GitHub star banner, sync overlay / local import, moving-row
     animation, haptics, repo avatars, repo clone/create. — L total

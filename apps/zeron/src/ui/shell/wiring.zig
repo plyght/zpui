@@ -16,7 +16,9 @@
 //! - spawn chips → subagent tabs; side-chat errors → the composer notice;
 //! - the sidebar's Delete… (confirm dialog → `deleteChat`), sign-in URLs
 //!   (opened in the browser, `start_sign_in`), "Enable sync" with its
-//!   "Open browser again" dialog, the org gate (create / pick a workspace).
+//!   "Open browser again" dialog, the org gate (create / pick a workspace);
+//! - Home's agent-update island: "View steps" → Settings → Agents, failed
+//!   actions → the sidebar notice, Escape collapses the expanded list.
 
 const std = @import("std");
 const zpui = @import("zpui");
@@ -37,6 +39,7 @@ const editor = @import("../editor/root.zig");
 const settings_ui = @import("../settings/root.zig");
 const background = @import("../background/root.zig");
 const prefs_mod = @import("prefs.zig");
+const harness_updates = @import("harness_updates.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -118,6 +121,9 @@ pub fn attach(self: *Shell, cx: *Ctx) !void {
     try self.subs.add(gpa, try cx.subscribe(self.sidebar, onDeleteSpace));
     try self.subs.add(gpa, try cx.subscribe(self.right_pane, onAddToChat));
     try self.subs.add(gpa, try cx.subscribe(self.right_pane, onSideChatError));
+    const island = self.main.read(cx).harness_updates;
+    try self.subs.add(gpa, try cx.subscribe(island, onAgentUpdateSteps));
+    try self.subs.add(gpa, try cx.subscribe(island, onAgentUpdateNotice));
     const auth = self.state.read(cx).auth;
     try self.subs.add(gpa, try cx.subscribe(auth, onSignInUrl));
     try self.subs.add(gpa, try cx.subscribe(auth, onAuthError));
@@ -157,9 +163,26 @@ fn overlayOwnsKeyboard(self: *Shell) bool {
 fn onShellKey(self: *Shell, ev: *const zpui.input.KeyDownEvent, _: *Window, cx: *Ctx) void {
     if (!std.mem.eql(u8, ev.keystroke.key, "escape") or !ev.keystroke.modifiers.none()) return;
     if (overlayOwnsKeyboard(self) or self.settings_view != null or self.palette != null) return;
+    // `resolve_shell_escape`: an expanded agent-update list closes first.
+    if (self.main.read(cx).harness_updates.update(cx, harness_updates.HarnessUpdateIsland.collapse, .{})) return cx.stopPropagation();
     if (!settings_ui.store.current(cx).escapeStopsActiveAgent) return;
     const composer = self.main.read(cx).slots.composer_view;
     if (composer.update(cx, composer_mod.ComposerView.escapeStop, .{})) cx.stopPropagation();
+}
+
+/// The island's "View steps" (`open_harness_update_steps`): Settings → Agents.
+/// The Agents page has no device target yet, so a remote host's steps open
+/// on the page as it stands.
+fn onAgentUpdateSteps(self: *Shell, _: Entity(harness_updates.HarnessUpdateIsland), _: *const harness_updates.OpenSteps, cx: *Ctx) void {
+    const w = window0(cx) orelse return;
+    self.openSettings(w, cx);
+    if (self.settings_view) |v| v.update(cx, settings_ui.SettingsView.openSection, .{.harnesses});
+    cx.notify();
+}
+
+/// A failed island action: "Agent update (<device>): <error>" as the sidebar notice.
+fn onAgentUpdateNotice(self: *Shell, _: Entity(harness_updates.HarnessUpdateIsland), ev: *const harness_updates.Notice, cx: *Ctx) void {
+    self.sidebar.update(cx, sidebar_mod.Sidebar.setNotice, .{@as(?[]const u8, ev.text)});
 }
 
 /// `shell::RandomWallpaper` (mod-u, `Shell::random_wallpaper`): without a
