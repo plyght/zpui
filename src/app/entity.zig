@@ -337,6 +337,12 @@ pub fn Entity(comptime T: type) type {
             return self.update(cx, Wrap.call, .{ctx});
         }
 
+        /// This view as a cached element (see docs/elements.md): its previous frame is reused
+        /// while neither it nor anything it read was notified. `style` is its outer style.
+        pub fn cached(self: Self, style: @import("../style.zig").StyleRefinement) @import("../window/view.zig").AnyView {
+            return @import("../window/view.zig").AnyView.fromEntity(self).cached(style);
+        }
+
         /// Closure-free update: `var l = e.lease(cx); defer l.end(); l.value.x += 1; l.cx.notify();`
         pub fn lease(self: Self, cx: anytype) Lease(T) {
             const app = appOf(cx);

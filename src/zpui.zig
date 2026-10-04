@@ -41,6 +41,8 @@ pub const linux_platform = if (@import("builtin").os.tag == .linux) @import("pla
 /// macOS backend (AppKit + Metal + CoreText); an empty namespace on other targets.
 pub const mac_platform = if (@import("builtin").os.tag == .macos) @import("platform/mac/mac.zig") else struct {};
 pub const text = @import("text/text.zig");
+/// Image decoding, SVG rendering, image cache and object-fit (src/image/).
+pub const image = @import("image/image.zig");
 
 pub const style = @import("style.zig");
 pub const Style = style.Style;
@@ -69,9 +71,60 @@ pub const AnyAction = core.AnyAction;
 pub const KeyContext = core.KeyContext;
 pub const KeyBinding = core.KeyBinding;
 pub const Keymap = core.Keymap;
+pub const Listener = core.Listener;
+pub const WindowHandle = core.app.WindowHandle;
 
-pub const image = @import("image/image.zig");
+/// Windows, the element protocol, views, focus, paint API (docs/elements.md).
+pub const window = @import("window/window.zig");
+pub const Window = window.Window;
+pub const WindowOptions = window.WindowOptions;
+pub const WindowId = window.WindowId;
+pub const Hitbox = window.Hitbox;
+pub const HitboxBehavior = window.HitboxBehavior;
+pub const ContentMask = window.ContentMask;
+pub const EdgeFade = window.EdgeFade;
+pub const DispatchPhase = window.DispatchPhase;
+pub const AnyElement = window.element.AnyElement;
+pub const ElementId = window.element.ElementId;
+pub const GlobalElementId = window.element.GlobalElementId;
+pub const LayoutId = window.element.LayoutId;
+pub const AvailableSpace = window.element.AvailableSpace;
+pub const intoAnyElement = window.element.intoAnyElement;
+pub const empty = window.element.empty;
+pub const AnyView = window.view.AnyView;
+pub const FocusHandle = window.focus_mod.FocusHandle;
+pub const events = @import("window/events.zig");
+pub const ClickEvent = events.ClickEvent;
+pub const DragMoveEvent = events.DragMoveEvent;
+pub const RenderImage = image.RenderImage;
+pub const ImageSource = image.ImageSource;
+/// App-owned image cache / SVG renderer glue (`setAssetSource`, `evict`).
+pub const images = window.image;
+pub const ElementInputHandler = window.input_handler.ElementInputHandler;
+pub const PaintQuad = window.paint_mod.PaintQuad;
+pub const fill = window.paint_mod.fill;
+pub const outline = window.paint_mod.outline;
+pub const quad = window.paint_mod.quad;
+/// `std.fmt.allocPrint` into the frame arena (valid until the frame is presented).
+pub const fmt = window.arena_mod.fmt;
+
+/// Built-in elements: div, text, canvas, deferred, anchored, img, svg.
+pub const elements = @import("elements/mod.zig");
+pub const div = elements.div;
+pub const Div = elements.Div;
+pub const StatefulDiv = elements.StatefulDiv;
+pub const ScrollHandle = elements.ScrollHandle;
+pub const StyledText = elements.StyledText;
+pub const InteractiveText = elements.InteractiveText;
+pub const Highlight = elements.Highlight;
+pub const styledText = elements.styledText;
+pub const canvas = elements.canvas;
+pub const deferred = elements.deferred;
+pub const anchored = elements.anchored;
+pub const img = elements.img;
+pub const svg = elements.svg;
 
 test {
     @import("std").testing.refAllDecls(@This());
+    _ = @import("window/tests.zig");
 }

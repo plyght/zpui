@@ -8,8 +8,8 @@
 //! what to keep pending (arming a `PendingInput.timeout_ns` timer when needed) and which
 //! keystrokes to replay because a longer binding did not materialize.
 //!
-//! Listener contexts and KeyContext strings are borrowed (frame arena); the tree only owns
-//! its node arrays.
+//! Listener captures are stored inline; KeyContext strings are borrowed (frame arena); the
+//! tree only owns its node arrays.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -46,22 +46,25 @@ pub const DispatchPhase = enum {
     bubble,
 };
 
-/// `window` is `*Window` once the window phase exists.
+/// Inline captures carried by every listener record (see window/callback.zig).
+pub const Captures = @import("../window/callback.zig").Captures;
+
+/// `window` is the `*Window` dispatching the event; `l.cap` holds the listener's captures.
 pub const ActionListener = struct {
     action_type: TypeId,
-    ctx: ?*anyopaque = null,
-    func: *const fn (ctx: ?*anyopaque, action: *const AnyAction, phase: DispatchPhase, window: ?*anyopaque, app: *App) void,
+    func: *const fn (l: *const ActionListener, action: *const AnyAction, phase: DispatchPhase, window: ?*anyopaque, app: *App) void,
+    cap: Captures = .{},
 };
 
-/// Raw key down/up listener. `event` points at a `input.KeyDownEvent` or `input.KeyUpEvent`.
+/// Raw key down/up listener. `event` points at a `window.dispatch.KeyEvent`.
 pub const KeyListener = struct {
-    ctx: ?*anyopaque = null,
-    func: *const fn (ctx: ?*anyopaque, event: *const anyopaque, phase: DispatchPhase, window: ?*anyopaque, app: *App) void,
+    func: *const fn (l: *const KeyListener, event: *const anyopaque, phase: DispatchPhase, window: ?*anyopaque, app: *App) void,
+    cap: Captures = .{},
 };
 
 pub const ModifiersChangedListener = struct {
-    ctx: ?*anyopaque = null,
-    func: *const fn (ctx: ?*anyopaque, event: *const anyopaque, window: ?*anyopaque, app: *App) void,
+    func: *const fn (l: *const ModifiersChangedListener, event: *const anyopaque, window: ?*anyopaque, app: *App) void,
+    cap: Captures = .{},
 };
 
 pub const DispatchNode = struct {
@@ -529,9 +532,17 @@ pub const PendingInput = struct {
     }
 
     /// Replace the pending keystrokes with copies of `keys`.
+    /// `keys` may alias the current pending keystrokes (copies are made before freeing).
     pub fn set(self: *PendingInput, gpa: Allocator, keys: []const Keystroke) Allocator.Error!void {
+        var fresh: std.ArrayList(Keystroke) = .empty;
+        errdefer {
+            for (fresh.items) |k| keymap_mod.freeKeystroke(gpa, k);
+            fresh.deinit(gpa);
+        }
+        for (keys) |k| try fresh.append(gpa, try keymap_mod.dupeKeystroke(gpa, k));
         self.freeKeys(gpa);
-        for (keys) |k| try self.keystrokes.append(gpa, try keymap_mod.dupeKeystroke(gpa, k));
+        self.keystrokes.deinit(gpa);
+        self.keystrokes = fresh;
     }
 
     fn freeKeys(self: *PendingInput, gpa: Allocator) void {
@@ -610,7 +621,7 @@ const Fixture = struct {
     }
 };
 
-fn noopAction(_: ?*anyopaque, _: *const AnyAction, _: DispatchPhase, _: ?*anyopaque, _: *App) void {}
+fn noopAction(_: *const ActionListener, _: *const AnyAction, _: DispatchPhase, _: ?*anyopaque, _: *App) void {}
 
 test "DispatchTree: paths, focus containment, context stacks" {
     const f = try Fixture.create(&.{});

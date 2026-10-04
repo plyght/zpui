@@ -315,7 +315,8 @@ fn TaskImpl(comptime J: type) type {
         };
 
         fn fromHeader(h: *Header) *Self {
-            return @fieldParentPtr("header", h);
+            // Self may be more aligned than Header (over-aligned job fields).
+            return @alignCast(@fieldParentPtr("header", h));
         }
 
         fn resultPtr(h: *Header) *anyopaque {
@@ -455,4 +456,26 @@ test "background phase runs on another thread, finish on the caller" {
     try std.testing.expectEqual(@as(u32, 7), task.result().?.*);
     task.detach();
     try std.testing.expectEqual(@as(usize, 0), exec.live_count);
+}
+
+test "jobs with over-aligned fields" {
+    const Job = struct {
+        v: @Vector(4, u32) align(32) = @splat(7),
+        out: *u32,
+        pub fn run(self: *@This()) u32 {
+            return self.v[0];
+        }
+        pub fn finish(self: *@This(), r: u32) void {
+            self.out.* = r;
+        }
+    };
+    const tp = try @import("test_platform.zig").TestPlatform.create(std.testing.allocator);
+    defer tp.destroy();
+    var ex = Executor.init(std.testing.allocator, tp.platform().dispatcher());
+    defer ex.deinit();
+    var out: u32 = 0;
+    var t = try ex.background().spawn(Job{ .out = &out });
+    t.detach();
+    tp.runUntilParked();
+    try std.testing.expectEqual(@as(u32, 7), out);
 }

@@ -45,7 +45,8 @@
 //! * `deferUpdate(f)`           f: fn(*T, *Context(T)) void
 //! * `spawn(job, f)`            f: fn(*T, R, *Context(T)) void   (or without R if void)
 //! * `timer(ns, f)`             f: fn(*T, *Context(T)) void
-//! * `listener(f)`              f: fn(*T, *const Event, *Context(T)) void
+//! * `listener(f)`              f: fn(*T, *const Event, [*Window,] *Context(T)) void
+//! * `listenerWith(data, f)`    f: fn(*T, Data, *const Event, [*Window,] *Context(T)) void
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -60,6 +61,9 @@ const Entity = entity_mod.Entity;
 const WeakEntity = entity_mod.WeakEntity;
 const executor = @import("executor.zig");
 const Task = executor.Task;
+const window_mod = @import("../window/window.zig");
+const Window = window_mod.Window;
+const FocusHandle = @import("../window/focus.zig").FocusHandle;
 
 fn paramCount(comptime f: anytype) usize {
     return @typeInfo(@TypeOf(f)).@"fn".param_types.len;
@@ -283,33 +287,152 @@ pub fn Context(comptime T: type) type {
         // ---- element listeners -----------------------------------------------------------
 
         /// A type-erased listener bound to this entity (gpui `cx.listener`), for elements:
-        /// `div.onClick(cx.listener(Self.onClick))` with `fn onClick(*Self, *const ClickEvent, *Context(Self)) void`.
-        /// The window phase adds a variant that also receives `*Window`.
-        pub fn listener(self: *const Self, comptime f: anytype) Listener(EventOf(f)) {
-            const Ev = EventOf(f);
+        /// `div().onClick(cx.listener(Self.onClick))` with either
+        /// `fn onClick(*Self, *const ClickEvent, *Window, *Context(Self)) void` or the
+        /// window-less `fn onClick(*Self, *const ClickEvent, *Context(Self)) void`.
+        /// The entity is held weakly: once released, the listener does nothing.
+        pub fn listener(self: *const Self, comptime f: anytype) Listener(ParamChild(f, 1)) {
+            const Ev = ParamChild(f, 1);
+            const with_window = comptime paramCount(f) == 4;
             const Gen = struct {
-                fn call(id: EntityId, event: *const Ev, a: *App) void {
-                    const this: WeakEntity(T) = .{ .id = id };
-                    _ = this.update(a, f, .{event});
+                fn call(data: *const ListenerData, event: *const Ev, window: ?*Window, a: *App) void {
+                    const this: WeakEntity(T) = .{ .id = .fromKey(data.entity) };
+                    if (with_window)
+                        _ = this.update(a, f, .{ event, window orelse @panic("listener needs a window") })
+                    else
+                        _ = this.update(a, f, .{event});
                 }
             };
-            return .{ .entity_id = self.entity_id, .func = Gen.call };
+            return .{ .func = Gen.call, .data = .{ .entity = self.entity_id.toKey() } };
         }
 
-        fn EventOf(comptime f: anytype) type {
-            return @typeInfo(@typeInfo(@TypeOf(f)).@"fn".param_types[1].?).pointer.child;
+        /// Like `listener`, with up to 24 bytes of captured data passed before the event:
+        /// `cx.listenerWith(ix, Self.onSelect)` for
+        /// `fn onSelect(*Self, ix: usize, *const ClickEvent, *Window, *Context(Self)) void`.
+        pub fn listenerWith(self: *const Self, data: anytype, comptime f: anytype) Listener(ParamChild(f, 2)) {
+            const D = @TypeOf(data);
+            const Ev = ParamChild(f, 2);
+            const with_window = comptime paramCount(f) == 5;
+            const Gen = struct {
+                fn call(ld: *const ListenerData, event: *const Ev, window: ?*Window, a: *App) void {
+                    const this: WeakEntity(T) = .{ .id = .fromKey(ld.entity) };
+                    const d = ld.get(D);
+                    if (with_window)
+                        _ = this.update(a, f, .{ d, event, window orelse @panic("listener needs a window") })
+                    else
+                        _ = this.update(a, f, .{ d, event });
+                }
+            };
+            var ld: ListenerData = .{ .entity = self.entity_id.toKey() };
+            ld.set(data);
+            return .{ .func = Gen.call, .data = ld };
+        }
+
+        // ---- window integration ------------------------------------------------------------
+
+        /// A new focus handle (gpui `cx.focus_handle()`); `release` it in `deinit`.
+        pub fn focusHandle(self: *Self) FocusHandle {
+            return self.app.focusHandle();
+        }
+
+        /// Stop the current mouse/key/action event from reaching further listeners.
+        pub fn stopPropagation(self: *Self) void {
+            self.app.propagate_event = false;
+        }
+
+        /// Let an action bubble on after this listener (bubble-phase action listeners stop
+        /// propagation by default, as in gpui).
+        pub fn propagate(self: *Self) void {
+            self.app.propagate_event = true;
+        }
+
+        /// Call `f(self, window, cx)` when `handle` becomes focused in `window`
+        /// (gpui `cx.on_focus`). Variants: `onBlur`, `onFocusIn`, `onFocusOut`.
+        pub fn onFocus(self: *Self, handle: FocusHandle, window: *Window, comptime f: fn (*T, *Window, *Self) void) Allocator.Error!Subscription {
+            return window.addFocusListener(.focus, handle.id, self.entity_id, focusThunk(f));
+        }
+        pub fn onBlur(self: *Self, handle: FocusHandle, window: *Window, comptime f: fn (*T, *Window, *Self) void) Allocator.Error!Subscription {
+            return window.addFocusListener(.blur, handle.id, self.entity_id, focusThunk(f));
+        }
+        pub fn onFocusIn(self: *Self, handle: FocusHandle, window: *Window, comptime f: fn (*T, *Window, *Self) void) Allocator.Error!Subscription {
+            return window.addFocusListener(.focus_in, handle.id, self.entity_id, focusThunk(f));
+        }
+        pub fn onFocusOut(self: *Self, handle: FocusHandle, window: *Window, comptime f: fn (*T, *Window, *Self) void) Allocator.Error!Subscription {
+            return window.addFocusListener(.focus_out, handle.id, self.entity_id, focusThunk(f));
+        }
+
+        fn focusThunk(comptime f: fn (*T, *Window, *Self) void) *const fn (EntityId, *Window, *App) bool {
+            return struct {
+                fn call(id: EntityId, window: *Window, a: *App) bool {
+                    const this: WeakEntity(T) = .{ .id = id };
+                    return this.update(a, f, .{window}) != null;
+                }
+            }.call;
+        }
+
+        fn ParamChild(comptime f: anytype, comptime i: usize) type {
+            return @typeInfo(@typeInfo(@TypeOf(f)).@"fn".param_types[i].?).pointer.child;
         }
     };
 }
 
-/// A listener produced by `Context(T).listener`. Calling it updates the bound entity if alive.
+/// Inline data of a `Listener`: the bound entity plus up to 24 bytes of captures.
+pub const ListenerData = extern struct {
+    entity: u64 = 0,
+    extra: [3]u64 = .{ 0, 0, 0 },
+
+    pub fn set(self: *ListenerData, value: anytype) void {
+        const D = @TypeOf(value);
+        if (@sizeOf(D) > @sizeOf([3]u64)) @compileError("listener data " ++ @typeName(D) ++ " exceeds 24 bytes; capture an index or pointer instead");
+        if (@alignOf(D) > 8) @compileError("listener data alignment must be <= 8");
+        if (@sizeOf(D) > 0) @as(*D, @ptrCast(&self.extra)).* = value;
+    }
+
+    pub fn get(self: *const ListenerData, comptime D: type) D {
+        if (@sizeOf(D) == 0) return undefined;
+        return @as(*const D, @ptrCast(&self.extra)).*;
+    }
+};
+
+/// A type-erased event callback (gpui's boxed `Fn(&Event, &mut Window, &mut App)`): a function
+/// pointer plus inline captures, so it is a plain copyable value. Produced by
+/// `Context(T).listener` / `listenerWith`, or `Listener(E).init(fn)` for free functions
+/// `fn(*const E, *Window, *App) void` / `fn(*const E, *App) void`.
 pub fn Listener(comptime Event: type) type {
     return struct {
-        entity_id: EntityId,
-        func: *const fn (id: EntityId, event: *const Event, app: *App) void,
+        const Self = @This();
+        pub const EventType = Event;
 
-        pub fn call(self: @This(), event: *const Event, app: *App) void {
-            self.func(self.entity_id, event, app);
+        func: *const fn (data: *const ListenerData, event: *const Event, window: ?*Window, app: *App) void,
+        data: ListenerData = .{},
+
+        /// Invoke without a window (only for listeners that do not take one).
+        pub fn call(self: Self, event: *const Event, app: *App) void {
+            self.func(&self.data, event, null, app);
+        }
+
+        pub fn callIn(self: *const Self, event: *const Event, window: *Window, app: *App) void {
+            self.func(&self.data, event, window, app);
+        }
+
+        /// Accept a `Listener(Event)` or a free function (see type docs).
+        pub fn init(x: anytype) Self {
+            const X = @TypeOf(x);
+            if (X == Self) return x;
+            if (@typeInfo(X) == .@"fn") return from(x);
+            if (@typeInfo(X) == .pointer and @typeInfo(@typeInfo(X).pointer.child) == .@"fn") return from(x.*);
+            @compileError("expected a Listener(" ++ @typeName(Event) ++ ") (from cx.listener) or a fn(*const " ++
+                @typeName(Event) ++ ", *Window, *App) void, got " ++ @typeName(X));
+        }
+
+        pub fn from(comptime f: anytype) Self {
+            const n = comptime paramCount(f);
+            const Gen = struct {
+                fn call(_: *const ListenerData, event: *const Event, window: ?*Window, a: *App) void {
+                    if (n == 3) f(event, window orelse @panic("listener needs a window"), a) else f(event, a);
+                }
+            };
+            return .{ .func = Gen.call };
         }
     };
 }

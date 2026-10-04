@@ -178,13 +178,30 @@ new pending input (+ `pending_has_binding`), keystrokes to replay first, and the
 The window keeps a `PendingInput` (owns keystroke copies, focus, timer); when the pending prefix
 is itself bound (or text input would consume it) it arms a `PendingInput.timeout_ns` (1 s)
 foreground timer whose job calls `flushDispatch` and replays. See the
-"PendingInput times out after 1s" test for the reference flow. Listener signatures take
-`window: ?*anyopaque` until `Window` exists.
+"PendingInput times out after 1s" test for the reference flow; the real flow lives in
+`src/window/dispatch.zig`.
 
-## Not yet done (window phase)
+## Window integration
 
-Windows registry + `updateWindow` lease, `notify` → window invalidation and
-`refresh_windows`, accessed-entity tracking for cached views (`EntityMap.track_accessed` /
-`accessed` are in place), focus handles, `Context` window-aware variants (`observe_in`,
-`subscribe_in`, `spawn_in`, `listener` with `*Window`), action dispatch phases over the tree,
-and wiring platform window callbacks into the App (`App.run(ctx, on_launch)` already enters the platform loop).
+Implemented in `src/window/` (see [elements.md](elements.md)); the core pieces it relies on:
+
+* `App.windows` registry (`openWindow(options, V, init, args)` → `WindowHandle(V)`,
+  `windowById`, `updateWindow`), closed windows are destroyed when effects settle; under
+  `initTest`, dirty windows are drawn (and presented to a `TestWindow`) at the same point.
+* `notify` → window invalidation: each draw records the entities read/updated
+  (`EntityMap.track_accessed`), and notifying one of them marks the window (and the view's
+  ancestors) dirty and requests a frame. `refresh_windows` redraws everything.
+* `FocusMap` / `FocusHandle` (`app.focusHandle()`, `cx.focusHandle()`), window focus
+  listeners (`cx.onFocus/onBlur/onFocusIn/onFocusOut`, stored in `App.focus_listeners`).
+* `cx.listener(f)` accepts `fn(*T, *const E, *Window, *Context(T))` or the window-less form;
+  `cx.listenerWith(data, f)` captures up to 24 bytes. `Listener(E)` is a plain value
+  (function pointer + inline `ListenerData`), also constructible from free functions.
+* DispatchTree listeners carry inline `Captures` (`window/callback.zig`) and receive the
+  `*Window` (as `?*anyopaque`); the window builds the tree during prepaint/paint and runs
+  key/action dispatch (`window/dispatch.zig`), including the `PendingInput` timeout flow.
+* `App.propagate_event` (`cx.stopPropagation()` / `cx.propagate()`), global action listeners
+  (`app.onAction`), `App.active_drag` (`hasActiveDrag`, `activeDrag(T)`, `cancelDrag`),
+  the shared `TextSystem` (`app.textSystem()`, `app.addFont`) and `image_services`.
+
+Not yet: window-scoped `observe_in` / `subscribe_in` / `spawn_in` variants (use the entity
+forms and look the window up with `app.windowById`).

@@ -876,7 +876,9 @@ test "test platform: clipboard, displays, quit" {
     try testing.expectEqualStrings("hello", got);
     var displays: [2]@import("../platform/platform.zig").Display = undefined;
     try testing.expectEqual(@as(usize, 1), p.vtable.displays(p.ptr, &displays));
-    try testing.expectError(error.Unsupported, p.openWindow(.{ .bounds = displays[0].bounds }));
+    const w = try p.openWindow(.{ .bounds = displays[0].bounds });
+    try testing.expectEqual(@as(f32, 1920), w.contentSize().width);
+    w.close();
     app.quit();
     try testing.expect(app.test_platform.?.quit_requested);
 }

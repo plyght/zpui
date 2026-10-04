@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
     addZeronMarkdownDiff(b, target, optimize, test_step);
     addImageSupport(b, target, optimize, zpui);
     addZeronModel(b, target, optimize, zpui, test_step);
+    addHelloExample(b, target, optimize, zpui);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -483,4 +484,33 @@ fn addZeronModel(
     model_step.dependOn(&run_model.step);
     model_step.dependOn(&run_actions.step);
     test_step.dependOn(model_step);
+}
+
+/// `zig build hello`: the gpui-style Counter example (examples/hello.zig) on the Linux
+/// backend, with Geist fonts and icons from `zeron_assets`.
+fn addHelloExample(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    if (target.result.os.tag != .linux) return;
+    const assets = b.modules.get("zeron_assets") orelse return;
+    const exe = b.addExecutable(.{
+        .name = "hello",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/hello.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zpui", .module = zpui },
+                .{ .name = "zeron_assets", .module = assets },
+            },
+        }),
+    });
+    b.installArtifact(exe);
+    const run = b.addRunArtifact(exe);
+    run.addPassthruArgs();
+    const step = b.step("hello", "Run the zpui hello example (Counter view)");
+    step.dependOn(&run.step);
 }

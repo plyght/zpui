@@ -62,6 +62,13 @@ const Context = @import("context.zig").Context;
 const keymap_mod = @import("keymap.zig");
 const action_mod = @import("action.zig");
 const TestPlatform = @import("test_platform.zig").TestPlatform;
+const window_mod = @import("../window/window.zig");
+const Window = window_mod.Window;
+const WindowId = window_mod.WindowId;
+const focus_mod = @import("../window/focus.zig");
+const text_mod = @import("../text/text.zig");
+const geometry = @import("../geometry.zig");
+const DispatchPhase = @import("dispatch_tree.zig").DispatchPhase;
 
 // ---------------------------------------------------------------------------------------
 // Erased callbacks. gpui boxes closures; zpui stores a function pointer plus small inline
@@ -205,7 +212,25 @@ pub const App = struct {
     flushing_effects: bool = false,
     shutting_down: bool = false,
     quit_requested: bool = false,
-    // Window registry: added in the window phase (gpui `windows: SlotMap<WindowId, Option<Box<Window>>>`).
+
+    // ---- window phase -------------------------------------------------------------------
+    /// Open windows (gpui `windows`); slots are reused, ids carry a generation.
+    windows: std.ArrayList(?*Window) = .empty,
+    window_generation: u32 = 0,
+    /// Quit the app once its last window has been closed.
+    quit_when_last_window_closes: bool = false,
+    focus_map: focus_mod.FocusMap,
+    /// `cx.onFocus` & co. (keyed by focus id; entries name their window).
+    focus_listeners: SubscriberSet(window_mod.FocusListener),
+    /// Cleared by `stopPropagation` while a mouse/key/action event is dispatched.
+    propagate_event: bool = true,
+    /// The drag in progress, if any (gpui `active_drag`).
+    active_drag: ?ActiveDrag = null,
+    /// Shared font/metrics caches; created on first use (gpui `text_system`).
+    text_system: ?*text_mod.TextSystem = null,
+    global_action_listeners: std.AutoHashMapUnmanaged(u64, std.ArrayList(GlobalActionListener)) = .empty,
+    /// Image cache + SVG renderer used by `img`/`svg` (window/image.zig); created on first use.
+    image_services: ?*@import("../window/image.zig").ImageServices = null,
 
     /// Create an App that owns `plat` (deinit'ed with the App).
     pub fn init(gpa: Allocator, plat: platform.Platform) Allocator.Error!*App {
@@ -223,6 +248,8 @@ pub const App = struct {
             .release_listeners = .init(gpa),
             .global_observers = .init(gpa),
             .new_entity_observers = .init(gpa),
+            .focus_map = .init(gpa),
+            .focus_listeners = .init(gpa),
         };
         return app;
     }
@@ -241,7 +268,16 @@ pub const App = struct {
         app.shutting_down = true;
         app.executor.deinit();
 
-        // Globals first: they may own entity handles.
+        // Windows first: they own root views, element states and focus handles.
+        for (app.windows.items) |*slot| if (slot.*) |w| {
+            slot.* = null;
+            w.destroy();
+        };
+        app.windows.deinit(gpa);
+        app.cancelDrag();
+        @import("../window/image.zig").destroyServices(app);
+
+        // Globals next: they may own entity handles.
         var git = app.globals.valueIterator();
         while (git.next()) |g| g.vtable.destroy(g.ptr, app);
         app.globals.deinit(gpa);
@@ -268,6 +304,15 @@ pub const App = struct {
         app.new_entity_observers.deinit();
         app.keymap.deinit();
         app.actions.deinit();
+        app.focus_map.deinit();
+        app.focus_listeners.deinit();
+        var gal = app.global_action_listeners.valueIterator();
+        while (gal.next()) |l| l.deinit(gpa);
+        app.global_action_listeners.deinit(gpa);
+        if (app.text_system) |ts| {
+            ts.deinit();
+            gpa.destroy(ts);
+        }
         app.entities.deinit();
         app.platform.deinit();
         gpa.destroy(app);
@@ -357,7 +402,7 @@ pub const App = struct {
                 switch (effect) {
                     .notify => |id| app.applyNotify(id),
                     .emit => |e| app.applyEmit(e.emitter, e.event_type, e.event),
-                    .refresh_windows => {}, // window phase
+                    .refresh_windows => for (app.windows.items) |slot| if (slot) |w| w.refresh(),
                     .notify_global_observers => |k| app.applyNotifyGlobal(k),
                     .deferred => |d| {
                         var cb = d;
@@ -372,7 +417,9 @@ pub const App = struct {
                     .entity_created => |e| app.applyEntityCreated(e),
                 }
             } else if (app.pending_effects.len == 0) {
-                // (window phase: draw dirty windows in tests here, like gpui)
+                app.removeClosedWindows();
+                // Like gpui's test mode: draw dirty windows as soon as effects settle.
+                if (app.test_platform != null and app.drawDirtyWindows() and app.pending_effects.len > 0) continue;
                 _ = app.event_arena.reset(.retain_capacity);
                 break;
             }
@@ -482,14 +529,19 @@ pub const App = struct {
 
     /// Mark an entity as changed; its observers run at the end of the update.
     pub fn notify(app: *App, id: EntityId) void {
-        // Window phase: invalidate windows that rendered `id` (gpui `window_invalidators_by_entity`).
         app.startUpdate();
         defer app.finishUpdate();
+        // Windows that rendered `id` redraw (gpui `window_invalidators_by_entity`).
+        for (app.windows.items) |slot| if (slot) |w| {
+            if (w.accessed_entities.contains(id)) _ = w.invalidateView(id);
+        };
         app.pushEffect(.{ .notify = id });
     }
 
-    /// Schedule all windows to be redrawn (no-op until the window phase).
+    /// Schedule all windows to be redrawn (gpui `refresh_windows`).
     pub fn refreshWindows(app: *App) void {
+        app.startUpdate();
+        defer app.finishUpdate();
         app.pushEffect(.refresh_windows);
     }
 
@@ -703,12 +755,229 @@ pub const App = struct {
         return ins.subscription;
     }
 
+    // ---- windows -------------------------------------------------------------------------
+
+    /// Open a window whose root view is built by `build(args..., window, cx: *Context(V))`
+    /// (returning `V` or `!V`), like gpui's `cx.open_window(options, |window, cx| cx.new(...))`.
+    pub fn openWindow(app: *App, options: window_mod.WindowOptions, comptime V: type, comptime build: anytype, args: anytype) !WindowHandle(V) {
+        app.startUpdate();
+        defer app.finishUpdate();
+        const pw = try app.platform.openWindow(options);
+        const index: usize = for (app.windows.items, 0..) |slot, i| {
+            if (slot == null) break i;
+        } else blk: {
+            try app.windows.append(app.gpa, null);
+            break :blk app.windows.items.len - 1;
+        };
+        app.window_generation +%= 1;
+        const id: WindowId = @enumFromInt((@as(u64, app.window_generation) << 32) | index);
+        const w = Window.create(app, id, pw) catch |err| {
+            pw.setCallbacks(.{});
+            pw.close();
+            return err;
+        };
+        app.windows.items[index] = w;
+        errdefer {
+            app.windows.items[index] = null;
+            w.destroy();
+        }
+        const root = try app.newWith(V, build, args ++ .{w});
+        w.root = window_mod.view.AnyView.fromEntity(root);
+        if (options.titlebar) |tb| if (tb.title.len > 0) w.setTitle(tb.title);
+        w.background_appearance = options.background;
+        w.platform_window.requestFrame();
+        return .{ .id = id };
+    }
+
+    /// The window with `id`, if it is still open.
+    pub fn windowById(app: *App, id: WindowId) ?*Window {
+        const i = id.index();
+        if (i >= app.windows.items.len) return null;
+        const w = app.windows.items[i] orelse return null;
+        if (w.id != id or w.removed) return null;
+        return w;
+    }
+
+    /// Run `f(ctx, window, app)` against window `id` inside an update; null if it is gone.
+    pub fn updateWindow(app: *App, id: WindowId, ctx: anytype, comptime f: anytype) ?@typeInfo(@TypeOf(f)).@"fn".return_type.? {
+        app.startUpdate();
+        defer app.finishUpdate();
+        const w = app.windowById(id) orelse return null;
+        return f(ctx, w, app);
+    }
+
+    pub fn windowCount(app: *App) usize {
+        var n: usize = 0;
+        for (app.windows.items) |slot| if (slot) |w| {
+            n += @intFromBool(!w.removed);
+        };
+        return n;
+    }
+
+    /// Closed windows are destroyed from a main-thread task, never from inside a platform
+    /// callback (the platform window may still be on the stack, as in gpui).
+    fn removeClosedWindows(app: *App) void {
+        for (app.windows.items) |slot| if (slot) |w| if (w.removed and !w.destroy_scheduled) {
+            w.destroy_scheduled = true;
+            var task = app.foregroundExecutor().spawn(DestroyWindow{ .app = app, .id = w.id }) catch {
+                w.destroy_scheduled = false;
+                continue;
+            };
+            task.detach();
+        };
+    }
+
+    const DestroyWindow = struct {
+        app: *App,
+        id: WindowId,
+        pub fn finish(self: *DestroyWindow) void {
+            const i = self.id.index();
+            if (i >= self.app.windows.items.len) return;
+            const w = self.app.windows.items[i] orelse return;
+            if (w.id != self.id) return;
+            self.app.windows.items[i] = null;
+            w.destroy();
+            if (self.app.quit_when_last_window_closes and self.app.windowCount() == 0) self.app.quit();
+        }
+    };
+
+    /// Draw and present every dirty window (test mode). Returns true if any was drawn.
+    pub fn drawDirtyWindows(app: *App) bool {
+        var any = false;
+        for (app.windows.items) |slot| if (slot) |w| if (!w.removed and w.dirty) {
+            w.drawAndPresent();
+            any = true;
+        };
+        return any;
+    }
+
+    /// The shared text system (fonts, metrics, wrapper pool).
+    pub fn textSystem(app: *App) *text_mod.TextSystem {
+        if (app.text_system) |ts| return ts;
+        const ts = app.gpa.create(text_mod.TextSystem) catch @panic("OOM");
+        ts.* = .init(app.gpa, app.platform.textSystem());
+        app.text_system = ts;
+        return ts;
+    }
+
+    /// Register font data (TTF/OTF bytes that outlive the App), e.g. `@embedFile("Geist.ttf")`.
+    pub fn addFont(app: *App, bytes: []const u8) !void {
+        try app.textSystem().addFont(bytes);
+    }
+
+    /// A new focus handle (gpui `focus_handle`); `release` it when done.
+    pub fn focusHandle(app: *App) focus_mod.FocusHandle {
+        return app.focus_map.create();
+    }
+
+    // ---- global actions and drags ----------------------------------------------------------
+
+    /// Handle action `A` wherever it was dispatched, after window listeners declined it
+    /// (gpui `cx.on_action`): `f(ctx, action, app)`. Listeners live as long as the App.
+    pub fn onAction(app: *App, comptime A: type, ctx: anytype, comptime f: fn (@TypeOf(ctx), *const A, *App) void) Allocator.Error!void {
+        const C = @TypeOf(ctx);
+        const Gen = struct {
+            fn call(l: *const GlobalActionListener, action: *const action_mod.AnyAction, phase: DispatchPhase, a: *App) void {
+                if (phase != .bubble) return;
+                f(unwrapCtx(C, &l.cap), action.downcast(A).?, a);
+            }
+        };
+        const gop = try app.global_action_listeners.getOrPut(app.gpa, type_id.key(typeId(A)));
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(app.gpa, .{ .func = Gen.call, .cap = wrapCtx(ctx) });
+    }
+
+    pub fn dispatchGlobalAction(app: *App, action: *const action_mod.AnyAction, phase: DispatchPhase) void {
+        const list = app.global_action_listeners.get(type_id.key(action.type_id)) orelse return;
+        const items = app.gpa.dupe(GlobalActionListener, list.items) catch @panic("OOM");
+        defer app.gpa.free(items);
+        if (phase == .capture) {
+            for (items) |*l| {
+                l.func(l, action, phase, app);
+                if (!app.propagate_event) return;
+            }
+        } else {
+            var i = items.len;
+            while (i > 0) {
+                i -= 1;
+                app.propagate_event = false;
+                items[i].func(&items[i], action, phase, app);
+                if (!app.propagate_event) return;
+            }
+        }
+    }
+
+    pub fn hasActiveDrag(app: *const App) bool {
+        return app.active_drag != null;
+    }
+
+    /// The dragged value if a drag of type `T` is in progress.
+    pub fn activeDrag(app: *const App, comptime T: type) ?*const T {
+        const d = app.active_drag orelse return null;
+        if (d.type_id != typeId(T)) return null;
+        return @ptrCast(@alignCast(d.value));
+    }
+
+    /// End the current drag (dropping its payload and preview view).
+    pub fn cancelDrag(app: *App) void {
+        const d = app.active_drag orelse return;
+        app.active_drag = null;
+        app.gpa.free(d.storage);
+        d.view.entity.release(app);
+    }
+
     // ---- keymap ----------------------------------------------------------------------
 
     /// Add bindings, e.g. `try app.bindKeys(&.{ .init("cmd-z", Undo{}, "Editor") })`.
     pub fn bindKeys(app: *App, specs: []const keymap_mod.BindingSpec) !void {
         try app.keymap.addSpecs(specs);
     }
+};
+
+/// Typed handle to a window whose root view is a `V` (gpui `WindowHandle<V>`).
+pub fn WindowHandle(comptime V: type) type {
+    return struct {
+        const Self = @This();
+        pub const RootView = V;
+
+        id: WindowId,
+
+        /// Run `f(root: *V, args..., window, cx: *Context(V))`; null if the window is gone.
+        pub fn update(self: Self, app: *App, comptime f: anytype, args: anytype) ?@typeInfo(@TypeOf(f)).@"fn".return_type.? {
+            app.startUpdate();
+            defer app.finishUpdate();
+            const w = app.windowById(self.id) orelse return null;
+            const root = w.root.?.entity.downcast(V).?;
+            return root.update(app, f, args ++ .{w});
+        }
+
+        pub fn window(self: Self, app: *App) ?*Window {
+            return app.windowById(self.id);
+        }
+
+        /// The root view entity (borrowed).
+        pub fn rootView(self: Self, app: *App) ?Entity(V) {
+            const w = app.windowById(self.id) orelse return null;
+            return w.root.?.entity.downcast(V);
+        }
+    };
+}
+
+/// A drag in progress (gpui `AnyDrag`): a boxed payload plus the preview view.
+pub const ActiveDrag = struct {
+    value: *anyopaque,
+    /// Owns the payload bytes `value` points into (allocated with the App allocator).
+    storage: []align(16) u8,
+    type_id: TypeId,
+    /// Owned strong reference to the preview view.
+    view: window_mod.view.AnyView,
+    cursor_offset: geometry.Point(geometry.Pixels),
+    cursor_style: ?platform.CursorStyle = null,
+};
+
+pub const GlobalActionListener = struct {
+    func: *const fn (l: *const GlobalActionListener, action: *const action_mod.AnyAction, phase: DispatchPhase, app: *App) void,
+    cap: Captures = .{},
 };
 
 fn isErrorUnion(comptime T: type) bool {
