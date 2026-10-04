@@ -1,0 +1,18 @@
+<html>
+<body onload="init()">
+<style>
+  @media screen { .a { color: #fff; } }
+</style>
+<script type="module">
+  import { css, html } from "./lit.js";
+  const styles = css`
+    .card { padding: 4px; color: red; }
+  `;
+  const tpl = html`<div class="${styles}">${name}</div>`;
+  function init(param) { let local = param; return local + /x+/.test(param); }
+</script>
+<p>Unicode: héllo 世界 🎉</p>
+<!-- trailing comment
+spanning lines -->
+</body>
+</html>

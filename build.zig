@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) void {
     addLinuxText(b, target, optimize, zpui);
     addLinuxPlatform(b, target, optimize, zpui);
     addMacPlatform(b, target, optimize, zpui);
+    addZeronSyntax(b, target, optimize, test_step);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -349,4 +350,26 @@ fn addMacPlatform(
     run.addPassthruArgs();
     const step = b.step("mac-window", "Run the macOS window demo (ZPUI_SMOKE_FRAMES=N for the CI smoke test)");
     step.dependOn(&run.step);
+}
+
+/// zeron syntax highlighting (apps/zeron/src/syntax): the vendored tree-sitter
+/// runtime + grammars (vendor/tree-sitter/tree_sitter_build.zig), the
+/// `zeron_syntax` module, and its tests.
+fn addZeronSyntax(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    test_step: *std.Build.Step,
+) void {
+    const ts = @import("vendor/tree-sitter/tree_sitter_build.zig").add(b, target, optimize);
+    const syntax = b.addModule("zeron_syntax", .{
+        .root_source_file = b.path("apps/zeron/src/syntax/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    ts.addTo(syntax);
+    const run = b.addRunArtifact(b.addTest(.{ .root_module = syntax }));
+    test_step.dependOn(&run.step);
+    b.step("syntax-test", "Run only the zeron_syntax tests").dependOn(&run.step);
 }

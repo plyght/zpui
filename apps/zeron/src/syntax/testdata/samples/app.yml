@@ -1,0 +1,19 @@
+# config
+name: zeron
+version: 1.2
+enabled: true
+empty: ~
+anchors: &base
+  key: "value"
+  other: 'single'
+merged:
+  <<: *base
+list:
+  - one
+  - 2
+  - { a: b, c: [d, e] }
+multi: |
+  line one
+  line two
+---
+!!str tagged: 0x1F

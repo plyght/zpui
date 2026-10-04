@@ -1,0 +1,15 @@
+# workspace manifest
+[package]
+name = "zeron"
+version = "0.1.0"
+edition = 2024
+authors = ["A <a@example.com>"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"], optional = true }
+
+[[bin]]
+path = 'src/main.rs'
+date = 1979-05-27T07:32:00Z
+pi = 3.14
+flag = false
