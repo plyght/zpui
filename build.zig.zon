@@ -1,0 +1,7 @@
+.{
+    .name = .zpui,
+    .version = "0.0.1",
+    .fingerprint = 0x1711a3fb05827a44,
+    .minimum_zig_version = "0.17.0",
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}
