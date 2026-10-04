@@ -14,6 +14,11 @@ const store = @import("store.zig");
 const w = @import("widgets.zig");
 const select = @import("select.zig");
 const view_mod = @import("view.zig");
+const background = @import("../background/root.zig");
+const prompts = @import("file_prompts.zig");
+const motion_mod = @import("motion.zig");
+const fonts_mod = @import("fonts.zig");
+const theme_library = @import("theme_library.zig");
 
 const SettingsView = view_mod.SettingsView;
 const Theme = ui.Theme;
@@ -26,14 +31,14 @@ const Hsla = zpui.Hsla;
 const AppearanceMode = zt.settings.AppearanceMode;
 const UiSettings = model.UiSettings;
 
-const Corners = enum { all, left, right };
+pub const Corners = enum { all, left, right };
 
 fn bar(fraction: f32, tone: Hsla) zpui.Div {
     return div().h(px(5)).w(zpui.relative(fraction)).rounded(px(3)).bg(tone);
 }
 
 /// A tiny shell: sidebar lines + an inset card of lines (`miniature`).
-fn miniature(t: *const Theme, corners: Corners) zpui.Div {
+pub fn miniature(t: *const Theme, corners: Corners) zpui.Div {
     const line = t.text.opacity(0.22);
     const strong = t.text.opacity(0.34);
     const r = px(w.option_card_radius);
@@ -81,8 +86,10 @@ fn accentLabel(sel: zt.AccentSelection) []const u8 {
     };
 }
 
+var active_registry: zt.Registry = zt.registry.builtin;
+
 fn accentSwatch(page: *const Theme, sel: zt.AccentSelection, selected: bool) zpui.Div {
-    const sw = zpui.window.arena_mod.current().create(Theme, zt.Theme.forSelection(&zt.registry.builtin, .{
+    const sw = zpui.window.arena_mod.current().create(Theme, zt.Theme.forSelection(&active_registry, .{
         .appearance = page.appearance,
         .variant_id = page.variant_id,
         .accent = sel,
@@ -111,13 +118,6 @@ fn surfaceHelper(s: zt.SurfacePreference, resolved: zt.SurfaceTreatment) []const
     };
 }
 
-fn reduceMotionHelper(pref: zt.motion.ReduceMotion) []const u8 {
-    return switch (pref) {
-        .system => "Following the system, which currently allows motion.",
-        .on => "Animations skip straight to their final state.",
-        .off => "Animations play even if the system asks for less motion.",
-    };
-}
 
 fn compactAction(t: *const Theme, label: []const u8, id: []const u8) zpui.StatefulDiv {
     return w.textAction(t, .outlined, label).id(id);
@@ -125,6 +125,7 @@ fn compactAction(t: *const Theme, label: []const u8, id: []const u8) zpui.Statef
 
 pub fn render(v: *SettingsView, t: *const Theme, window: *zpui.Window, cx: *Context(SettingsView)) zpui.Div {
     _ = window;
+    active_registry = zt.registry.active();
     const s = store.current(cx);
     const ts = s.theme;
 
@@ -164,45 +165,29 @@ pub fn render(v: *SettingsView, t: *const Theme, window: *zpui.Window, cx: *Cont
         .child(v.toggle(.match_wallpaper, ts.wallpaper_theme_colors, true, t, cx)));
 
     // Material and background.
-    const folder_label = s.wallpaperFolder orelse "Choose a folder of wallpaper images.";
-    var combo_buf: [64]u8 = undefined;
-    const shortcut = model.settings.displayCombo(&combo_buf, s.keymap.randomWallpaper);
-    const background_meta = if (s.newThreadComposerBackground) |b| b.name else "No image selected";
-    const material = w.sectionCard(t).mt0()
-        .child(w.cardRow(t, true)
-        .child(w.textBlock(t, "Glass", &.{.{ .text = if (ts.surface == .liquid and !store.liquidSupported(cx)) "Liquid Glass needs macOS 26; showing frosted" else surfaceHelper(ts.surface, t.surface_treatment) }}))
-        .child(select.render(v, .surface, t, cx)))
-        .child(w.cardRow(t, false)
-        .child(w.textBlock(t, "New thread background", &.{.{ .text = background_meta }}))
-        .child(div().maxWFull().flex().flexWrap().itemsCenter().gap(px(8))
-        .child(compactAction(t, "Choose image", "new-thread-background-choose"))))
-        .child(w.cardRow(t, false)
-        .child(w.textBlock(t, "Wallpaper folder", &.{.{ .text = zpui.fmt("{s} · {s} picks a random image", .{ folder_label, shortcut }) }}))
-        .child(div().flex().gap(px(8)).child(compactAction(t, "Choose folder", "wallpaper-folder-choose"))));
+    const material = materialCard(v, t, s, cx);
 
     const motion = w.sectionCard(t).mt0()
         .child(w.cardRow(t, true)
-        .child(w.textBlock(t, "Reduce motion", &.{.{ .text = reduceMotionHelper(ts.reduce_motion) }}))
+        .child(w.textBlock(t, "Reduce motion", &.{.{ .text = motion_mod.helper(ts.reduce_motion, motion_mod.systemReduces(cx.app)) }}))
         .child(select.render(v, .reduce_motion, t, cx)))
         .child(w.cardRow(t, false)
         .child(w.textBlock(t, "Pause animations in background", &.{.{ .text = "Hold animations still while Zeron isn't the focused window." }}).minW0())
         .child(v.toggle(.pause_animations, ts.pause_animations_in_background, true, t, cx)));
 
-    const library = w.sectionCard(t).mt(px(32))
-        .child(w.cardRow(t, true).child(div().flex1().minW(px(160)).child(w.rowTitle(t, "Theme library")))
-        .child(w.textAction(t, .solid, "Add theme").id("theme-library-add")));
+    const library = theme_library.libraryCard(v, t, cx);
 
     var fonts = w.sectionCard(t).mt0().fontFamily(t.font_sans_fixed);
-    const kinds = [_]struct { []const u8, []const u8, select.SelectId, select.SelectId }{
-        .{ "Interface font", "Menus and conversations", .ui_font, .ui_size },
-        .{ "Terminal font", "Terminal output · monospace only", .terminal_font, .terminal_size },
-        .{ "Code & diff font", "Code, diffs, and files", .code_font, .code_size },
+    const kinds = [_]struct { []const u8, []const u8, fonts_mod.FontKind, select.SelectId }{
+        .{ "Interface font", "Menus and conversations", .ui, .ui_size },
+        .{ "Terminal font", "Terminal output · monospace only", .terminal, .terminal_size },
+        .{ "Code & diff font", "Code, diffs, and files", .code, .code_size },
     };
     for (kinds, 0..) |k, i| {
         fonts = fonts.child(w.cardRow(t, i == 0).justifyBetween()
             .child(w.textBlock(t, k[0], &.{.{ .text = k[1] }}))
             .child(div().flexNone().maxWFull().flex().flexRow().flexWrap().itemsCenter().gap(px(8))
-            .child(select.render(v, k[2], t, cx)).child(select.render(v, k[3], t, cx))));
+            .child(fonts_mod.picker(v, k[2], t, cx)).child(select.render(v, k[3], t, cx))));
     }
     fonts = fonts.child(widthRow(v, t, s, cx));
 
@@ -271,4 +256,110 @@ fn onAccent(_: *SettingsView, ix: u8, _: *const zpui.ClickEvent, _: *zpui.Window
     store.update(cx, .debounced, sel, Set.f);
     store.applyTheme(cx.app);
     cx.notify();
+}
+
+// ---- material and background ------------------------------------------------------
+
+/// Glass, new-thread background (choose / adjust / replace / remove + a
+/// thumbnail), wallpaper folder (+ Shuffle), the effect select while an
+/// image is available, and the last background error (`appearance.rs`).
+fn materialCard(v: *SettingsView, t: *const Theme, s: *const UiSettings, cx: *Context(SettingsView)) zpui.Div {
+    const ts = s.theme;
+    const app = cx.app;
+    const current = s.newThreadComposerBackground;
+    const available = background.install.available(app, s);
+    var card = w.sectionCard(t).mt0()
+        .child(w.cardRow(t, true)
+        .child(w.textBlock(t, "Glass", &.{.{ .text = if (ts.surface == .liquid and !store.liquidSupported(cx)) "Liquid Glass needs macOS 26; showing frosted" else surfaceHelper(ts.surface, t.surface_treatment) }}))
+        .child(select.render(v, .surface, t, cx)));
+
+    // The chosen image previews in the row; without one the row is text only.
+    var row = w.cardRow(t, false);
+    if (current) |bg| if (available) {
+        const thumb = background.cache.prepare(app, background.install.ioOf(app), bg.path, .none, false);
+        var tile = div().flexNone().size(px(36)).rounded(px(10)).overflowHidden().border1().borderColor(t.text.opacity(0.10));
+        if (thumb) |img| tile = tile.child(zpui.img(img).size(px(34)).rounded(px(9)).objectFit(.cover));
+        row = row.child(tile);
+    };
+    var name_meta = [_]w.Fragment{.{ .text = if (current) |bg| bg.name else "" }};
+    const meta: []const w.Fragment = if (current == null)
+        &.{.{ .text = "No image selected" }}
+    else if (available)
+        &name_meta
+    else
+        &.{ .{ .text = "Image unavailable" }, .{ .text = "Choose a replacement or remove it." } };
+    var bg_actions = div().maxWFull().flex().flexWrap().itemsCenter().gap(px(8));
+    if (current != null) {
+        if (available) bg_actions = bg_actions.child(compactAction(t, "Adjust", "new-thread-background-adjust")
+            .onClick(cx.listener(onAdjustBackground)));
+        bg_actions = bg_actions
+            .child(compactAction(t, "Replace image", "new-thread-background-replace").onClick(cx.listener(onChooseBackground)))
+            .child(compactAction(t, "Remove", "new-thread-background-remove").textColor(t.danger).onClick(cx.listener(onRemoveBackground)));
+    } else {
+        bg_actions = bg_actions.child(compactAction(t, "Choose image", "new-thread-background-choose").onClick(cx.listener(onChooseBackground)));
+    }
+    card = card.child(row
+        .child(w.textBlock(t, "New thread background", meta).flex1().minW(px(160)))
+        .child(bg_actions));
+
+    const folder_label = s.wallpaperFolder orelse "Choose a folder of wallpaper images.";
+    var combo_buf: [64]u8 = undefined;
+    const shortcut = model.settings.displayCombo(&combo_buf, s.keymap.randomWallpaper);
+    var folder_actions = div().flex().gap(px(8)).child(compactAction(t, "Choose folder", "wallpaper-folder-choose").onClick(cx.listener(onChooseFolder)));
+    if (s.wallpaperFolder != null) folder_actions = folder_actions.child(compactAction(t, "Shuffle", "wallpaper-shuffle").onClick(cx.listener(onShuffle)));
+    card = card.child(w.cardRow(t, false)
+        .child(w.textBlock(t, "Wallpaper folder", &.{.{ .text = zpui.fmt("{s} · {s} picks a random image", .{ folder_label, shortcut }) }}).flex1().minW(px(160)))
+        .child(folder_actions));
+
+    if (available) card = card.child(w.cardRow(t, false)
+        .child(w.textBlock(t, "Background effect", &.{.{ .text = s.newThreadBackgroundEffect.description() }}).flex1().minW(px(160)))
+        .child(select.render(v, .background_effect, t, cx)));
+
+    if (background.install.lastError(app)) |err| card = card.child(div().mx(px(16)).py(px(10)).borderT1().borderColor(w.rowDivider(t))
+        .child(w.errorStrip(t, err).mt0()));
+    return card;
+}
+
+/// "Choose image" / "Replace image" (`choose_new_thread_background`).
+pub fn chooseBackground(_: *SettingsView, cx: *Context(SettingsView)) void {
+    prompts.chooseBackground(cx.app);
+    cx.notify();
+}
+
+/// "Remove" (`remove_new_thread_background`).
+pub fn removeBackground(_: *SettingsView, cx: *Context(SettingsView)) void {
+    background.install.setError(cx.app, background.install.remove(cx.app));
+    cx.notify();
+}
+
+/// "Choose folder" (`choose_wallpaper_folder`).
+pub fn chooseFolder(_: *SettingsView, cx: *Context(SettingsView)) void {
+    prompts.chooseWallpaperFolder(cx.app);
+    cx.notify();
+}
+
+/// "Shuffle" (`random_wallpaper`).
+pub fn shuffle(_: *SettingsView, cx: *Context(SettingsView)) void {
+    background.wallpaper.randomize(cx.app, .settings);
+    cx.notify();
+}
+
+fn onChooseBackground(v: *SettingsView, _: *const zpui.ClickEvent, _: *zpui.Window, cx: *Context(SettingsView)) void {
+    chooseBackground(v, cx);
+}
+
+fn onRemoveBackground(v: *SettingsView, _: *const zpui.ClickEvent, _: *zpui.Window, cx: *Context(SettingsView)) void {
+    removeBackground(v, cx);
+}
+
+fn onAdjustBackground(v: *SettingsView, _: *const zpui.ClickEvent, _: *zpui.Window, cx: *Context(SettingsView)) void {
+    v.openBackgroundAdjustment(cx);
+}
+
+fn onChooseFolder(v: *SettingsView, _: *const zpui.ClickEvent, _: *zpui.Window, cx: *Context(SettingsView)) void {
+    chooseFolder(v, cx);
+}
+
+fn onShuffle(v: *SettingsView, _: *const zpui.ClickEvent, _: *zpui.Window, cx: *Context(SettingsView)) void {
+    shuffle(v, cx);
 }

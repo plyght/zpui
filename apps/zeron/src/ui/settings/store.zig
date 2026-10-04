@@ -15,6 +15,7 @@
 //! live, nothing is written (`settings_store.initMemory`).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const zpui = @import("zpui");
 const model = @import("zeron_model");
 const zt = @import("zeron_theme");
@@ -77,21 +78,27 @@ pub fn effectiveAppearance(app: *App) zt.Appearance {
 /// Build the UI theme for `appearance` from the settings' theme subset.
 pub fn themeFor(s: *const UiSettings, appearance: zt.Appearance) zt.Theme {
     const t = s.theme;
-    var theme = zt.Theme.forSelection(&zt.registry.builtin, .{
+    const reg = zt.registry.active(); // built-ins + the custom theme library
+    var theme = zt.Theme.forSelection(&reg, .{
         .appearance = appearance,
         .variant_id = t.theme_selection.variantId(appearance),
         .accent = t.accent,
         .surface = t.surface,
         .wallpaper_color = t.effectiveWallpaperColor(s.newThreadComposerBackground != null),
     });
-    theme.font_sans = t.ui_font_family.familyName();
-    theme.font_mono = t.code_font_family.familyName();
-    theme.font_terminal = t.terminal_font_family.familyName();
+    // A family the device no longer has resolves to its fallback (`resolve_effective*`).
+    const fonts = @import("fonts.zig");
+    const ui_family = fonts.effective(.ui, t.ui_font_family);
+    const code_family = fonts.effective(.code, t.code_font_family);
+    const terminal_family = fonts.effective(.terminal, t.terminal_font_family);
+    theme.font_sans = ui_family.familyName();
+    theme.font_mono = code_family.familyName();
+    theme.font_terminal = terminal_family.familyName();
     theme.code_font_size = t.code_font_size;
     theme.terminal_font_size = t.terminal_font_size;
-    if (t.ui_font_family == .system) theme.font_sans = zt.typography.system_sans;
-    if (t.code_font_family == .system) theme.font_mono = zt.typography.system_mono;
-    if (t.terminal_font_family == .system) theme.font_terminal = zt.typography.system_mono;
+    if (ui_family == .system) theme.font_sans = zt.typography.system_sans;
+    if (code_family == .system) theme.font_mono = zt.typography.system_mono;
+    if (terminal_family == .system) theme.font_terminal = zt.typography.system_mono;
     return theme;
 }
 
@@ -106,9 +113,29 @@ pub fn liquidSupported(cx: anytype) bool {
     return zpui.platformSupportsLiquidGlass(appOf(cx));
 }
 
+/// [liquid-glass] `ZERON_LIQUID_GLASS=0`: keep "Theme default" frosted on macOS 26+.
+pub var default_liquid_disabled: bool = false;
+
+/// [liquid-glass] Whether "Theme default" means Liquid Glass: on a real macOS 26+
+/// (never on the headless test platform, which only pretends to support glass, and
+/// never on Linux / older macOS). Explicit Frosted / Opaque choices are respected.
+pub fn defaultIsLiquid(app: *App) bool {
+    return defaultLiquidPolicy(builtin.os.tag == .macos, app.test_platform == null, liquidSupported(app), default_liquid_disabled);
+}
+
+pub fn defaultLiquidPolicy(is_macos: bool, real_platform: bool, supported: bool, disabled: bool) bool {
+    return is_macos and real_platform and supported and !disabled;
+}
+
 /// The UI theme with the Liquid Glass flag resolved against the platform.
 pub fn themeWithGlass(app: *App, s: *const UiSettings, appearance: zt.Appearance) zt.Theme {
     var theme = themeFor(s, appearance);
+    // [liquid-glass] "Theme default" resolves to Liquid Glass where it is native (only
+    // for themes that recommend glass: `isLiquid` still requires the frosted treatment).
+    if (s.theme.surface == .theme_default and !force_liquid and defaultIsLiquid(app)) {
+        theme.liquid_glass = true;
+        return theme;
+    }
     const wants = force_liquid or s.theme.surface == .liquid;
     if (!wants) return theme;
     if (force_liquid and s.theme.surface != .liquid) {
@@ -126,6 +153,7 @@ pub fn applyTheme(app: *App) void {
     ui.theme.set(app, themeWithGlass(app, s, effectiveAppearance(app))); // [liquid-glass] was themeFor
     const rem = s.theme.ui_font_size.normalized().pixels();
     for (app.windows.items) |w| if (w) |win| win.setRemSize(rem);
+    @import("motion.zig").applyAll(app); // reduce motion / pause in background
 }
 
 /// Re-apply the app keymap from the settings (shortcut edits, send key).

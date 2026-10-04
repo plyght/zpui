@@ -242,6 +242,10 @@ pub const Window = struct {
         /// above every native view, everything else to the main surface. The window puts
         /// deferred draws, drag previews and tooltips there, plus any element painted
         /// between `Window.pushOverlayPlane`/`popOverlayPlane`.
+        /// The window only routes content to the planes while a native view is placed
+        /// in the frame (otherwise `overlay` is empty and everything is on the main
+        /// surface, exactly like `draw`). Ranges holding backdrop blurs carry
+        /// `samples_lower_planes`.
         /// `capture_input`: the overlay holds interactive content and takes the mouse.
         /// Backends without native views leave it null; the window then calls `draw`.
         drawLayered: ?*const fn (ptr: *anyopaque, scene: *const scene_mod.Scene, overlay: []const OverlayRange, capture_input: bool) anyerror!void = null,
@@ -253,6 +257,11 @@ pub const Window = struct {
         attachLiquidGlass: ?*const fn (ptr: *anyopaque, options: LiquidGlassAttach) anyerror!NativeViewId = null,
         /// Apply style / tint / corner radius / interactivity / container spacing.
         configureLiquidGlass: ?*const fn (ptr: *anyopaque, view: NativeViewId, config: LiquidGlassConfig) void = null,
+        /// [liquid-glass] Cut `hole` out of the window's behind-window material (macOS
+        /// `blurred` background: the `NSVisualEffectView` under the main surface), so
+        /// native glass above a transparent (alpha 0) region samples the desktop itself
+        /// rather than the app's blurred backdrop. null = no hole.
+        setBackdropHole: ?*const fn (ptr: *anyopaque, hole: ?BackdropHole) void = null,
     };
 
     /// Whether this backend can host native child views (`attachNativeView`).
@@ -282,6 +291,9 @@ pub const Window = struct {
     }
     pub fn configureLiquidGlass(w: Window, view: NativeViewId, config: LiquidGlassConfig) void {
         if (w.vtable.configureLiquidGlass) |f| f(w.ptr, view, config);
+    }
+    pub fn setBackdropHole(w: Window, hole: ?BackdropHole) void {
+        if (w.vtable.setBackdropHole) |f| f(w.ptr, hole);
     }
 
     pub fn setCallbacks(w: Window, cbs: WindowCallbacks) void {
@@ -364,7 +376,17 @@ pub const NativeViewOptions = struct {
 
 /// Half-open range of `Scene.paint_operations` indices drawn on the overlay plane
 /// (or, with `plane = .top`, on the top plane above `.above_overlay` children).
-pub const OverlayRange = struct { start: usize, end: usize, plane: OverlayPlane = .overlay };
+pub const OverlayRange = struct {
+    start: usize,
+    end: usize,
+    plane: OverlayPlane = .overlay,
+    /// The range holds a backdrop blur. Its plane is transparent where the planes
+    /// beneath show through, so the backend must blur the COMPOSITED planes beneath
+    /// (main surface, plus the overlay plane for `.top`) rather than the plane's own
+    /// drawable, or the blur blurs nothing (frosted menus over crisp content).
+    /// Native children between planes are invisible to the renderer and stay unblurred.
+    samples_lower_planes: bool = false,
+};
 
 /// [liquid-glass] The two transparent planes above native children, back to front:
 ///
@@ -383,6 +405,19 @@ pub const LiquidGlassKind = enum {
     /// `NSGlassEffectContainerView`: glass views attached with `parent` = this view
     /// become descendants of its content view and merge/morph within `spacing`.
     container,
+    /// A behind-window sidebar material (`NSVisualEffectView`, `.sidebar`,
+    /// `.behindWindow`, follows the window's active state), always attached
+    /// `.below_content` (under the main surface: zpui must leave alpha 0 above it).
+    /// The fallback when glass alone cannot show the desktop (docs/LIQUID_GLASS.md).
+    sidebar_material,
+};
+
+/// [liquid-glass] A rounded rectangle (logical px, window coordinates) cut out of the
+/// window's behind-window material (`Window.setBackdropHole`).
+pub const BackdropHole = struct {
+    bounds: Bounds,
+    /// Corner radii: top-left, top-right, bottom-right, bottom-left.
+    corner_radii: [4]Pixels = .{ 0, 0, 0, 0 },
 };
 
 pub const LiquidGlassAttach = struct {
@@ -506,6 +541,9 @@ pub const Platform = struct {
         // [liquid-glass] Native Liquid Glass (macOS 26+ NSGlassEffectView) is available
         // on this machine. Null = never (every non-macOS backend, older macOS).
         supportsLiquidGlass: ?*const fn (ptr: *anyopaque) bool = null,
+        // [liquid-glass] The macOS major version whose Liquid Glass design is shown
+        // (26 Tahoe, 27 Golden Gate, ...); 0 where `supportsLiquidGlass` is false.
+        liquidGlassRevision: ?*const fn (ptr: *anyopaque) u32 = null,
     };
 
     pub fn dispatcher(p: Platform) Dispatcher {
@@ -552,6 +590,12 @@ pub const Platform = struct {
     /// [liquid-glass] Whether native Liquid Glass (`zpui.liquidGlass`) can be shown.
     pub fn supportsLiquidGlass(p: Platform) bool {
         const f = p.vtable.supportsLiquidGlass orelse return false;
+        return f(p.ptr);
+    }
+    /// [liquid-glass] macOS major version of the native glass design (26, 27, ...), 0 = none.
+    pub fn liquidGlassRevision(p: Platform) u32 {
+        if (!p.supportsLiquidGlass()) return 0;
+        const f = p.vtable.liquidGlassRevision orelse return 26;
         return f(p.ptr);
     }
     /// Open the native file picker; `done` runs on the main thread (null = canceled).

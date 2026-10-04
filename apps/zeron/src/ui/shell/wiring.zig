@@ -35,6 +35,7 @@ const right_pane_mod = @import("right_pane.zig");
 const rp_chats = @import("right_pane_chats.zig");
 const editor = @import("../editor/root.zig");
 const settings_ui = @import("../settings/root.zig");
+const background = @import("../background/root.zig");
 const prefs_mod = @import("prefs.zig");
 
 const App = zpui.App;
@@ -105,6 +106,7 @@ pub fn attach(self: *Shell, cx: *Ctx) !void {
     }
     shell_ref = .{ .id = cx.entityId() };
     md.rich_text.registry.handler = onLink;
+    background.wallpaper.open_appearance = openAppearance;
 
     const gpa = cx.gpa();
     const slots = &self.main.read(cx).slots;
@@ -127,12 +129,15 @@ pub fn detach(self: *Shell, app: *App) void {
     self.wiring.deinit(self.gpa, app);
     shell_ref = null;
     md.rich_text.registry.handler = null;
+    background.wallpaper.open_appearance = null;
 }
 
 /// The shell actions this module handles (`Shell.render` root div).
 pub fn actionsOn(root: zpui.Div, cx: *Ctx) zpui.Div {
     return root
         .onAction(shell_actions.SaveFile, cx.listener(actSaveFile))
+        .onAction(shell_actions.RandomWallpaper, cx.listener(actRandomWallpaper))
+        .onKeyDown(cx.listener(onShellKey))
         .onAction(shell_actions.ArchiveSession, cx.listener(actArchiveSession))
         .onAction(shell_actions.OpenModelPicker, cx.listener(actOpenModelPicker));
 }
@@ -145,6 +150,51 @@ fn inChat(self: *Shell, cx: anytype) bool {
 fn overlayOwnsKeyboard(self: *Shell) bool {
     return self.palette != null or self.add_project != null or self.wiring.delete_confirm != null or
         self.wiring.rename_space != null or self.wiring.delete_space != null;
+}
+
+/// Escape on the chat route (`resolve_shell_escape`): with "Escape stops the
+/// active agent" on and no overlay up, interrupt the selected chat's run.
+fn onShellKey(self: *Shell, ev: *const zpui.input.KeyDownEvent, _: *Window, cx: *Ctx) void {
+    if (!std.mem.eql(u8, ev.keystroke.key, "escape") or !ev.keystroke.modifiers.none()) return;
+    if (overlayOwnsKeyboard(self) or self.settings_view != null or self.palette != null) return;
+    if (!settings_ui.store.current(cx).escapeStopsActiveAgent) return;
+    const composer = self.main.read(cx).slots.composer_view;
+    if (composer.update(cx, composer_mod.ComposerView.escapeStop, .{})) cx.stopPropagation();
+}
+
+/// `shell::RandomWallpaper` (mod-u, `Shell::random_wallpaper`): without a
+/// folder, open Settings → Appearance and ask for one; else switch to a
+/// random image (errors open Appearance with the message).
+fn actRandomWallpaper(_: *Shell, _: *const shell_actions.RandomWallpaper, _: *Window, cx: *Ctx) void {
+    background.wallpaper.randomize(cx.app, .shortcut);
+}
+
+/// `wallpaper.open_appearance`: Settings → Appearance (+ the folder prompt).
+fn openAppearance(app: *App, choose_folder: bool) void {
+    // Deferred: the shortcut path runs inside the shell's own action handler.
+    if (choose_folder) app.deferFn({}, openAppearanceChoose) else app.deferFn({}, openAppearanceOnly);
+}
+
+fn openAppearanceChoose(_: void, app: *App) void {
+    openAppearanceNow(true, app);
+}
+
+fn openAppearanceOnly(_: void, app: *App) void {
+    openAppearanceNow(false, app);
+}
+
+fn openAppearanceNow(choose_folder: bool, app: *App) void {
+    const weak = shell_ref orelse return;
+    const Open = struct {
+        fn f(self: *Shell, choose: bool, cx: *Ctx) void {
+            const w = window0(cx) orelse return;
+            self.openSettings(w, cx);
+            if (self.settings_view) |v| v.update(cx, settings_ui.SettingsView.openSection, .{.appearance});
+            if (choose) settings_ui.file_prompts.chooseWallpaperFolder(cx.app);
+            cx.notify();
+        }
+    };
+    _ = weak.update(app, Open.f, .{choose_folder});
 }
 
 /// `shell::SaveFile`: save the active file tab (chat route, pane open).

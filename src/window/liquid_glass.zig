@@ -108,7 +108,8 @@ pub fn paint(w: *Window, element_key: u64, kind: platform.LiquidGlassKind, bound
         }
     }
     if (view == null) {
-        const z: platform.NativeViewZ = if (tier == .base) .above_content else .above_overlay;
+        // A sidebar material sits under the main surface (zpui leaves alpha 0 above it).
+        const z: platform.NativeViewZ = if (kind == .sidebar_material) .below_content else if (tier == .base) .above_content else .above_overlay;
         const v = w.platform_window.attachLiquidGlass(.{ .kind = kind, .z = z, .parent = parent }) catch |err| {
             std.log.scoped(.liquid_glass).warn("attach failed ({t}); falling back", .{err});
             pool.supported = false;

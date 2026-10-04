@@ -19,6 +19,12 @@ pub const view = @import("view.zig");
 pub const store = @import("store.zig");
 pub const widgets = @import("widgets.zig");
 pub const select = @import("select.zig");
+pub const file_prompts = @import("file_prompts.zig");
+pub const background_adjust = @import("background_adjust.zig");
+pub const motion = @import("motion.zig");
+pub const fonts = @import("fonts.zig");
+pub const thread_naming = @import("thread_naming.zig");
+pub const theme_library = @import("theme_library.zig");
 
 pub const SettingsView = view.SettingsView;
 pub const Close = view.Close;
@@ -26,5 +32,12 @@ pub const Section = view.Section;
 
 test {
     _ = @import("tests.zig");
+    _ = @import("runtime_tests.zig");
+    _ = background_adjust;
+    _ = file_prompts;
+    _ = motion;
+    _ = fonts;
+    _ = thread_naming;
+    _ = theme_library;
     _ = @import("liquid_glass_tests.zig"); // [liquid-glass]
 }

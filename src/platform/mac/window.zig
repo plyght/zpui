@@ -143,6 +143,7 @@ fn buildViewClass() *objc.Class {
 
 fn buildBlurredViewClass() *objc.Class {
     const b = objc.ClassBuilder.init("NSVisualEffectView", "ZPUIBlurredView") orelse return objc.getClass("ZPUIBlurredView").?;
+    _ = b.addPointerIvar(state_ivar); // [liquid-glass] backdrop hole: no black base
     _ = b.addMethod("initWithFrame:", &blurredViewInitWithFrame, "@@:" ++ ak.enc_rect);
     _ = b.addMethod("updateLayer", &blurredViewUpdateLayer, "v@:");
     return b.register();
@@ -455,6 +456,7 @@ pub const MacWindow = struct {
 
         if (bg != .blurred) {
             if (self.blurred_view) |v| {
+                objc.setIvar(v, state_ivar, null); // [liquid-glass]
                 v.msg(void, "removeFromSuperview", .{});
                 v.release();
                 self.blurred_view = null;
@@ -465,6 +467,8 @@ pub const MacWindow = struct {
             blur.msg(void, "setAutoresizingMask:", .{ak.NSViewWidthSizable | ak.NSViewHeightSizable});
             content_view.msg(void, "addSubview:positioned:relativeTo:", .{ blur, ak.NSWindowBelow, @as(?id, null) });
             self.blurred_view = blur; // keep our +1
+            objc.setIvar(blur, state_ivar, self); // [liquid-glass]
+            native_views.refreshBackdropMask(self); // [liquid-glass] a hole set earlier
         }
     }
 
@@ -558,7 +562,10 @@ pub const MacWindow = struct {
         objc.setIvar(self.native_view, state_ivar, null);
         objc.setIvar(self.native_window, state_ivar, null);
         self.native_window.msg(void, "setDelegate:", .{@as(?id, null)});
-        if (self.blurred_view) |v| v.release();
+        if (self.blurred_view) |v| {
+            objc.setIvar(v, state_ivar, null); // [liquid-glass]
+            v.release();
+        }
         self.natives.deinit(self);
         self.renderer.deinit();
         self.native_window.release();
@@ -603,7 +610,15 @@ pub const MacWindow = struct {
         .drawLayered = vDrawLayered,
         .attachLiquidGlass = vAttachLiquidGlass, // [liquid-glass]
         .configureLiquidGlass = vConfigureLiquidGlass,
+        .setBackdropHole = vSetBackdropHole,
     };
+
+    // [liquid-glass] A hole in the behind-window material (native_views.zig).
+    fn vSetBackdropHole(ptr: *anyopaque, hole: ?platform.BackdropHole) void {
+        const self = cast(ptr);
+        if (self.closed) return;
+        native_views.setBackdropHole(self, hole);
+    }
 
     // [liquid-glass] NSGlassEffectView children (native_views.zig).
     fn vAttachLiquidGlass(ptr: *anyopaque, options: platform.LiquidGlassAttach) anyerror!platform.NativeViewId {
@@ -999,6 +1014,7 @@ fn setFrameSize(this: id, _: SEL, size: NSSize) callconv(.c) void {
     objc.msgSendSuper(void, &sup, objc.sel("setFrameSize:"), .{size});
     const w = state(this) orelse return;
     w.renderer.resize(w.drawableSize()) catch |err| log.err("renderer resize: {s}", .{@errorName(err)});
+    native_views.refreshBackdropMask(w); // [liquid-glass] the mask image tracks the width
     if (w.callbacks.resize) |f| f(w.callbacks.ctx, w.contentSize(), w.scaleFactor());
 }
 
@@ -1391,6 +1407,9 @@ fn blurredViewUpdateLayer(this: id, _: SEL) callconv(.c) void {
     // here would leave the window black instead of the accessible solid surface.
     if (reduceTransparency()) return;
     removeLayerBackground(layer);
+    // [liquid-glass] With a backdrop hole cut out (native glass sampling the desktop),
+    // no base: it would fill the hole black.
+    if (state(this)) |w| if (w.natives.backdrop_hole != null) return;
     // An opaque dark base behind the backdrop keeps Mission Control snapshots
     // (which omit backdrop layers) reading as a solid surface.
     const black = ak.class("NSColor").msg(id, "blackColor", .{});

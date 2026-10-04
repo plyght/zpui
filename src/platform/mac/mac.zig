@@ -98,7 +98,13 @@ pub const MacPlatform = struct {
         .postNotification = vPostNotification,
         .playSound = vPlaySound,
         .supportsLiquidGlass = vSupportsLiquidGlass, // [liquid-glass]
+        .liquidGlassRevision = vLiquidGlassRevision, // [liquid-glass]
     };
+
+    /// [liquid-glass] 26 (Tahoe), 27 (Golden Gate), ...; 0 without NSGlassEffectView.
+    fn vLiquidGlassRevision(_: *anyopaque) u32 {
+        return @import("native_views.zig").glassRevision();
+    }
 
     /// [liquid-glass] macOS 26+ with NSGlassEffectView (runtime check, cached).
     fn vSupportsLiquidGlass(_: *anyopaque) bool {

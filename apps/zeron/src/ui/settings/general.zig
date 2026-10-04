@@ -8,6 +8,7 @@ const store = @import("store.zig");
 const w = @import("widgets.zig");
 const select = @import("select.zig");
 const view_mod = @import("view.zig");
+const thread_naming = @import("thread_naming.zig");
 
 const SettingsView = view_mod.SettingsView;
 const Theme = ui.Theme;
@@ -29,24 +30,12 @@ pub fn render(v: *SettingsView, t: *const Theme, _: *zpui.Window, cx: *zpui.Cont
         .child(w.cardRow(t, false)
         .child(w.textBlock(t, "Stop agent with Escape", &.{.{ .text = "When no dialog or menu is open." }}))
         .child(v.toggle(.escape_stops, s.escapeStopsActiveAgent, true, t, cx)));
-    const naming = w.sectionCard(t).child(w.cardRow(t, true)
-        .child(w.textBlock(t, "Thread naming", &.{.{ .text = "Each thread is named by its own agent." }}))
-        .child(threadNamingPicker(v, t, cx)));
+    thread_naming.ensureLoaded(v, cx);
+    var naming = w.sectionCard(t).child(w.cardRow(t, true)
+        .child(w.textBlock(t, "Thread naming", &.{.{ .text = thread_naming.description(v) }}))
+        .child(thread_naming.control(v, t, cx)));
+    if (v.title.phase == .ready) if (v.title.err) |e| {
+        naming = naming.child(w.cardRow(t, false).child(w.errorStrip(t, e)));
+    };
     return w.pageColumn().child(w.pageHeader(t, "General", null)).child(card).child(naming);
-}
-
-/// The compact picker chip ("Session agent" with the chat glyph).
-fn threadNamingPicker(v: *SettingsView, t: *const Theme, cx: *zpui.Context(SettingsView)) zpui.StatefulDiv {
-    const open = v.open_select == .thread_naming;
-    const key = select.hoverKey(.thread_naming);
-    const bg = if (open) t.glassHover() else ui.hover.blend(cx, key, t.glassHover().opacity(0), t.glassHover());
-    var chip = div().id("thread-naming-picker").relative().flexNone().h(px(28)).px(px(6)).rounded(px(8))
-        .flex().flexRow().itemsCenter().gap(px(6)).cursorPointer().bg(bg)
-        .textSize(ui.rems(12.5)).textColor(t.text)
-        .onHover(cx.listenerWith(select.SelectId.thread_naming, SettingsView.onSelectHover))
-        .onClick(cx.listenerWith(select.SelectId.thread_naming, SettingsView.onSelectTrigger))
-        .child(ui.icon.of(.chat_round_line, 16, t.text_muted))
-        .child("Session agent");
-    if (open) chip = chip.child(select.menuFor(v, .thread_naming, t, cx));
-    return chip;
 }

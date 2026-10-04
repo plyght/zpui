@@ -408,6 +408,21 @@ window.detachNativeView(id);                                           // remove
   content; any element can paint there too between `window.pushOverlayPlane()` /
   `popOverlayPlane()`. The overlay only takes the mouse while it holds deferred draws
   or a drag.
+* The planes are only used while a native view is placed (visible) in the frame:
+  without one, `present` hands `drawLayered` no ranges and everything — menus,
+  popovers, tooltips, `overlayPlane` content — is drawn on the main surface exactly as
+  on backends without native views. (The ranges are still recorded in
+  `rendered_frame.overlay_ranges`.)
+* **Backdrop blurs on an upper plane** (a frosted menu over a web view): an overlay or
+  top plane is transparent where the planes beneath show through, so blurring its own
+  drawable would blur nothing and leave the content under a frosted menu crisp behind
+  its tint. Ranges holding a `BackdropBlur` carry `OverlayRange.samples_lower_planes`;
+  the Metal renderer (`setPlaneBackdrops`) then copies the main drawable after the
+  main pass (and composites the overlay plane onto that copy for a top-plane blur),
+  and the blur snapshots that copy with the plane's own content so far composited
+  over it. **Limitation:** native views between the planes (the `WKWebView`, native
+  glass) are not visible to Metal: where a frosted menu overlaps one, it blurs the
+  zpui content beneath (an opaque frosted backdrop) rather than the web page.
 
 ## 5c. Native Liquid Glass (macOS 26+)
 
@@ -423,7 +438,22 @@ zpui.liquidGlassGroup("tools", .{ .spacing = 12 }, row_of_glass_buttons)        
 zpui.overlayPlane(on, titlebar_buttons)        // plain content that overlaps base glass
 zpui.platformSupportsLiquidGlass(cx)           // false on Linux/Windows/macOS < 26: offer the option at all?
 zpui.liquid_glass.paintGlass(window, cx, "name", bounds, opts, child)  // for custom wrappers; false = paint a fallback
+zpui.liquidGlassRevision(cx)                   // 26, 27, ... (0 = no glass): per-release layout choices
+zpui.backdropHole(on, .{ r, r, r, r }, el)     // cut el's bounds out of the window's behind-window blur
+zpui.sidebarMaterial("id", .{ .corner_radius = r }, el)  // NSVisualEffectView .sidebar UNDER the main surface
 ```
+
+* **Glass that shows the desktop** (a Tahoe sidebar): glass refracts what is composited
+  beneath it, so leave **alpha 0** on the main surface under it (paint no window tint
+  there) and, in a `blurred` window, cut the same shape out of the behind-window blur with
+  `backdropHole` (`Window.paintBackdropHole`; macOS: the `ZPUIBlurredView`'s `maskImage`).
+  The window is non-opaque with a clear background, so the glass then samples the
+  wallpaper. `sidebarMaterial` is the fallback recipe: AppKit's behind-window `.sidebar`
+  material under the transparent region (attached `.below_content`), usually with
+  `.clear` glass on top. Paint the hole from a view redrawn every frame (the root view):
+  a frame without one removes it.
+* macOS 27: `tint` alpha is capped at 0.3 (27 composites near-opaque tints as a solid
+  fill) and `interactive` reaches `effectIsInteractive` (`respondsToSelector:` gate).
 
 How the layers stack (window content view, back to front):
 

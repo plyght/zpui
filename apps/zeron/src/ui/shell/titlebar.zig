@@ -94,6 +94,7 @@ pub fn dragStrip(_: *Shell, id: []const u8, cx: *Context(Shell)) zpui.StatefulDi
 /// Sidebar toggle, back/forward, and (with a chat selected) new session —
 /// pinned at the window's top-left above the sidebar and headers.
 pub fn cluster(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div {
+    if (theme.isLiquid()) return liquidCluster(shell, theme, cx); // [liquid-glass]
     const has_chat = shell.state.read(cx).workspace.read(cx).selected_chat != null;
     var row = div().absolute().top(px(0)).left(px(0)).h(px(layout.titlebar_height))
         .flex().flexRow().itemsCenter().pt(px(layout.titlebar_top_pad)).px(px(cluster_pad));
@@ -126,10 +127,11 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, files_now: f3
     // In takeover the title hides and the strip owns the band: the row pulls
     // back to the sidebar seam (the strip brings its own 8px pad).
     const takeover = shell.right_expanded and right_now > 0.5;
+    const liquid = theme.isLiquid(); // [liquid-glass] Tahoe capsules around item groups
     const row_left = if (takeover)
         @max(sidebar_now - 8, contentStart() - layout.titlebar_identity_gap + plus_inset - 14)
     else
-        @max(sidebar_now + layout.space_lg, contentStart() + plus_inset);
+        @max(sidebar_now + layout.space_lg, contentStart() + plus_inset + if (liquid) capsule_clearance else 0);
     const right_pad = rightPad(shell);
 
     var inner = div().sizeFull().flex().itemsCenter().pt(px(layout.titlebar_top_pad))
@@ -145,20 +147,22 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, files_now: f3
         if (c.config) |cfg| ident = ident.child(ui.icon.harness(cfg.harness, 14, theme.text_muted, 1.0));
         ident = ident
             .child(div().minW0().truncate().whitespaceNowrap().textSize(ui.rems(12)).fontWeight(500).textColor(theme.text.opacity(0.85)).child(title))
-            .child(div().minW0().truncate().whitespaceNowrap().textSize(ui.rems(12)).textColor(theme.text_muted.opacity(0.5))
+            .child(div().minW0().truncate().whitespaceNowrap().textSize(ui.rems(12)).textColor(theme.text_muted.opacity(if (liquid) 0.7 else 0.5))
             .child(zpui.fmt("{s} @ {s}", .{ folder, device })));
-        inner = inner.child(ident);
+        // [liquid-glass] The title is the foreground of its own capsule (painted on the
+        // plane above the glass), never under it.
+        inner = inner.child(if (liquid) titleCapsule(ident) else zpui.intoAnyElement(ident));
     }
     inner = inner.child(div().flex1());
 
     if (!on_canvas and !takeover) {
         // Session controls: new side chat, fork.
-        inner = inner.child(div().flexNone().flex().flexRow().itemsCenter().gap(px(2))
+        inner = inner.child(capsule(liquid, "titlebar-session-glass", capsule_pad, div().flexNone().flex().flexRow().itemsCenter().gap(px(2))
             .child(button.headerIcon("session-new-side-chat", .plus, "New side chat", theme))
-            .child(button.headerIcon("session-fork", .git_branch, "Fork this session", theme)));
+            .child(button.headerIcon("session-fork", .git_branch, "Fork this session", theme))));
         // Project actions: the empty state's "Add action" pill (24px, radius 7,
         // the composer's material and edge).
-        if (chat.?.spaceId != null) inner = inner.child(addActionPill(theme));
+        if (chat.?.spaceId != null) inner = inner.child(if (liquid) liquidActionPill(theme) else zpui.intoAnyElement(addActionPill(theme)));
     }
     if (!on_canvas) {
         // Trailing strip: explorer + pane toggles, right-aligned over the pane.
@@ -179,17 +183,21 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, files_now: f3
                 .child(button.headerIcon("expand-changes", if (shell.right_expanded) .collapse_arrows else .expand_arrows, if (shell.right_expanded) "Collapse panel" else "Expand panel", theme)
                     .onClick(cx.listener(Shell.onToggleExpandClick))));
         }
-        trailing = trailing.child(div().w(px(files_controls)).hFull().flexNone().flex().itemsCenter().justifyEnd()
-            .gap(px(panel_toggle_gap))
-            .child(blk: {
-                const files_open = shell.filesOpen(cx);
-                var b = button.headerIcon("toggle-files-panel", .file_tree, if (files_open) "Hide files panel" else "Show files panel", theme)
-                    .onClick(cx.listener(Shell.onToggleFilesClick));
-                if (files_open) b = b.bg(theme.wash(0.09));
-                break :blk b;
-            })
-            .child(button.headerIcon("toggle-changes", .sidebar_minimalistic, "Toggle right sidebar", theme)
-                .onClick(cx.listener(Shell.onToggleRightClick))));
+        const files_btn = blk: {
+            const files_open = shell.filesOpen(cx);
+            var b = button.headerIcon("toggle-files-panel", .file_tree, if (files_open) "Hide files panel" else "Show files panel", theme)
+                .onClick(cx.listener(Shell.onToggleFilesClick));
+            if (files_open) b = b.bg(theme.wash(0.09));
+            break :blk b;
+        };
+        const right_btn = button.headerIcon("toggle-changes", .sidebar_minimalistic, "Toggle right sidebar", theme)
+            .onClick(cx.listener(Shell.onToggleRightClick));
+        const slot = div().w(px(files_controls)).hFull().flexNone().flex().itemsCenter().justifyEnd();
+        // [liquid-glass] One capsule around the pane toggles (not the whole slot).
+        trailing = trailing.child(if (liquid)
+            slot.child(capsule(true, "titlebar-panes-glass", capsule_pad, div().flex().flexRow().itemsCenter().gap(px(panel_toggle_gap)).child(files_btn).child(right_btn)))
+        else
+            slot.gap(px(panel_toggle_gap)).child(files_btn).child(right_btn));
         inner = inner.child(trailing);
     }
 
@@ -211,6 +219,78 @@ fn addActionPill(theme: *const Theme) zpui.Div {
             // gpui lands this 11.5px label's baseline a device pixel higher
             // than our centering does (measured against the reference).
             .child(div().relative().top(px(-1)).child("Add action")));
+}
+
+// ---- [liquid-glass] Tahoe toolbar capsules (docs/LIQUID_GLASS.md, Option B) ------------
+//
+// No full-width titlebar glass: each item group gets its own capsule of native glass
+// (one `NSGlassEffectView` each, all members of the shell's titlebar
+// `NSGlassEffectContainerView`, so neighbours that come closer than
+// `capsule_spacing` — e.g. while the sidebar collapses — melt into each other). The
+// group's content is the capsule's foreground, painted above the glass.
+
+/// Capsule height (the 38px band, centred on the controls' y = 21).
+pub const capsule_h: f32 = 30;
+/// Horizontal padding around 24px icon buttons / around the title.
+pub const capsule_pad: f32 = 3;
+const title_pad: f32 = 10;
+/// `NSGlassEffectContainerView.spacing` of the titlebar group.
+pub const capsule_spacing: f32 = 6;
+/// Extra room between the nav capsule and the title capsule (sidebar collapsed).
+const capsule_clearance: f32 = 8;
+
+/// `child` in a capsule of glass (Liquid Glass), or unchanged.
+fn capsule(liquid: bool, name: []const u8, pad: f32, child: anytype) zpui.AnyElement {
+    if (!liquid) return zpui.intoAnyElement(child);
+    return zpui.intoAnyElement(zpui.liquidGlass(name, .{ .shape = .capsule, .interactive = true }, div().flexNone().h(px(capsule_h)).px(px(pad))
+        .flex().flexRow().itemsCenter().child(child)));
+}
+
+/// The session identity in a shrinkable capsule (it truncates like the bare title).
+fn titleCapsule(ident: zpui.Div) zpui.AnyElement {
+    return zpui.intoAnyElement(zpui.liquidGlass("titlebar-title-glass", .{ .shape = .capsule }, div().minW0().overflowHidden().h(px(capsule_h)).px(px(title_pad))
+        .flex().flexRow().itemsCenter().child(ident)));
+}
+
+/// "Add action" as its own capsule: the glass replaces the frosted fill and edge.
+fn liquidActionPill(theme: *const Theme) zpui.AnyElement {
+    return capsule(true, "titlebar-action-glass", 0, div().id("project-action-add").h(px(capsule_h)).px(px(10)).flex().itemsCenter().gap(px(5))
+        .rounded(px(capsule_h / 2)).cursorPointer().occlude()
+        .textSize(px(11.5)).fontWeight(500).textColor(theme.text)
+        .hover(sb.bg(theme.wash(0.06)))
+        .child(ui.icon.of(.plus, 13, theme.text_muted))
+        .child(div().relative().top(px(-1)).child("Add action")));
+}
+
+/// The sidebar toggle + back/forward (+ new session) group. Over the sidebar glass it
+/// sits bare on the pane (as on Tahoe); with the sidebar collapsed it gets a capsule
+/// next to the traffic lights.
+fn liquidCluster(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div {
+    const has_chat = shell.state.read(cx).workspace.read(cx).selected_chat != null;
+    var row = div().absolute().top(px(0)).left(px(0)).h(px(layout.titlebar_height))
+        .flex().flexRow().itemsCenter().pt(px(layout.titlebar_top_pad)).px(px(cluster_pad));
+    if (is_mac) row = row.child(div().flexNone().hFull().w(px(clusterStart() - cluster_pad - capsule_pad)));
+    var group = div().flex().flexRow().itemsCenter()
+        .child(button.windowControl("toggle-sidebar", .sidebar_minimalistic_left, "Toggle left sidebar", theme)
+        .onClick(cx.listener(Shell.onToggleSidebarClick)));
+    const back = if (shell.canBack())
+        zpui.intoAnyElement(button.windowControl("nav-back", .arrow_left, "Back", theme).onClick(cx.listener(Shell.navBack)))
+    else
+        zpui.intoAnyElement(button.disabledControl(.arrow_left, theme));
+    const fwd = if (shell.canForward())
+        zpui.intoAnyElement(button.windowControl("nav-forward", .arrow_right, "Forward", theme).onClick(cx.listener(Shell.navForward)))
+    else
+        zpui.intoAnyElement(button.disabledControl(.arrow_right, theme));
+    group = group.child(div().ml(px(layout.titlebar_group_gap)).flex().flexRow().itemsCenter()
+        .gap(px(layout.titlebar_control_gap)).child(back).child(fwd));
+    if (has_chat) group = group.child(div().flexNone().ml(px(layout.titlebar_group_gap))
+        .child(button.windowControl("titlebar-new-session", .plus, "New session", theme).onClick(cx.listener(Shell.onNewSessionClick))));
+    // The sidebar pane no longer lies under the group: give it its own capsule.
+    const on_sidebar = shell.sidebarNow(cx) >= clusterStart() + cluster_buttons_width;
+    return row.child(if (on_sidebar)
+        zpui.intoAnyElement(div().px(px(capsule_pad)).child(group))
+    else
+        capsule(true, "titlebar-nav-glass", capsule_pad, group));
 }
 
 fn rightTab(theme: *const Theme, label: []const u8, active: bool) zpui.Div {

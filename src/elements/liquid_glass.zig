@@ -91,6 +91,14 @@ pub fn platformSupportsLiquidGlass(cx: anytype) bool {
     return app.platform.supportsLiquidGlass();
 }
 
+/// The macOS major version whose Liquid Glass design is shown (26 Tahoe, 27 Golden
+/// Gate, ...), 0 without native glass. For layout choices that changed between
+/// releases (e.g. macOS 27's edge-to-edge sidebars). `cx`: `*App` or a `*Context(T)`.
+pub fn liquidGlassRevision(cx: anytype) u32 {
+    const app: *App = if (@TypeOf(cx) == *App) cx else cx.app;
+    return app.platform.liquidGlassRevision();
+}
+
 // ---------------------------------------------------------------------------------------
 // liquidGlass
 // ---------------------------------------------------------------------------------------
@@ -256,6 +264,88 @@ pub const OverlayPlane = struct {
         if (!self.on) return self.child.paint(window, cx);
         window.pushOverlayPlane();
         defer window.popOverlayPlane();
+        self.child.paint(window, cx);
+    }
+};
+
+// ---------------------------------------------------------------------------------------
+// sidebarMaterial / backdropHole
+// ---------------------------------------------------------------------------------------
+
+pub const MaterialOptions = struct {
+    /// Uniform corner radius of the material.
+    corner_radius: Pixels = 0,
+    enabled: bool = true,
+};
+
+pub const SidebarMaterialData = struct {
+    id: ElementId,
+    opts: MaterialOptions,
+    child: AnyElement,
+};
+
+/// A behind-window sidebar material (macOS `NSVisualEffectView` `.sidebar`) at
+/// `child`'s bounds, attached UNDER the main surface: it only shows where zpui paints
+/// nothing (alpha 0) above it. `child` paints in place (main surface). Without native
+/// glass support it just paints `child`. Used as the fallback backing of a sidebar
+/// glass pane (docs/LIQUID_GLASS.md, `ZERON_SIDEBAR_GLASS=vev`).
+pub fn sidebarMaterial(id: anytype, opts: MaterialOptions, child: anytype) SidebarMaterial {
+    return .{ .d = arena_mod.current().create(SidebarMaterialData, .{
+        .id = ElementId.from(id),
+        .opts = opts,
+        .child = element.intoAnyElement(child),
+    }) };
+}
+
+pub const SidebarMaterial = struct {
+    d: *SidebarMaterialData,
+
+    pub fn intoAnyElement(self: SidebarMaterial) AnyElement {
+        return AnyElement.new(SidebarMaterialElement{ .d = self.d });
+    }
+};
+
+const SidebarMaterialElement = struct {
+    d: *SidebarMaterialData,
+
+    pub fn elementId(self: *SidebarMaterialElement) ?ElementId {
+        return self.d.id;
+    }
+    pub fn requestLayout(self: *SidebarMaterialElement, _: ?GlobalElementId, _: *void, window: *Window, cx: *App) LayoutId {
+        return self.d.child.requestLayout(window, cx);
+    }
+    pub fn prepaint(self: *SidebarMaterialElement, _: ?GlobalElementId, _: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        self.d.child.prepaint(window, cx);
+    }
+    pub fn paint(self: *SidebarMaterialElement, gid: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        const d = self.d;
+        if (d.opts.enabled and gid != null)
+            _ = window.paintLiquidGlass(gid.?, .sidebar_material, bounds, .{ .corner_radius = d.opts.corner_radius });
+        d.child.paint(window, cx);
+    }
+};
+
+/// Cut `child`'s bounds (rounded by `corner_radii`: tl, tr, br, bl) out of the window's
+/// behind-window material (`Window.paintBackdropHole`), so native glass above a region
+/// zpui leaves at alpha 0 refracts the desktop itself. `child` paints in place. Must be
+/// painted every frame by a view that is always redrawn (the root view).
+pub fn backdropHole(on: bool, corner_radii: [4]Pixels, child: anytype) BackdropHole {
+    return .{ .on = on, .radii = corner_radii, .child = element.intoAnyElement(child) };
+}
+
+pub const BackdropHole = struct {
+    on: bool,
+    radii: [4]Pixels,
+    child: AnyElement,
+
+    pub fn requestLayout(self: *BackdropHole, _: ?GlobalElementId, _: *void, window: *Window, cx: *App) LayoutId {
+        return self.child.requestLayout(window, cx);
+    }
+    pub fn prepaint(self: *BackdropHole, _: ?GlobalElementId, _: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        self.child.prepaint(window, cx);
+    }
+    pub fn paint(self: *BackdropHole, _: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
+        if (self.on) window.paintBackdropHole(bounds, self.radii);
         self.child.paint(window, cx);
     }
 };

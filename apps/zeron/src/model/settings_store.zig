@@ -89,6 +89,17 @@ pub fn initMemory(app: *App, io: std.Io) !void {
     try app.setGlobal(SettingsStore{ .gpa = app.gpa, .io = io, .loaded = loaded, .data_dir = dir, .persist = false });
 }
 
+/// An in-memory store seeded from `{data_dir}/ui-settings.json` (fixture
+/// runs that want a real settings file, e.g. a background image, without
+/// ever writing it back).
+pub fn initMemoryFrom(app: *App, io: std.Io, data_dir: []const u8) !void {
+    const loaded = try settings.load(app.gpa, io, data_dir);
+    errdefer loaded.deinit();
+    const dir = try app.gpa.dupe(u8, "");
+    errdefer app.gpa.free(dir);
+    try app.setGlobal(SettingsStore{ .gpa = app.gpa, .io = io, .loaded = loaded, .data_dir = dir, .persist = false });
+}
+
 /// Latest settings (including mutations still inside the debounce window).
 pub fn current(app: *App) ?*const settings.UiSettings {
     const store = app.tryGlobal(SettingsStore) orelse return null;

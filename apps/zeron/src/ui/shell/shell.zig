@@ -28,6 +28,7 @@ const right_pane_mod = @import("right_pane.zig");
 const pickers_mod = @import("../pickers/root.zig");
 const settings_ui = @import("../settings/root.zig"); // settings mode (ui/settings owns it)
 const wiring_mod = @import("wiring.zig"); // [wiring] event routing (composer, links, dialogs, actions)
+const smoke_probe = @import("smoke_probe.zig"); // CI smoke: frosted-menu blur probe
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -121,6 +122,8 @@ pub const Shell = struct {
     settings_sub: ?zpui.Subscription = null,
     // [wiring] routed flows' state (ui/shell/wiring.zig).
     wiring: wiring_mod.State = .{},
+    /// CI smoke only (`ZERON_SMOKE_MENU`): the frosted-menu blur probe.
+    smoke_probe: smoke_probe.Mode = .off,
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, server_decorations: bool, window: *Window, cx: *Context(Shell)) !Shell {
         const focus = cx.focusHandle();
@@ -658,6 +661,12 @@ pub const Shell = struct {
 
     // ---- render -----------------------------------------------------------------------
 
+    /// CI smoke: show / hide the frosted-menu blur probe (`smoke_probe.zig`).
+    pub fn setSmokeProbe(self: *Shell, mode: smoke_probe.Mode, cx: *Context(Shell)) void {
+        self.smoke_probe = mode;
+        cx.notify();
+    }
+
     pub fn gate(self: *Shell, cx: anytype) model.view.GatePhase {
         if (self.fixtures) |f| return f.gate();
         return self.state.read(cx).gate(cx);
@@ -666,6 +675,8 @@ pub const Shell = struct {
     pub fn render(self: *Shell, window: *Window, cx: *Context(Shell)) zpui.Div {
         // [liquid-glass] Glass material follows zeron's theme, not the OS appearance.
         window.glass_dark = ui.theme.get(cx).appearance == .dark;
+        // Reduce motion / pause in background (settings × OS × focus).
+        settings_ui.motion.sync(window, cx.app);
         // The OS flipped light/dark (Linux settings portal, macOS effective
         // appearance): re-resolve a `system` theme on the next tick.
         const sys = window.windowAppearance();
@@ -706,10 +717,12 @@ pub const Shell = struct {
             .onDragMove(SidebarResize, cx.listener(Shell.onSidebarDrag))
             .onDragMove(RightPaneResize, cx.listener(Shell.onRightDrag))
             .relative().flex().flexRow().sizeFull()
-            .bg(theme.glass())
             .textColor(theme.text)
             .fontFamily(theme.font_sans)
             .textSize(ui.rems(14));
+        // [liquid-glass] Liquid Glass (ready): renderReady paints the window tint around
+        // the sidebar glass instead, leaving alpha 0 under it (the desktop shows through).
+        if (!(theme.isLiquid() and g == .ready)) root = root.bg(theme.glass());
         root = wiring_mod.actionsOn(root, cx); // [wiring] SaveFile / ArchiveSession / OpenModelPicker
         if (radius > 0) root = root.rounded(px(radius)).overflowHidden();
 
@@ -734,6 +747,7 @@ pub const Shell = struct {
             window.requestAnimationFrame();
         }
 
+        if (self.smoke_probe != .off) root = root.child(smoke_probe.element(theme, self.smoke_probe));
         if (self.palette) |p| root = root.child(p);
         if (self.add_project) |p| root = root.child(p);
         // [lifecycle] the "Check for Updates…" dialog (lifecycle/app_update.zig).
@@ -788,10 +802,11 @@ pub const Shell = struct {
         if (radius > 0) {
             if (sidebar_now >= 2 * radius) tone = tone.roundedTl(px(radius)).roundedBl(px(radius)) else tone = tone.top(px(radius)).bottom(px(radius));
         }
-        // [liquid-glass] A floating native glass pane replaces the wash column; the
-        // sidebar, titlebar and cluster then paint on the overlay plane above glass.
+        // [liquid-glass] A native glass pane replaces the wash column (the window tint
+        // goes around it, so the glass sees the desktop); the sidebar, titlebar and
+        // cluster then paint on the overlay plane above glass.
         const liquid = theme.isLiquid();
-        if (liquid) tone = liquidSidebarGlass(sidebar_now, radius);
+        if (liquid) tone = liquidSidebar(theme, sidebar_now, window, cx);
 
         if (settings_mode) return div().absolute().inset0().child(tone).child(div().absolute().inset0().child(zpui.overlayPlane(liquid, div().sizeFull().child(self.settings_view.?)))); // [liquid-glass]
 
@@ -834,8 +849,17 @@ pub const Shell = struct {
             files_col = div().hFull().flexNone().relative().overflowHidden().w(px(files_now)).child(inner);
         };
 
+        if (liquid) return div().absolute().inset0().child(tone).child(ui.anim.fadeIn("phase-app", div().sizeFull().relative() // [liquid-glass]
+            .child(div().sizeFull().flex().flexRow()
+                .child(zpui.overlayPlane(true, sidebar_col))
+                .child(sidebar_seam)
+                .child(card)
+                .child(right_wrap)
+                .child(files_col))
+            .child(liquidTitlebarFade(theme, sidebar_now, right_now + files_now))
+            .child(liquidTitlebar(self, sidebar_now, right_now, files_now, theme, cx))));
+
         const page = div().sizeFull().relative()
-            .child(if (liquid) liquidTitlebarGlass(sidebar_now) else null) // [liquid-glass]
             .child(div().sizeFull().flex().flexRow()
                 .child(zpui.overlayPlane(liquid, sidebar_col))
                 .child(sidebar_seam)
@@ -850,21 +874,102 @@ pub const Shell = struct {
 };
 
 // ---- [liquid-glass] native glass chrome (Settings → Appearance → Glass → Liquid Glass) ----
+//
+// The sidebar is a native glass pane that shows the DESKTOP: zpui paints the window
+// tint everywhere except under the glass (alpha 0 there), and in `glass` mode cuts the
+// same shape out of the window's behind-window blur (`zpui.backdropHole`), so the glass
+// samples the wallpaper through the non-opaque window. `vev` mode instead puts AppKit's
+// behind-window `.sidebar` material under that transparent region with `.clear` glass
+// on top (the pre-Tahoe recipe; compare both on a Mac with `ZERON_SIDEBAR_GLASS`).
+// Layout: a floating pane inset 8px (macOS 26), or flush with the window edges
+// (macOS 27 / WWDC26; `ZERON_SIDEBAR_LAYOUT=floating|flush` overrides).
+
+pub const SidebarGlassMode = enum { glass, vev };
+pub const SidebarLayout = enum { floating, flush };
+
+/// `ZERON_SIDEBAR_GLASS=glass|vev` (main.zig).
+pub var sidebar_glass_mode: SidebarGlassMode = .glass;
+/// `ZERON_SIDEBAR_LAYOUT=floating|flush` (main.zig); null = by OS release.
+pub var sidebar_layout_override: ?SidebarLayout = null;
+
+pub fn sidebarLayout(cx: anytype) SidebarLayout {
+    if (sidebar_layout_override) |l| return l;
+    return if (zpui.liquidGlassRevision(cx) >= 27) .flush else .floating;
+}
 
 /// Inset of the floating sidebar glass pane from the window edges.
 const liquid_sidebar_inset: f32 = 8;
+/// Corner radius of the floating pane.
+const liquid_sidebar_radius: f32 = 12;
+/// Flush pane: radius of its window-side corners (AppKit's window mask clips the rest).
+const liquid_flush_radius: f32 = 12;
+/// Width of the tint ring around the floating pane (only its inner, glass-concentric
+/// edge is visible; the rest is clipped to the sidebar column).
+const tint_ring: f32 = 48;
 
-/// The sidebar's glass pane (absolute; replaces the wash column).
-fn liquidSidebarGlass(sidebar_now: f32, window_radius: f32) zpui.Div {
-    const inset = liquid_sidebar_inset;
-    const w = @max(sidebar_now - 2 * inset, 0);
-    const r = @max(window_radius - inset, 12);
-    return div().absolute().top(px(inset)).bottom(px(inset)).left(px(inset)).w(px(w))
-        .child(if (w > 1) zpui.liquidGlass("sidebar-glass", .{ .shape = .{ .rounded = r } }, div().sizeFull()) else null);
+const GlassRect = struct { x: f32, y: f32, w: f32, h: f32, r: f32 };
+
+/// The sidebar column [0, sidebar_now]: glass pane + the window tint around it (the
+/// main area's tint is painted here too, so the window has exactly one tint layer).
+fn liquidSidebar(theme: *const Theme, sidebar_now: f32, window: *Window, cx: anytype) zpui.Div {
+    const vp = window.viewportSize();
+    const tint = theme.glass();
+    const lay = sidebarLayout(cx);
+    const mode = sidebar_glass_mode;
+    var out = div().absolute().inset0();
+    // Main area tint (right of the column); a hairline seam for the flush pane.
+    var main_tint = div().absolute().top(px(0)).bottom(px(0)).left(px(sidebar_now)).right(px(0)).bg(tint);
+    if (lay == .flush and sidebar_now > 1) main_tint = main_tint.borderL1().borderColor(theme.border);
+    out = out.child(main_tint);
+    if (sidebar_now <= 1) return out;
+
+    const inset: f32 = if (lay == .floating) liquid_sidebar_inset else 0;
+    const g: GlassRect = .{
+        .x = inset,
+        .y = inset,
+        .w = @max(sidebar_now - 2 * inset, 0),
+        .h = @max(vp.height - 2 * inset, 0),
+        .r = if (lay == .floating) liquid_sidebar_radius else liquid_flush_radius,
+    };
+    var column = div().absolute().top(px(0)).bottom(px(0)).left(px(0)).w(px(sidebar_now)).overflowHidden();
+    if (g.w <= 2 * g.r) {
+        // Too narrow for a pane (mid-collapse): plain tint.
+        return out.child(column.bg(tint));
+    }
+    if (lay == .floating) {
+        // A ring of tint whose inner edge is the pane's rounded rect (alpha 0 inside).
+        column = column.child(div().absolute().left(px(g.x - tint_ring)).top(px(g.y - tint_ring))
+            .w(px(g.w + 2 * tint_ring)).h(px(g.h + 2 * tint_ring))
+            .border(px(tint_ring)).borderColor(tint).rounded(px(g.r + tint_ring)));
+    }
+    // The flush pane's glass extends past the seam by its radius and is clipped there
+    // (square inner edge, rounded window-side corners).
+    const glass_w = if (lay == .flush) g.w + g.r else g.w;
+    const style: zpui.LiquidGlassStyle = if (mode == .vev) .clear else .regular;
+    const pane = div().absolute().left(px(g.x)).top(px(g.y)).w(px(glass_w)).h(px(g.h))
+        .child(if (mode == .vev) zpui.sidebarMaterial("sidebar-material", .{ .corner_radius = if (lay == .floating) g.r else 0 }, div().sizeFull()) else null)
+        .child(zpui.liquidGlass("sidebar-glass", .{ .style = style, .shape = .{ .rounded = g.r } }, div().sizeFull()));
+    column = column.child(pane);
+    // Cut the pane out of the window's behind-window blur (glass mode).
+    const radii: [4]f32 = if (lay == .floating) .{ g.r, g.r, g.r, g.r } else .{ g.r, 0, 0, g.r };
+    const hole = div().absolute().left(px(g.x)).top(px(g.y)).w(px(g.w)).h(px(g.h));
+    out = out.child(column).child(zpui.backdropHole(mode == .glass, radii, hole));
+    return out;
 }
 
-/// The titlebar band right of the sidebar: content scrolls under glass.
-fn liquidTitlebarGlass(sidebar_now: f32) zpui.Div {
-    return div().absolute().top(px(0)).right(px(0)).left(px(sidebar_now)).h(px(layout.titlebar_height))
-        .child(zpui.liquidGlass("titlebar-glass", .{}, div().sizeFull()));
+/// Soft scroll edge under the titlebar (replaces a material strip): the transcript
+/// fades into the window tint as it scrolls under the capsules.
+fn liquidTitlebarFade(theme: *const Theme, sidebar_now: f32, right_w: f32) zpui.Div {
+    const stop = zpui.color.linearColorStop;
+    return div().absolute().top(px(0)).left(px(sidebar_now)).right(px(right_w)).h(px(layout.titlebar_height + 12))
+        .bg(zpui.color.linearGradient(180, stop(theme.surface.opacity(0.72), 0), stop(theme.surface.opacity(0), 1)));
+}
+
+/// The titlebar band: session bar + control cluster, their capsules members of one
+/// `NSGlassEffectContainerView` so neighbours morph (titlebar.zig, "Tahoe capsules").
+fn liquidTitlebar(self: *Shell, sidebar_now: f32, right_now: f32, files_now: f32, theme: *const Theme, cx: *Context(Shell)) zpui.Div {
+    return div().absolute().top(px(0)).left(px(0)).right(px(0)).h(px(layout.titlebar_height))
+        .child(zpui.overlayPlane(true, zpui.liquidGlassGroup("titlebar-glass", .{ .spacing = titlebar.capsule_spacing }, div().sizeFull().relative()
+        .child(div().absolute().top(px(0)).left(px(0)).right(px(0)).child(titlebar.sessionBar(self, sidebar_now, right_now, files_now, theme, cx)))
+        .child(titlebar.cluster(self, theme, cx)))));
 }

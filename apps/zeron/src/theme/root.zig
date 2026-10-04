@@ -19,9 +19,9 @@
 //!     .accent = settings.accent, .surface = settings.surface,
 //! });
 //! ```
-//!
-//! TODO: the VS Code / TextMate theme importer (`crates/theme/src/vscode.rs`,
-//! ~1.7k lines) and the custom theme library (`library.rs`) are not ported yet.
+//! - `vscode`: the VS Code / TextMate theme importer (`crates/theme/src/vscode.rs`);
+//! - `library`: the durable custom theme library (`library.rs`), surfaced
+//!   through `registry.active()`.
 
 pub const model = @import("model.zig");
 pub const derive = @import("derive.zig");
@@ -34,6 +34,8 @@ pub const typography = @import("typography.zig");
 pub const motion = @import("motion.zig");
 pub const settings = @import("settings.zig");
 pub const wallpaper = @import("wallpaper.zig");
+pub const vscode = @import("vscode.zig");
+pub const library = @import("library.zig");
 
 pub const Color = model.Color;
 pub const Appearance = model.Appearance;

@@ -211,6 +211,8 @@ pub const TestPlatform = struct {
     reduced_motion: bool = false,
     /// [liquid-glass] Reported by `supportsLiquidGlass` (headless tests pretend macOS 26).
     liquid_glass_supported: bool = true,
+    /// [liquid-glass] Reported by `liquidGlassRevision` (the macOS major version).
+    liquid_glass_revision: u32 = 26,
     // -- lifecycle recording (setMenus / appCommand / postNotification / playSound) ------
     menus: []const pf.Menu = &.{},
     menu_sets: usize = 0,
@@ -325,10 +327,14 @@ pub const TestPlatform = struct {
         .postNotification = vPostNotification,
         .playSound = vPlaySound,
         .supportsLiquidGlass = vSupportsLiquidGlass,
+        .liquidGlassRevision = vLiquidGlassRevision,
     };
 
     fn vSupportsLiquidGlass(ptr: *anyopaque) bool {
         return cast(ptr).liquid_glass_supported;
+    }
+    fn vLiquidGlassRevision(ptr: *anyopaque) u32 {
+        return cast(ptr).liquid_glass_revision;
     }
 
     fn vSetMenus(ptr: *anyopaque, menus: []const pf.Menu) void {
@@ -464,6 +470,9 @@ pub const TestWindow = struct {
     last_overlay: [8]pf.OverlayRange = undefined,
     last_overlay_len: usize = 0,
     last_capture_input: bool = false,
+    /// [liquid-glass] The last `setBackdropHole` (and how many calls were made).
+    backdrop_hole: ?pf.BackdropHole = null,
+    backdrop_hole_sets: u32 = 0,
 
     pub fn window(self: *TestWindow) pf.Window {
         return .{ .ptr = self, .vtable = &vtable };
@@ -592,7 +601,14 @@ pub const TestWindow = struct {
         .drawLayered = vDrawLayered,
         .attachLiquidGlass = vAttachGlass,
         .configureLiquidGlass = vConfigureGlass,
+        .setBackdropHole = vSetBackdropHole,
     };
+
+    fn vSetBackdropHole(ptr: *anyopaque, hole: ?pf.BackdropHole) void {
+        const self = c(ptr);
+        self.backdrop_hole = hole;
+        self.backdrop_hole_sets += 1;
+    }
 
     fn vAttachNative(ptr: *anyopaque, _: *anyopaque, _: pf.NativeViewOptions) anyerror!pf.NativeViewId {
         const self = c(ptr);

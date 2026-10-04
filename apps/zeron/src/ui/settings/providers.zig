@@ -109,7 +109,12 @@ pub fn render(v: *SettingsView, t: *const Theme, _: *zpui.Window, cx: *zpui.Cont
 
         var meta: [4]w.Fragment = undefined;
         var n: usize = 0;
-        if (!d.installed) {
+        const installing = v.installing == h;
+        // Installing REPLACES the not-installed hint in place.
+        if (installing) {
+            meta[n] = .{ .text = zpui.fmt("Installing {s}…", .{d.name}) };
+            n += 1;
+        } else if (!d.installed) {
             meta[n] = .{ .text = installHint(h, enabled, d.canInstall), .color = t.warning_muted.opacity(0.9) };
             n += 1;
         }
@@ -162,10 +167,14 @@ pub fn render(v: *SettingsView, t: *const Theme, _: *zpui.Window, cx: *zpui.Cont
                 .groupHover(group_name, sb.textColor(t.text)));
         }
         var header = w.cardRow(t, ix == 0).child(trigger);
-        if (!d.installed) header = header.opacity(0.55);
-        if (h != .mock and !d.installed and d.canInstall) {
-            header = header.child(w.actionButton(t, .quiet).id(.{ "harness-install", ix }).child("Install"));
+        if (!d.installed and !installing) header = header.opacity(0.55);
+        if (h != .mock and !d.installed and d.canInstall and !installing) {
+            var install = w.actionButton(t, .quiet).id(.{ "harness-install", ix }).child("Install");
+            if (v.installing == null) install = install.onClick(cx.listenerWith(ix, SettingsView.onHarnessInstall));
+            header = header.child(install);
         }
+        if (installing) header = header.child(w.actionButton(t, .quiet).id(.{ "harness-cancel-install", ix })
+            .onClick(cx.listener(SettingsView.onCancelInstall)).child("Cancel"));
         header = header.child(harnessSwitch(v, ix, h, enabled, interactive, t, cx));
         var block = div().flex().flexCol().child(header);
         if (expanded) block = block.child(details(v, ix, t, d, update, cx));
@@ -175,11 +184,13 @@ pub fn render(v: *SettingsView, t: *const Theme, _: *zpui.Window, cx: *zpui.Cont
     const check = div().id("check-harness-updates").flexNone().px(px(9)).py(px(5)).rounded(px(6))
         .textSize(rems(11)).textColor(t.text_muted).cursorPointer().hover(sb.bg(t.ink(0.05)))
         .onClick(cx.listener(SettingsView.onCheckUpdates)).child("Check now");
-    return w.pageColumn()
+    var page = w.pageColumn()
         .child(div().flex().flexRow().itemsCenter().justifyBetween()
         .child(w.pageHeader(t, "Providers", null))
         .child(div().flex().itemsCenter().gap(px(6)).child(check).child(select.render(v, .provider_device, t, cx))))
         .child(card);
+    if (v.provider_error) |e| page = page.child(w.errorStrip(t, e));
+    return page;
 }
 
 fn harnessSwitch(v: *SettingsView, ix: usize, h: HarnessId, enabled: bool, interactive: bool, t: *const Theme, cx: *zpui.Context(SettingsView)) zpui.StatefulDiv {

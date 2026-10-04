@@ -23,6 +23,9 @@ const ui = @import("../components/root.zig");
 const store = @import("store.zig");
 const w = @import("widgets.zig");
 const view_mod = @import("view.zig");
+const background = @import("../background/root.zig");
+const motion = @import("motion.zig");
+const thread_naming = @import("thread_naming.zig");
 
 const SettingsView = view_mod.SettingsView;
 const Context = zpui.Context;
@@ -52,6 +55,8 @@ pub const SelectId = enum(u8) {
     thread_naming,
     /// The expanded provider's update policy (`view.policy_harness`).
     update_policy,
+    /// Appearance → Background effect (only while an image is available).
+    background_effect,
 };
 
 /// `UPDATE_POLICIES`: (policy, menu label, explanation).
@@ -156,13 +161,15 @@ pub fn spec(v: *SettingsView, id: SelectId, cx: anytype) Spec {
         .light_theme, .dark_theme => {
             const ap = appearanceOf(id);
             const current_id = t.theme_selection.variantId(ap);
-            var it = zt.registry.builtin.variantsFor(ap);
+            const reg = a.create(zt.Registry) catch return .{ .label = "", .options = &.{}, .selected = 0 };
+            reg.* = zt.registry.active();
+            var it = reg.variantsFor(ap);
             var sel: usize = 0;
             const page_theme = ui.theme.get(cx);
             while (it.next()) |variant| {
                 if (std.mem.eql(u8, variant.id, current_id)) sel = list.items.len;
                 const sample = a.create(Theme) catch break;
-                sample.* = zt.Theme.forSelection(&zt.registry.builtin, .{ .appearance = ap, .variant_id = variant.id, .surface = page_theme.surface_preference });
+                sample.* = zt.Theme.forSelection(reg, .{ .appearance = ap, .variant_id = variant.id, .surface = page_theme.surface_preference });
                 list.append(a, .{ .label = variant.name, .leading = w.paletteOf(sample) }) catch {};
             }
             return .{
@@ -241,9 +248,24 @@ pub fn spec(v: *SettingsView, id: SelectId, cx: anytype) Spec {
             const sel = if (v.policy_harness) |h| policyIndex(v.harnessPolicy(h, cx)) else 0;
             return .{ .label = "Update policy", .options = list.items, .selected = sel, .width = 136 };
         },
+        .background_effect => {
+            const Effect = model.settings.NewThreadBackgroundEffect;
+            const all = [_]Effect{ .none, .dither, .ascii, .halftone, .scanlines };
+            for (all) |e| list.append(a, .{ .label = e.label() }) catch {};
+            const sel = std.mem.indexOfScalar(Effect, &all, s.newThreadBackgroundEffect) orelse 0;
+            return .{ .label = "Background effect", .options = list.items, .selected = sel, .width = 128 };
+        },
         .thread_naming => {
-            list.append(a, .{ .label = "Session agent", .leading = .{ .icon = .{ .icon = .chat_round_line, .color = ui.theme.get(cx).text_muted } } }) catch {};
-            return .{ .label = "Thread naming", .options = list.items, .selected = 0, .menu_width = 220 };
+            const pt = ui.theme.get(cx);
+            const rows = thread_naming.choices(v, a, cx);
+            for (rows) |r| {
+                const leading: w.Leading = if (r.harness) |h| blk: {
+                    const mark, const tint = ui.icon.harnessMark(h);
+                    break :blk .{ .icon = .{ .icon = mark, .color = tint orelse pt.text_muted } };
+                } else .{ .icon = .{ .icon = .chat_round_line, .color = pt.text_muted } };
+                list.append(a, .{ .label = r.label, .leading = leading }) catch {};
+            }
+            return .{ .label = "Thread naming", .options = list.items, .selected = thread_naming.selectedIndex(rows, v.title.settings()), .menu_width = 240 };
         },
     }
 }
@@ -316,7 +338,8 @@ pub fn commit(v: *SettingsView, id: SelectId, ix: usize, cx: *Context(SettingsVi
         },
         .light_theme, .dark_theme => {
             const ap = appearanceOf(id);
-            var it = zt.registry.builtin.variantsFor(ap);
+            const reg = zt.registry.active();
+            var it = reg.variantsFor(ap);
             var i: usize = 0;
             while (it.next()) |variant| : (i += 1) if (i == ix) {
                 if (ap == .light) store.update(cx, .debounced, variant.id, T.light) else store.update(cx, .debounced, variant.id, T.dark);
@@ -329,7 +352,10 @@ pub fn commit(v: *SettingsView, id: SelectId, ix: usize, cx: *Context(SettingsVi
             store.update(cx, .debounced, ix, T.surface);
             store.applyTheme(cx.app);
         },
-        .reduce_motion => if (ix < zt.motion.ReduceMotion.all.len) store.update(cx, .debounced, ix, T.motion),
+        .reduce_motion => if (ix < zt.motion.ReduceMotion.all.len) {
+            store.update(cx, .immediate, ix, T.motion);
+            motion.applyAll(cx.app);
+        },
         .ui_font => if (ix < ui_families.len) {
             store.update(cx, .debounced, ix, T.uiFont);
             store.applyTheme(cx.app);
@@ -359,7 +385,12 @@ pub fn commit(v: *SettingsView, id: SelectId, ix: usize, cx: *Context(SettingsVi
         .update_policy => if (v.policy_harness) |h| if (ix < update_policies.len) {
             v.setHarnessPolicy(h, update_policies[ix][0], cx);
         },
-        .provider_device, .thread_naming => {},
+        .background_effect => if (ix < 5) {
+            const all = [_]model.settings.NewThreadBackgroundEffect{ .none, .dither, .ascii, .halftone, .scanlines };
+            background.install.setEffect(cx.app, all[ix]);
+        },
+        .thread_naming => thread_naming.commit(v, ix, cx),
+        .provider_device => {},
     }
 }
 
@@ -390,9 +421,13 @@ pub fn flip(v: *SettingsView, which: Toggle, cx: *Context(SettingsView)) void {
         }
     };
     _ = v;
-    const immediate = which == .dictation or which == .escape_stops;
+    const immediate = which == .dictation or which == .escape_stops or which == .pause_animations;
     store.update(cx, if (immediate) .immediate else .debounced, which, F.f);
-    if (which == .match_wallpaper) store.applyTheme(cx.app);
+    if (which == .match_wallpaper) {
+        store.applyTheme(cx.app);
+        background.install.ensureColor(cx.app);
+    }
+    if (which == .pause_animations) motion.applyAll(cx.app);
 }
 
 // ---------------------------------------------------------------------------

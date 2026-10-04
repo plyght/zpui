@@ -168,6 +168,9 @@ pub const ComposerView = struct {
 
     /// Width the shell gives the composer column (conversation width).
     available_width: ?f32 = null,
+    /// The pill's window bounds, measured during prepaint (`surface_bounds`):
+    /// the new-thread background cuts its mask around it during paint.
+    surface_bounds: ?zpui.Bounds(f32) = null,
     failure: std.ArrayList(u8) = .empty,
     failure_warning: bool = false,
     /// Staged images per draft key ("" = the new-thread canvas).
@@ -432,6 +435,12 @@ pub const ComposerView = struct {
         self.closeLightbox(cx.app);
         cx.notify();
     }
+
+    fn measureSurface(cell: *?zpui.Bounds(f32), bounds: zpui.Bounds(f32), _: *Window, _: *App) void {
+        cell.* = bounds;
+    }
+
+    fn noPaint(_: *?zpui.Bounds(f32), _: zpui.Bounds(f32), _: *Window, _: *App) void {}
 
     // ---- file picker ----
 
@@ -1170,6 +1179,18 @@ pub const ComposerView = struct {
         };
     }
 
+    /// Escape with "Escape stops the active agent" on (`resolve_shell_escape`
+    /// → `interrupt_chat`): stop the selected chat when it is working or
+    /// awaiting input. Returns whether an interrupt was sent.
+    pub fn escapeStop(self: *ComposerView, cx: *Context(ComposerView)) bool {
+        const chat = self.selectedChat(cx) orelse return false;
+        const now = self.nowTimestamp() orelse return false;
+        const ind = self.state.read(cx).workspace.read(cx).indicatorFor(chat, now);
+        if (ind != .working and ind != .awaiting_input) return false;
+        self.interrupt(cx);
+        return true;
+    }
+
     fn activateLatestQueued(self: *ComposerView, cx: *Context(ComposerView)) void {
         const st = self.state.read(cx);
         const q = st.queue orelse return;
@@ -1384,6 +1405,7 @@ pub const ComposerView = struct {
         // [wiring] a pending question replaces the pill; completions float above it.
         const pill_surface = extras.renderWizard(self, window, cx) orelse div().relative().id("composer-surface")
             .child(chrome.frosted(theme, m.composer_radius, zt.layout.menu_blur, body))
+            .child(zpui.canvas(&self.surface_bounds, noPaint).withPrepaint(*?zpui.Bounds(f32), measureSurface).absolute().inset0())
             .child(extras.renderPopup(self, window, cx));
 
         var container = div().wFull().maxW(px(self.available_width orelse m.composer_max_width)).mxAuto()

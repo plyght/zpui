@@ -38,6 +38,10 @@ const devices = @import("devices.zig");
 const files = @import("files.zig");
 const appshots = @import("appshots.zig");
 const archived = @import("archived.zig");
+const background_adjust = @import("background_adjust.zig");
+const fonts_mod = @import("fonts.zig");
+const thread_naming = @import("thread_naming.zig");
+const theme_library = @import("theme_library.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -110,7 +114,7 @@ pub const Scratch = struct {
     }
 };
 
-fn scratch(gpa: std.mem.Allocator) Scratch {
+pub fn scratch(gpa: std.mem.Allocator) Scratch {
     return .{ .arena = .init(gpa) };
 }
 
@@ -169,11 +173,29 @@ pub const SettingsView = struct {
     /// The provider whose update-policy select is (being) opened.
     policy_harness: ?protocol.HarnessId = null,
     policy_override: std.EnumArray(protocol.HarnessId, ?model.types.HarnessUpdatePolicy) = .initFill(null),
+    /// Providers: the harness whose `InstallHarness` is in flight.
+    installing: ?protocol.HarnessId = null,
+    /// Providers: the last install / update / check failure (owned).
+    provider_error: ?[]u8 = null,
+    /// Providers: a `CheckHarnessUpdates` reply newer than the watch (owned).
+    checked_updates: ?std.json.Parsed([]model.types.HarnessUpdateStatus) = null,
 
     // ---- appearance ----
     width_hovered: bool = false,
     width_pressed: bool = false,
     width_bounds: zpui.Bounds(f32) = .{ .origin = .zero, .size = .zero },
+    /// Appearance → "Adjust background" (`background_adjust.zig`).
+    adjust: ?background_adjust.Dialog = null,
+    /// Appearance → the searchable font dropdowns (`fonts.zig`).
+    fonts: fonts_mod.Picker = .{},
+    /// General → Thread naming (`GetTitleSettings` / `SetTitleSettings`).
+    title: thread_naming.State = .{},
+    /// Appearance → "Add a theme" (`theme_library.zig`).
+    import: ?theme_library.ImportDialog = null,
+    /// Appearance → a library entry's "Theme mapping" review (owned id).
+    review_entry: ?[]u8 = null,
+    /// The last theme-library action failure (owned).
+    library_error: ?[]u8 = null,
 
     // ---- archived ----
     unarchived: std.ArrayList([]u8) = .empty,
@@ -209,6 +231,12 @@ pub const SettingsView = struct {
         if (self.recording != null) store.applyKeymap(app);
         self.subs.deinit(self.gpa);
         self.closeRename(app);
+        if (self.adjust) |*d| d.deinit(self.gpa);
+        self.fonts.deinit(app);
+        self.title.deinit(self.gpa);
+        if (self.import) |*d| d.deinit(self.gpa, app);
+        if (self.review_entry) |r| self.gpa.free(r);
+        if (self.library_error) |e| self.gpa.free(e);
         if (self.copied) |c| self.gpa.free(c);
         var it = self.device_names.iterator();
         while (it.next()) |e| {
@@ -219,6 +247,8 @@ pub const SettingsView = struct {
         for (self.unarchived.items) |id| self.gpa.free(id);
         self.unarchived.deinit(self.gpa);
         if (self.fixture_updates) |*p| p.deinit();
+        if (self.checked_updates) |*p| p.deinit();
+        if (self.provider_error) |e| self.gpa.free(e);
         self.notice.deinit(self.gpa);
         self.tweens.deinit(self.gpa);
         self.page_scroll.release();
@@ -229,7 +259,12 @@ pub const SettingsView = struct {
         self.state.release(app);
     }
 
-    fn onModelChanged(_: *SettingsView, _: anytype, cx: *Context(SettingsView)) void {
+    fn onModelChanged(self: *SettingsView, _: anytype, cx: *Context(SettingsView)) void {
+        // A live update-watch frame supersedes the last "Check now" reply.
+        if (self.checked_updates) |*p| if (self.state.read(cx).catalog.read(cx).harnessUpdates().len > 0) {
+            p.deinit();
+            self.checked_updates = null;
+        };
         cx.notify();
     }
 
@@ -291,6 +326,7 @@ pub const SettingsView = struct {
     pub fn openSection(self: *SettingsView, section: Section, cx: *Context(SettingsView)) void {
         if (self.section == section) return;
         self.closeSelect();
+        self.fonts.open = null;
         self.stopRecording(cx);
         self.clearNotice();
         self.section = section;
@@ -322,7 +358,7 @@ pub const SettingsView = struct {
 
     // ---- keyboard ----------------------------------------------------------------------
 
-    fn onKeyCapture(self: *SettingsView, ev: *const zpui.input.KeyDownEvent, _: *Window, cx: *Context(SettingsView)) void {
+    fn onKeyCapture(self: *SettingsView, ev: *const zpui.input.KeyDownEvent, window: *Window, cx: *Context(SettingsView)) void {
         var sc = scratch(self.gpa);
         sc.begin();
         defer sc.end();
@@ -332,6 +368,15 @@ pub const SettingsView = struct {
             return;
         }
         const key = ev.keystroke.key;
+        if (self.fonts.open != null) {
+            if (fonts_mod.onKey(self, ev.keystroke, window, cx)) cx.stopPropagation();
+            return;
+        }
+        // Escape closes the import / review dialog before Settings (`dismiss_on_escape`).
+        if (std.mem.eql(u8, key, "escape") and theme_library.dismissOnEscape(self, cx)) {
+            cx.stopPropagation();
+            return;
+        }
         if (self.open_select) |sel| {
             const count = select_mod.optionCount(self, sel, cx);
             if (std.mem.eql(u8, key, "escape")) {
@@ -356,6 +401,14 @@ pub const SettingsView = struct {
             return;
         }
         if (self.rename != null) return;
+        if (self.adjust != null) {
+            if (background_adjust.onKey(self, ev.keystroke, cx)) cx.stopPropagation();
+            return;
+        }
+    }
+
+    pub fn openBackgroundAdjustment(self: *SettingsView, cx: *Context(SettingsView)) void {
+        background_adjust.open(self, cx);
     }
 
     fn onKey(self: *SettingsView, ev: *const zpui.input.KeyDownEvent, _: *Window, cx: *Context(SettingsView)) void {
@@ -406,12 +459,14 @@ pub const SettingsView = struct {
         var sc = scratch(self.gpa);
         sc.begin();
         defer sc.end();
+        self.fonts.open = null;
         if (self.open_select == id) {
             self.closeSelect();
         } else if (self.closed_select == id and now(cx) -| self.closed_at < 250 * std.time.ns_per_ms) {
             // The outside-press that just closed it was this trigger.
         } else {
             self.open_select = id;
+            if (id == .thread_naming) thread_naming.loadModels(self, cx);
             self.highlighted = select_mod.selectedIndex(self, id, cx);
             self.menu_scroll.setOffset(.{ .x = 0, .y = 0 });
             self.menu_scroll.scrollToItem(self.highlighted);
@@ -668,6 +723,71 @@ pub const SettingsView = struct {
         cx.notify();
     }
 
+    fn catalogEngine(self: *SettingsView, cx: anytype) Entity(model.EngineState) {
+        return self.state.read(cx).catalog.read(cx).engine;
+    }
+
+    pub fn setProviderError(self: *SettingsView, comptime fmt: []const u8, args: anytype) void {
+        if (self.provider_error) |e| self.gpa.free(e);
+        self.provider_error = std.fmt.allocPrint(self.gpa, fmt, args) catch null;
+    }
+
+    fn clearProviderError(self: *SettingsView) void {
+        if (self.provider_error) |e| self.gpa.free(e);
+        self.provider_error = null;
+    }
+
+    const HarnessParams = struct { harness: protocol.HarnessId, targetDeviceId: ?[]const u8 = null };
+
+    /// `install`: `InstallHarness`; the reply is the device's fresh catalog.
+    pub fn installHarness(self: *SettingsView, h: protocol.HarnessId, cx: *Context(SettingsView)) void {
+        if (self.installing != null) return;
+        self.installing = h;
+        self.clearProviderError();
+        model.EngineState.request(self.catalogEngine(cx), cx, SettingsView, cx.entityId(), .InstallHarness, HarnessParams{ .harness = h }, onInstalled) catch |err| {
+            self.installing = null;
+            self.setProviderError("Installation failed — {s}", .{if (err == error.NotConnected) "Engine not connected" else @errorName(err)});
+        };
+        cx.notify();
+    }
+
+    fn onInstalled(self: *SettingsView, result: model.engine_state.CallResult, cx: *Context(SettingsView)) void {
+        self.installing = null;
+        switch (result) {
+            .ok => self.state.read(cx).catalog.update(cx, model.CatalogStore.refreshHarnesses, .{}),
+            .err => |e| self.setProviderError("Installation failed — {s}", .{e.message}),
+        }
+        cx.notify();
+    }
+
+    /// `cancel_install`: `CancelInstall` for the running install.
+    pub fn cancelInstall(self: *SettingsView, cx: *Context(SettingsView)) void {
+        const h = self.installing orelse return;
+        model.EngineState.request(self.catalogEngine(cx), cx, SettingsView, cx.entityId(), .CancelInstall, HarnessParams{ .harness = h }, onCancelInstallReply) catch {};
+    }
+
+    fn onCancelInstallReply(self: *SettingsView, result: model.engine_state.CallResult, cx: *Context(SettingsView)) void {
+        switch (result) {
+            .ok => {},
+            .err => |e| if (self.installing != null) self.setProviderError("Cancellation failed — {s}", .{e.message}),
+        }
+        cx.notify();
+    }
+
+    pub fn onHarnessInstall(self: *SettingsView, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
+        var sc = scratch(self.gpa);
+        sc.begin();
+        defer sc.end();
+        const list = providers.visibleHarnesses(self, cx);
+        if (ix >= list.len) return;
+        self.installHarness(list[ix].id, cx);
+    }
+
+    pub fn onCancelInstall(self: *SettingsView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
+        self.cancelInstall(cx);
+    }
+
+    /// Update (`ApplyHarnessUpdate`) or Cancel (`CancelHarnessUpdate`) for row `ix`.
     pub fn onHarnessUpdate(self: *SettingsView, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
         var sc = scratch(self.gpa);
         sc.begin();
@@ -675,15 +795,59 @@ pub const SettingsView = struct {
         cx.stopPropagation();
         const list = providers.visibleHarnesses(self, cx);
         if (ix >= list.len) return;
-        self.update_override.set(list[ix].id, .preparing);
+        const h = list[ix].id;
+        const phase = for (self.harnessUpdates(cx)) |st| (if (st.harness == h) break st.phase) else null;
+        const cancel = if (phase) |p| p == .@"waiting-for-idle" or p == .preparing or p == .downloading else false;
+        self.applyOrCancelUpdate(h, cancel, cx);
+    }
+
+    pub fn applyOrCancelUpdate(self: *SettingsView, h: protocol.HarnessId, cancel: bool, cx: *Context(SettingsView)) void {
+        self.clearProviderError();
+        const method: engine.Method = if (cancel) .CancelHarnessUpdate else .ApplyHarnessUpdate;
+        model.EngineState.request(self.catalogEngine(cx), cx, SettingsView, cx.entityId(), method, HarnessParams{ .harness = h }, onUpdateAction) catch |err| {
+            self.setProviderError("{s}", .{if (err == error.NotConnected) "Engine not connected" else @errorName(err)});
+        };
+        cx.notify();
+    }
+
+    fn onUpdateAction(self: *SettingsView, result: model.engine_state.CallResult, cx: *Context(SettingsView)) void {
+        switch (result) {
+            .ok => {},
+            .err => |e| self.setProviderError("{s}", .{e.message}),
+        }
+        cx.notify();
+    }
+
+    /// "Check now" (`check_updates`): the reply is the fresh status list.
+    pub fn checkUpdates(self: *SettingsView, cx: *Context(SettingsView)) void {
+        self.clearProviderError();
+        self.checking_updates = true;
+        model.EngineState.request(self.catalogEngine(cx), cx, SettingsView, cx.entityId(), .CheckHarnessUpdates, .{}, onChecked) catch |err| {
+            self.checking_updates = false;
+            self.setProviderError("{s}", .{if (err == error.NotConnected) "Engine not connected" else @errorName(err)});
+        };
+        cx.notify();
+    }
+
+    fn onChecked(self: *SettingsView, result: model.engine_state.CallResult, cx: *Context(SettingsView)) void {
+        self.checking_updates = false;
+        switch (result) {
+            .ok => |v| {
+                const parsed = std.json.parseFromValue([]model.types.HarnessUpdateStatus, self.gpa, v, .{ .ignore_unknown_fields = true, .allocate = .alloc_always }) catch |err| {
+                    self.setProviderError("{s}", .{@errorName(err)});
+                    return cx.notify();
+                };
+                if (self.checked_updates) |*p| p.deinit();
+                self.checked_updates = parsed;
+                self.update_override = .initFill(null);
+            },
+            .err => |e| self.setProviderError("{s}", .{e.message}),
+        }
         cx.notify();
     }
 
     pub fn onCheckUpdates(self: *SettingsView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
-        const eng = self.state.read(cx).catalog.read(cx).engine;
-        model.EngineState.send(eng, cx, .CheckHarnessUpdates, .{}) catch {};
-        self.checking_updates = true;
-        cx.notify();
+        self.checkUpdates(cx);
     }
 
     pub fn harnessPolicy(self: *SettingsView, h: protocol.HarnessId, cx: anytype) model.types.HarnessUpdatePolicy {
@@ -734,6 +898,7 @@ pub const SettingsView = struct {
     }
 
     pub fn harnessUpdates(self: *SettingsView, cx: anytype) []const model.types.HarnessUpdateStatus {
+        if (self.checked_updates) |p| return p.value;
         const live = self.state.read(cx).catalog.read(cx).harnessUpdates();
         if (live.len > 0) return live;
         if (self.fixture_updates) |p| return p.value;
@@ -831,6 +996,9 @@ pub const SettingsView = struct {
             .child(div().flex1().minH0().relative().child(page)))
             .child(div().id("settings-record-focus").trackFocus(self.record_focus).absolute().size(px(0)));
         if (self.rename != null) root = root.child(devices.renameDialog(self, window, cx));
+        if (background_adjust.render(self, window, cx)) |d| root = root.child(d);
+        if (theme_library.importDialog(self, window, cx)) |d| root = root.child(d);
+        if (theme_library.reviewDialog(self, window, cx)) |d| root = root.child(d);
         if (self.animating) window.requestAnimationFrame();
         return root;
     }

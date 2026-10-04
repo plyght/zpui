@@ -15,6 +15,20 @@ pub fn withCustom(custom: []const model.ThemeFamily) Registry {
     return .{ .families = &builtins.families, .custom = custom };
 }
 
+/// The installed custom families (`replace_custom_families`); the theme
+/// library keeps the memory alive for the process.
+var custom_families: []const model.ThemeFamily = &.{};
+
+/// `replace_custom_families`.
+pub fn setCustom(families: []const model.ThemeFamily) void {
+    custom_families = families;
+}
+
+/// `ThemeRegistry::active`: built-ins plus the installed custom families.
+pub fn active() Registry {
+    return withCustom(custom_families);
+}
+
 /// Whether `variant` is an unmodified built-in (whose curated text colors are
 /// trusted verbatim instead of being contrast-hardened).
 pub fn isCuratedBuiltin(variant: *const model.ThemeVariant) bool {

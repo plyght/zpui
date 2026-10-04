@@ -80,6 +80,11 @@ pub const NSTrackingInVisibleRect: NSUInteger = 0x200;
 pub const NSVisualEffectMaterialUnderWindowBackground: NSInteger = 21;
 pub const NSVisualEffectBlendingModeBehindWindow: NSInteger = 0;
 pub const NSVisualEffectStateActive: NSInteger = 1;
+/// [liquid-glass] Sidebar material / follow-the-window state / NSImage stretch / edge insets.
+pub const NSVisualEffectMaterialSidebar: NSInteger = 7;
+pub const NSVisualEffectStateFollowsWindowActiveState: NSInteger = 0;
+pub const NSImageResizingModeStretch: NSInteger = 1;
+pub const NSEdgeInsets = extern struct { top: CGFloat, left: CGFloat, bottom: CGFloat, right: CGFloat };
 
 pub const NSDragOperationNone: NSUInteger = 0;
 pub const NSDragOperationCopy: NSUInteger = 1;

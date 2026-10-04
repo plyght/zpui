@@ -14,6 +14,8 @@ const prefs_mod = @import("prefs.zig");
 const fixtures_mod = @import("fixtures.zig");
 const slots = @import("slots.zig");
 const terminal_dock = @import("terminal_dock.zig");
+const background = @import("../background/root.zig");
+const settings_store_ui = @import("../settings/store.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -35,6 +37,8 @@ pub const MainPanel = struct {
     /// Column width (set by the shell each frame).
     width: f32 = 800,
     terminal_sub: ?zpui.Subscription = null,
+    /// The new-thread hero's crossfade state (`new_thread_artwork_ready`).
+    artwork_ready: background.hero.Readiness = .{},
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, cx: *Context(MainPanel)) !MainPanel {
         var self: MainPanel = .{
@@ -51,6 +55,7 @@ pub const MainPanel = struct {
 
     pub fn deinit(self: *MainPanel, app: *App) void {
         self.subs.deinit(self.gpa);
+        self.artwork_ready.deinit(app, self.gpa);
         if (self.terminal_sub) |*t| t.deinit();
         if (self.terminal) |t| t.release(app);
         self.slots.deinit(app);
@@ -94,6 +99,8 @@ pub const MainPanel = struct {
         } else if (!has_spaces and ws.spaces_synced) {
             col = col.child(onboarding(theme));
         } else {
+            // The new-thread hero sits behind the canvas composition.
+            if (self.newThreadHero(window, theme, cx)) |hero| col = col.child(hero);
             // The canvas composer sits a touch above center (the dock's home slot).
             col = col.child(div().flex1().minH0())
                 .child(div().mb(px(12)).child(self.slots.composer(width, cx)))
@@ -117,6 +124,24 @@ pub const MainPanel = struct {
             }
         }
         return col;
+    }
+
+    /// Prepare the configured artwork (decode/effects run once off-thread,
+    /// independent of geometry) and build the hero layer for this frame.
+    fn newThreadHero(self: *MainPanel, window: *Window, theme: *const Theme, cx: *Context(MainPanel)) ?zpui.Div {
+        const app = cx.app;
+        const s = settings_store_ui.current(app);
+        background.wallpaper.preload(app);
+        const bg = s.newThreadComposerBackground;
+        const light = theme.appearance == .light;
+        const img = if (bg) |b| background.cache.prepare(app, background.install.ioOf(app), b.path, s.newThreadBackgroundEffect, light) else null;
+        const now = app.executor.now();
+        const reduced = window.prefersReducedMotion();
+        const frame = self.artwork_ready.frame(app, self.gpa, img, if (bg) |b| b.path else null, if (bg) |b| b.adjustment else .{}, bg != null, reduced, now);
+        if (frame.current == null and frame.previous == null) return null;
+        if (frame.active) window.requestAnimationFrame();
+        const composer = self.slots.composer_view.read(cx);
+        return background.hero.layer(frame, window.viewportSize().height, self.width, &composer.surface_bounds, theme.surface_treatment == .frosted);
     }
 
     fn onDropPaths(self: *MainPanel, paths: *const zpui.ExternalPaths, _: *Window, cx: *Context(MainPanel)) void {

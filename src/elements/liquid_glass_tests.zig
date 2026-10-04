@@ -215,7 +215,79 @@ test "overlayPlane wraps content in an overlay range" {
             return .{};
         }
     }.f, .{});
+    const w = handle.window(app).?;
+    const tw = TestWindow.of(w.platform_window);
+    const ranges = w.rendered_frame.overlay_ranges.items;
+    try testing.expectEqual(@as(usize, 1), ranges.len);
+    try testing.expect(ranges[0].end > ranges[0].start);
+    // No native view is placed: the backend draws a single plane.
+    try testing.expectEqual(@as(usize, 0), tw.last_overlay_len);
+}
+
+// [liquid-glass] sidebarMaterial / backdropHole / liquidGlassRevision
+
+const SidebarView = struct {
+    hole: bool = true,
+
+    pub fn render(self: *SidebarView, _: *Window, _: *Context(SidebarView)) elements.Div {
+        const pane = div().absolute().left(px(8)).top(px(8)).w(px(180)).h(px(284));
+        return div().size(px(400)).relative()
+            .child(div().absolute().left(px(8)).top(px(8)).w(px(180)).h(px(284))
+            .child(lg.sidebarMaterial("material", .{ .corner_radius = 12 }, div().sizeFull()))
+            .child(lg.liquidGlass("pane", .{ .style = .clear, .shape = .{ .rounded = 12 } }, div().sizeFull())))
+            .child(lg.backdropHole(self.hole, .{ 12, 12, 12, 12 }, pane));
+    }
+};
+
+fn initSidebar(_: *Window, _: *Context(SidebarView)) SidebarView {
+    return .{};
+}
+
+test "sidebarMaterial attaches below the main surface; backdropHole reaches the platform once" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    try testing.expectEqual(@as(u32, 26), lg.liquidGlassRevision(app));
+    app.test_platform.?.liquid_glass_revision = 27;
+    try testing.expectEqual(@as(u32, 27), lg.liquidGlassRevision(app));
+    const handle = try app.openWindow(options, SidebarView, initSidebar, .{});
+    const w = handle.window(app).?;
+    const tw = TestWindow.of(w.platform_window);
+    try testing.expectEqual(@as(usize, 2), tw.glassCount());
+    var ids: [8]pf.NativeViewId = undefined;
+    const n = glassIds(tw, &ids);
+    var saw_material = false;
+    for (ids[0..n]) |id| {
+        const a = tw.glass_attach[@intFromEnum(id)].?;
+        if (a.kind == .sidebar_material) {
+            saw_material = true;
+            try testing.expectEqual(pf.NativeViewZ.below_content, a.z);
+            try testing.expectEqual(@as(f32, 12), tw.glass_config[@intFromEnum(id)].?.corner_radius);
+        } else try testing.expectEqual(pf.NativeViewZ.above_content, a.z);
+    }
+    try testing.expect(saw_material);
+    const hole = tw.backdrop_hole.?;
+    try testing.expectEqual(@as(f32, 8), hole.bounds.origin.x);
+    try testing.expectEqual(@as(f32, 180), hole.bounds.size.width);
+    try testing.expectEqual(@as(f32, 12), hole.corner_radii[2]);
+    // Unchanged frames do not resend it; a frame without the hole removes it.
+    const sets = tw.backdrop_hole_sets;
+    w.drawAndPresent();
+    try testing.expectEqual(sets, tw.backdrop_hole_sets);
+    var l = handle.rootView(app).?.lease(app);
+    l.value.hole = false;
+    l.cx.notify();
+    l.end();
+    w.drawAndPresent();
+    try testing.expect(tw.backdrop_hole == null);
+    try testing.expectEqual(sets + 1, tw.backdrop_hole_sets);
+}
+
+test "without native glass sidebarMaterial attaches nothing" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    app.test_platform.?.liquid_glass_supported = false;
+    try testing.expectEqual(@as(u32, 0), lg.liquidGlassRevision(app));
+    const handle = try app.openWindow(options, SidebarView, initSidebar, .{});
     const tw = TestWindow.of(handle.window(app).?.platform_window);
-    try testing.expectEqual(@as(usize, 1), tw.last_overlay_len);
-    try testing.expect(tw.last_overlay[0].end > tw.last_overlay[0].start);
+    try testing.expectEqual(@as(usize, 0), tw.glassCount());
 }

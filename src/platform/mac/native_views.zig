@@ -32,6 +32,14 @@
 //!   members are not hosted: they are subviews of the container's content view,
 //!   framed relative to the container's last placement.
 //! * `drawLayered` splits the scene three ways (main / overlay / top ranges).
+//!
+//! Backdrop blurs on the overlay / top plane (frosted menus, popovers, tooltips): the
+//! plane's own drawable is transparent where the planes beneath show through, so the
+//! renderer is armed (`setPlaneBackdrops`) to blur a snapshot of the main drawable
+//! (+ the overlay plane for the top plane) with the plane's content so far composited
+//! over it. Native children in between (WKWebView, NSGlassEffectView) cannot be
+//! sampled by Metal: a frosted menu over a web view blurs only zpui content there.
+//! The window only routes content to these planes while a native view is placed.
 
 const std = @import("std");
 const objc = @import("objc.zig");
@@ -87,6 +95,10 @@ pub const Host = struct {
     top_view: ?id = null,
     top_capture: bool = false,
     top: scene_mod.Scene = .{},
+    /// [liquid-glass] The hole cut out of the window's `ZPUIBlurredView` (`setBackdropHole`)
+    /// and the geometry its current mask image was built for.
+    backdrop_hole: ?platform.BackdropHole = null,
+    backdrop_mask: ?MaskKey = null,
 
     pub fn enabled(self: *const Host) bool {
         return self.overlay_view != null;
@@ -335,13 +347,23 @@ pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges:
     const size = w.drawableSizePub();
     const scale = w.scaleFactor();
     const host = &w.natives;
-    const overlay_view = host.overlay_view orelse return w.renderer.drawScene(scene, size, scale, .{});
+    const overlay_view = host.overlay_view orelse {
+        w.renderer.setPlaneBackdrops(false, false);
+        return w.renderer.drawScene(scene, size, scale, .{});
+    };
     const gpa = w.gpa;
     host.base.clear(gpa);
     host.overlay.clear(gpa);
     host.top.clear(gpa);
     var at: usize = 0;
     const n = scene.len();
+    // Upper-plane backdrop blurs sample the composited planes beneath (main [+ overlay]).
+    var overlay_blur = false;
+    var top_blur = false;
+    for (overlay_ranges) |r| if (r.samples_lower_planes) switch (r.plane) {
+        .overlay => overlay_blur = true,
+        .top => top_blur = true,
+    };
     for (overlay_ranges) |r| {
         const start = @min(r.start, n);
         const end = @min(r.end, n);
@@ -366,6 +388,7 @@ pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges:
     host.top_capture = capture_input and top_visible;
     host.overlay_capture = capture_input and visible;
 
+    w.renderer.setPlaneBackdrops(overlay_blur and visible, top_blur and top_visible);
     try w.renderer.drawScene(&host.base, size, scale, .{});
     if (visible) try w.renderer.drawOverlay(&host.overlay, size, scale);
     overlay_view.msg(void, "setHidden:", .{objc.toBOOL(!visible)});
@@ -415,12 +438,22 @@ pub fn attachGlass(w: *MacWindow, options: platform.LiquidGlassAttach) !platform
     const cls_name: [:0]const u8 = switch (options.kind) {
         .glass => "NSGlassEffectView",
         .container => "NSGlassEffectContainerView",
+        .sidebar_material => "NSVisualEffectView",
     };
     const cls = objc.getClass(cls_name) orelse return error.LiquidGlassUnsupported;
     const zero: NSRect = .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 0, .height = 0 } };
     const view = cls.msg(id, "alloc", .{}).msg(id, "initWithFrame:", .{zero});
     defer view.release(); // the host (or member record) keeps its own reference
     view.msg(void, "setAutoresizingMask:", .{@as(ak.NSUInteger, 0)});
+    if (options.kind == .sidebar_material) {
+        // The pre-Tahoe sidebar: behind-window vibrancy that AppKit punches through the
+        // window. It sits under the main surface, so zpui must leave alpha 0 above it.
+        view.msg(void, "setMaterial:", .{ak.NSVisualEffectMaterialSidebar});
+        view.msg(void, "setBlendingMode:", .{ak.NSVisualEffectBlendingModeBehindWindow});
+        view.msg(void, "setState:", .{ak.NSVisualEffectStateFollowsWindowActiveState});
+        view.msg(void, "setWantsLayer:", .{YES});
+        return attachHosted(w, @ptrCast(view), .{ .z = .below_content, .pass_through_mouse = true }, options.kind);
+    }
     if (options.kind == .container) {
         // Members go into the container's content view (a plain, non-flipped NSView).
         const content = ak.class("NSView").msg(id, "alloc", .{}).msg(id, "initWithFrame:", .{zero});
@@ -506,6 +539,30 @@ fn frameMember(m: *Child, container: *Child) void {
     m.view.msg(void, "setHidden:", .{objc.toBOOL(!visible)});
 }
 
+/// macOS 27 composites a near-opaque glass tint as a solid fill (cmux #5860): cap it
+/// there so the glass stays glass; 26.x keeps the caller's alpha.
+pub const max_tint_alpha_27: f32 = 0.3;
+
+fn tintAlpha(a: f32) f32 {
+    return if (glassRevision() >= 27) @min(a, max_tint_alpha_27) else a;
+}
+
+var glass_revision: ?u32 = null;
+
+/// [liquid-glass] The macOS major version of the glass design (26, 27, ...), 0 without
+/// glass (cached). 27-only selectors are still gated by `respondsToSelector:`.
+pub fn glassRevision() u32 {
+    if (glass_revision) |r| return r;
+    var r: u32 = 0;
+    if (glassSupported()) {
+        r = 26;
+        var major: u32 = 27;
+        while (major < 40 and ak.osAtLeast(@intCast(major), 0, 0)) : (major += 1) r = major;
+    }
+    glass_revision = r;
+    return r;
+}
+
 fn responds(obj: id, comptime selector: [:0]const u8) bool {
     return obj.msg(BOOL, "respondsToSelector:", .{objc.cachedSel(selector)}) == YES;
 }
@@ -527,15 +584,160 @@ pub fn configureGlass(w: *MacWindow, ident: platform.NativeViewId, cfg: platform
             if (responds(v, "setCornerRadius:")) v.msg(void, "setCornerRadius:", .{@as(ak.CGFloat, cfg.corner_radius)});
             if (responds(v, "setTintColor:")) {
                 const tint: ?id = if (cfg.tint) |t| ak.class("NSColor").msg(id, "colorWithSRGBRed:green:blue:alpha:", .{
-                    @as(ak.CGFloat, t[0]), @as(ak.CGFloat, t[1]), @as(ak.CGFloat, t[2]), @as(ak.CGFloat, t[3]),
+                    @as(ak.CGFloat, t[0]), @as(ak.CGFloat, t[1]), @as(ak.CGFloat, t[2]), @as(ak.CGFloat, tintAlpha(t[3])),
                 }) else null;
                 v.msg(void, "setTintColor:", .{tint});
             }
             // AppKit added `effectIsInteractive` after 26.0 (documented for macOS 27).
             if (responds(v, "setEffectIsInteractive:")) v.msg(void, "setEffectIsInteractive:", .{objc.toBOOL(cfg.interactive)});
         },
+        .sidebar_material => if (v.msg(?id, "layer", .{})) |l| {
+            l.msg(void, "setCornerRadius:", .{@as(ak.CGFloat, cfg.corner_radius)});
+            l.msg(void, "setMasksToBounds:", .{objc.toBOOL(cfg.corner_radius > 0)});
+            if (responds(l, "setCornerCurve:")) l.msg(void, "setCornerCurve:", .{objc.nsString("continuous")});
+        },
         .container => {
             if (responds(v, "setSpacing:")) v.msg(void, "setSpacing:", .{@as(ak.CGFloat, cfg.spacing)});
         },
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// [liquid-glass] Backdrop hole: native glass that should show the desktop
+// ---------------------------------------------------------------------------------------
+//
+// NSGlassEffectView samples whatever is composited beneath it. In a `blurred` window
+// that is zpui's main surface over `ZPUIBlurredView` (the behind-window blur), so even
+// where zpui paints alpha 0 the glass refracts the app's blurred backdrop. The hole
+// removes that view's pixels in one rounded rect through its public `maskImage`; the
+// window is already non-opaque with a clear background, so the glass sees the desktop.
+//
+// The mask is a stretchable NSImage as wide as the content view: the top and bottom
+// cap insets hold the hole's corners, the 1px middle row stretches over any height, so
+// a live resize regenerates nothing until the width changes.
+
+pub const MaskKey = struct {
+    width: i32,
+    hole_x: i32,
+    hole_w: i32,
+    top: i32,
+    bottom_inset: i32,
+    radii: [4]i32,
+};
+
+pub fn setBackdropHole(w: *MacWindow, hole: ?platform.BackdropHole) void {
+    const had = w.natives.backdrop_hole != null;
+    w.natives.backdrop_hole = hole;
+    refreshBackdropMask(w);
+    if (had != (hole != null)) {
+        // The black base under the blur (Mission Control) must go with a hole; the
+        // window's shadow follows its alpha.
+        if (w.blurred_view) |v| v.msg(void, "setNeedsDisplay:", .{YES});
+        w.native_window.msg(void, "invalidateShadow", .{});
+    }
+}
+
+/// (Re)build the blurred view's mask when the hole or the content width changed.
+pub fn refreshBackdropMask(w: *MacWindow) void {
+    const blur = w.blurred_view orelse return;
+    const hole = w.natives.backdrop_hole orelse {
+        if (w.natives.backdrop_mask != null) {
+            blur.msg(void, "setMaskImage:", .{@as(?id, null)});
+            if (blur.msg(?id, "layer", .{})) |l| {
+                const black = ak.class("NSColor").msg(id, "blackColor", .{});
+                l.msg(void, "setBackgroundColor:", .{black.msg(?*anyopaque, "CGColor", .{})});
+            }
+        }
+        w.natives.backdrop_mask = null;
+        return;
+    };
+    const cb = ak.bounds(contentView(w));
+    const key = maskKey(cb.size.width, cb.size.height, hole);
+    if (w.natives.backdrop_mask) |k| if (std.meta.eql(k, key)) return;
+    const image = buildMaskImage(key) orelse return;
+    defer image.release();
+    blur.msg(void, "setMaskImage:", .{image});
+    if (blur.msg(?id, "layer", .{})) |l| l.msg(void, "setBackgroundColor:", .{@as(?*anyopaque, null)});
+    w.natives.backdrop_mask = key;
+}
+
+fn maskKey(width: f64, height: f64, hole: platform.BackdropHole) MaskKey {
+    const b = hole.bounds;
+    var radii: [4]i32 = undefined;
+    for (hole.corner_radii, 0..) |r, i| radii[i] = @intFromFloat(@round(@max(r, 0)));
+    return .{
+        .width = @intFromFloat(@round(@max(width, 1))),
+        .hole_x = @intFromFloat(@round(b.origin.x)),
+        .hole_w = @intFromFloat(@round(@max(b.size.width, 0))),
+        .top = @intFromFloat(@round(b.origin.y)),
+        .bottom_inset = @intFromFloat(@round(height - @as(f64, b.origin.y + b.size.height))),
+        .radii = radii,
+    };
+}
+
+/// Coverage (0..1) of the mask (1 = keep the blur) at pixel `(x, y)` of the mask image.
+pub fn maskAlpha(k: MaskKey, x: i32, y: i32, top_cap: i32, img_h: i32) f32 {
+    // Image row -> distance from the hole's top / bottom edge (the middle row is "deep inside").
+    const px: f32 = @as(f32, @floatFromInt(x)) + 0.5;
+    const hx0: f32 = @floatFromInt(k.hole_x);
+    const hx1: f32 = @floatFromInt(k.hole_x + k.hole_w);
+    const yy: f32 = @as(f32, @floatFromInt(y)) + 0.5;
+    // Signed distance outside the hole along y (positive = outside), and which corner row.
+    var dy: f32 = undefined;
+    var top_half = true;
+    if (y < top_cap) {
+        dy = @as(f32, @floatFromInt(k.top)) - yy;
+    } else if (y == top_cap) {
+        dy = -1.0e6;
+    } else {
+        top_half = false;
+        const from_bottom = @as(f32, @floatFromInt(img_h)) - yy; // distance to the image bottom
+        dy = @as(f32, @floatFromInt(k.bottom_inset)) - from_bottom;
+    }
+    const left_half = px - hx0 < hx1 - px;
+    const r: f32 = @floatFromInt(if (top_half) (if (left_half) k.radii[0] else k.radii[1]) else (if (left_half) k.radii[3] else k.radii[2]));
+    const dx = @max(hx0 - px, px - hx1);
+    // Rounded-rect SDF (dx, dy: distance outside each straight edge, negative inside).
+    const qx = dx + r;
+    const qy = dy + r;
+    const ox = @max(qx, 0);
+    const oy = @max(qy, 0);
+    const d = @sqrt(ox * ox + oy * oy) + @min(@max(qx, qy), 0) - r;
+    // d < 0 inside the hole: coverage of "outside" with a 1px ramp.
+    return std.math.clamp(d + 0.5, 0, 1);
+}
+
+fn buildMaskImage(k: MaskKey) ?id {
+    const top_cap = @max(k.top + @max(k.radii[0], k.radii[1]) + 1, 1);
+    const bottom_cap = @max(k.bottom_inset + @max(k.radii[2], k.radii[3]) + 1, 1);
+    const img_w = k.width;
+    const img_h = top_cap + 1 + bottom_cap;
+    const rep = ak.class("NSBitmapImageRep").msg(id, "alloc", .{}).msg(?id, "initWithBitmapDataPlanes:pixelsWide:pixelsHigh:bitsPerSample:samplesPerPixel:hasAlpha:isPlanar:colorSpaceName:bytesPerRow:bitsPerPixel:", .{
+        @as(?*anyopaque, null),        @as(objc.NSInteger, img_w), @as(objc.NSInteger, img_h),
+        @as(objc.NSInteger, 8),        @as(objc.NSInteger, 4),     YES,
+        NO,                            objc.nsString("NSDeviceRGBColorSpace"),
+        @as(objc.NSInteger, img_w * 4), @as(objc.NSInteger, 32),
+    }) orelse return null;
+    defer rep.release();
+    const data = rep.msg(?[*]u8, "bitmapData", .{}) orelse return null;
+    var y: i32 = 0;
+    while (y < img_h) : (y += 1) {
+        const row = data + @as(usize, @intCast(y * img_w * 4));
+        var x: i32 = 0;
+        while (x < img_w) : (x += 1) {
+            const a: u8 = @intFromFloat(@round(maskAlpha(k, x, y, top_cap, img_h) * 255));
+            const o: usize = @intCast(x * 4);
+            // Premultiplied black: only alpha matters to the mask.
+            row[o] = 0;
+            row[o + 1] = 0;
+            row[o + 2] = 0;
+            row[o + 3] = a;
+        }
+    }
+    const size: ak.NSSize = .{ .width = @floatFromInt(img_w), .height = @floatFromInt(img_h) };
+    const image = ak.class("NSImage").msg(id, "alloc", .{}).msg(id, "initWithSize:", .{size});
+    image.msg(void, "addRepresentation:", .{rep});
+    image.msg(void, "setCapInsets:", .{ak.NSEdgeInsets{ .top = @floatFromInt(top_cap), .left = 0, .bottom = @floatFromInt(bottom_cap), .right = 0 }});
+    image.msg(void, "setResizingMode:", .{ak.NSImageResizingModeStretch});
+    return image;
 }

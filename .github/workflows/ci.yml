@@ -130,6 +130,28 @@ jobs:
           sleep 1
           ZERON_SMOKE_BROWSER_URL=http://127.0.0.1:8765/ ZERON_SMOKE_OUT=zig-out/zeron-macos-browser.png \
             ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
+      # Frosted menus must blur what is beneath them. ZERON_SMOKE_MENU=1 paints
+      # high-contrast stripes, opens a frosted floating card (the real menu chrome,
+      # deferred like every menu) over them and compares the stripes' high-frequency
+      # energy under the card with and without it (FAIL: "frosted menu is not
+      # blurred" unless it drops below 25%). Two paths: no native views (the card
+      # is drawn on the main Metal layer), and with a WKWebView open (the card is on
+      # the overlay plane above it, where the blur must sample the planes beneath;
+      # this also reads the overlay plane back and requires an opaque backdrop).
+      # Without MetalPerformanceShaders (paravirtual GPUs) the energy check prints
+      # SKIP; the overlay-plane readback check still runs.
+      - name: Smoke test zeron frosted menu blur (main plane)
+        timeout-minutes: 5
+        run: |
+          ZERON_SMOKE_MENU=1 ZERON_SMOKE_OUT=zig-out/zeron-macos-menu.png \
+            ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
+      - name: Smoke test zeron frosted menu blur (overlay plane above a WKWebView)
+        timeout-minutes: 5
+        run: |
+          python3 -m http.server 8765 --bind 127.0.0.1 --directory "$RUNNER_TEMP/site" > "$RUNNER_TEMP/http-menu.log" 2>&1 &
+          sleep 1
+          ZERON_SMOKE_MENU=1 ZERON_SMOKE_BROWSER_URL=http://127.0.0.1:8765/ ZERON_SMOKE_OUT=zig-out/zeron-macos-menu-browser.png \
+            ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
       # [liquid-glass] macOS 15 has no NSGlassEffectView: forcing the Liquid Glass setting
       # must take the frosted fallback (no native glass views) and still render.
       - name: Smoke test zeron, Liquid Glass forced → frosted fallback (macOS 15)
@@ -186,6 +208,23 @@ jobs:
             echo "== system_profiler SPDisplaysDataType"; system_profiler SPDisplaysDataType 2>&1 || true
             echo "== desktop picture"; osascript -e 'tell application "System Events" to get picture of every desktop' 2>&1 || true
           } | tee zig-out/glass-lab/environment.log
+      # [liquid-glass] CI images run with Reduce Transparency on, so AppKit draws every
+      # glass (and the window material) solid. Try to switch it off for the captures;
+      # the app's `accessibility reduceTransparency=` log line says whether it took.
+      # Never fails the job (the domain is TCC-protected on recent macOS).
+      - name: Try to disable Reduce Transparency for the captures
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: |
+          printf 'before: '; defaults read com.apple.universalaccess reduceTransparency 2>&1 || true
+          defaults write com.apple.universalaccess reduceTransparency -bool false 2>&1 || echo "defaults write (user) failed"
+          defaults -currentHost write com.apple.universalaccess reduceTransparency -bool false 2>&1 || echo "defaults -currentHost write failed"
+          sudo defaults write com.apple.universalaccess reduceTransparency -bool false 2>&1 || echo "sudo defaults write failed"
+          killall cfprefsd 2>/dev/null || true
+          sleep 2
+          printf 'after (user): '; defaults read com.apple.universalaccess reduceTransparency 2>&1 || true
+          printf 'after (currentHost): '; defaults -currentHost read com.apple.universalaccess reduceTransparency 2>&1 || true
       - name: Smoke test zeron with native Liquid Glass (dark + light)
         timeout-minutes: 8
         shell: bash
@@ -195,6 +234,25 @@ jobs:
               ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --$mode 2>&1 | tee "zig-out/glass-lab/zeron-liquid-$mode.log"
             grep -q "liquid glass forced: native (NSGlassEffectView)" "zig-out/glass-lab/zeron-liquid-$mode.log" \
               || { echo "FAIL: macOS 26 did not report native Liquid Glass"; exit 1; }
+            if grep -q "reduceTransparency=false" "zig-out/glass-lab/zeron-liquid-$mode.log"; then
+              echo "Reduce Transparency is OFF in the app: the $mode capture shows real glass"
+            else
+              echo "::notice::Reduce Transparency still on in the app ($mode): glass captures are solid by design"
+            fi
+          done
+      # [liquid-glass] The sidebar recipes side by side (ZERON_SIDEBAR_GLASS=glass|vev) and
+      # the macOS 27 flush layout; Liquid Glass is the default here (no ZERON_LIQUID_GLASS).
+      - name: Smoke test zeron Liquid Glass sidebar variants (default glass mode)
+        if: always()
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          for v in glass:floating vev:floating glass:flush; do
+            m=${v%%:*}; lay=${v##*:}
+            ZERON_SIDEBAR_GLASS=$m ZERON_SIDEBAR_LAYOUT=$lay ZERON_SMOKE_OUT=zig-out/zeron-macos26-sidebar-$m-$lay.png \
+              ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --dark 2>&1 | tee "zig-out/glass-lab/zeron-sidebar-$m-$lay.log" || true
+            grep -q "liquid glass on (macOS" "zig-out/glass-lab/zeron-sidebar-$m-$lay.log" \
+              || echo "::warning::Liquid Glass was not the default ($m/$lay)"
           done
       # [glass-lab] The glass lab (apps/zeron/src/glass_lab.zig): glass panels over striped,
       # moving content plus AppKit reference views, captured four ways (window alone,
@@ -226,6 +284,60 @@ jobs:
             zig-out/zeron-macos26*.png
           if-no-files-found: warn
 
+  # [liquid-glass] macOS 27 (Golden Gate) on the `xcode-27` image (arm64, public
+  # preview, no MPS and no real Metal device): build, unit tests, the Mach-O stamp
+  # (sdk 27.0: AppKit's macOS 27 linked-on behaviours; minos 12.0 for the bundle
+  # target) and the Liquid Glass gate (must report native glass, macOS 27). The smoke
+  # launch is informational only (no GPU assertions). Preview label: never blocks CI.
+  zeron-macos27:
+    runs-on: xcode-27
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: macOS / Xcode / SDK versions
+        run: |
+          sw_vers
+          xcodebuild -version || true
+          xcrun --sdk macosx --show-sdk-version || true
+      - name: Unit tests (zpui, zeron app)
+        run: |
+          zig build zpui-test --summary all
+          zig build zeron-app-test --summary all
+      - name: Build zeron (native, ReleaseSafe)
+        run: zig build zeron -Doptimize=ReleaseSafe --summary all
+      - name: LC_BUILD_VERSION (native build)
+        shell: bash
+        run: |
+          vtool -show-build zig-out/bin/zeron || true
+          otool -l zig-out/bin/zeron | grep -A5 LC_BUILD_VERSION || true
+          python3 apps/zeron/scripts/macho-build-version.py --expect-sdk 27.0 zig-out/bin/zeron
+      - name: Liquid Glass gate (macOS 27) + smoke launch (no GPU assertions)
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          ZERON_LIQUID_GLASS=1 ZERON_SMOKE_OUT=zig-out/zeron-macos27-liquid.png \
+            ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark 2>&1 | tee "$RUNNER_TEMP/m27.log" \
+            || echo "smoke exited non-zero (informational on the paravirtual GPU)"
+          grep -q "liquid glass forced: native (NSGlassEffectView)" "$RUNNER_TEMP/m27.log" \
+            || { echo "FAIL: macOS 27 did not report native Liquid Glass"; exit 1; }
+          grep -q "liquid glass on (macOS 27)" "$RUNNER_TEMP/m27.log" \
+            || { echo "FAIL: the Liquid Glass revision is not 27"; exit 1; }
+      - name: Bundle target (aarch64-macos.12.0) stamps minos 12.0 / sdk 27.0
+        shell: bash
+        run: |
+          zig build zeron -Doptimize=ReleaseSafe -Dtarget=aarch64-macos.12.0 -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
+          vtool -show-build zig-out/bin/zeron || true
+          python3 apps/zeron/scripts/macho-build-version.py --expect-sdk 27.0 --expect-minos 12.0 zig-out/bin/zeron
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zeron-macos27
+          path: zig-out/zeron-macos27*.png
+          if-no-files-found: ignore
+
   # Same smoke test on Linux: Xvfb (X11, server decorations) + Vulkan lavapipe.
   # The window is captured with ImageMagick `import` (zig-out/zeron-linux[-light].png).
   # Also packages the Linux tarball (`zig build zeron-dist`).
@@ -249,6 +361,9 @@ jobs:
       - name: Smoke test zeron, light (60 frames, reference fixtures, Xvfb + lavapipe)
         timeout-minutes: 5
         run: xvfb-run -a -s "-screen 0 1600x1000x24 -nolisten tcp" ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --light
+      - name: Smoke test zeron frosted menu blur (Xvfb + lavapipe)
+        timeout-minutes: 5
+        run: ZERON_SMOKE_MENU=1 ZERON_SMOKE_OUT=zig-out/zeron-linux-menu.png xvfb-run -a -s "-screen 0 1600x1000x24 -nolisten tcp" ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
       - name: Package Linux tarball (zig build zeron-dist)
         run: zig build zeron-dist -Doptimize=ReleaseSafe --summary all
       - uses: actions/upload-artifact@v4
@@ -277,8 +392,10 @@ jobs:
           version: 0.17.0
       - name: Build Zeron.app (x86_64, then aarch64 + lipo → universal)
         run: |
-          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=x86_64-macos -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
-          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=aarch64-macos -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
+          # [liquid-glass] minos 12.0 = Info.plist LSMinimumSystemVersion (the Rust app's);
+          # Zig 0.17 stamps sdk 27.0 (its bundled SDKSettings.json): the full 26/27 design.
+          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=x86_64-macos.12.0 -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
+          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=aarch64-macos.12.0 -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
       - name: Verify bundle
         run: |
           app=zig-out/Zeron.app
@@ -291,6 +408,8 @@ jobs:
             lipo "$app/Contents/MacOS/zeron" -verify_arch "$a" || { echo "FAIL: universal binary lacks $a"; exit 1; }
           done
           codesign --verify --verbose=2 "$app"
+          vtool -show-build "$app/Contents/MacOS/zeron" || true
+          python3 apps/zeron/scripts/macho-build-version.py --expect-sdk 27.0 --expect-minos 12.0 "$app/Contents/MacOS/zeron"
           set +e
           "$app/Contents/MacOS/zeron" headless; code=$?
           set -e

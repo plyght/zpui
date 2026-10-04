@@ -1671,3 +1671,30 @@ fragment float4 backdrop_blur_fragment(
   float2 uv = (input.position.xy - source_rect.xy) / source_rect.zw;
   return source_texture.sample(source_sampler, uv);
 }
+
+// Backdrop composite: an upper window plane (premultiplied) source-over onto
+// the lower-planes snapshot, so an overlay-plane blur sees what lies beneath.
+// Covers the whole attachment; pixel p of the attachment reads plane pixel
+// p + origin.
+struct BackdropCompositeVertexOutput {
+  float4 position [[position]];
+};
+
+vertex BackdropCompositeVertexOutput backdrop_composite_vertex(
+    uint unit_vertex_id [[vertex_id]],
+    constant float2 *unit_vertices [[buffer(0)]]) {
+  float2 u = unit_vertices[unit_vertex_id];
+  return BackdropCompositeVertexOutput{
+      float4(u.x * 2. - 1., 1. - u.y * 2., 0., 1.)};
+}
+
+fragment float4 backdrop_composite_fragment(
+    BackdropCompositeVertexOutput input [[stage_in]],
+    constant uint2 &origin [[buffer(0)]],
+    texture2d<float> plane [[texture(0)]]) {
+  uint2 p = uint2(input.position.xy) + origin;
+  if (p.x >= plane.get_width() || p.y >= plane.get_height()) {
+    return float4(0.);
+  }
+  return plane.read(p);
+}

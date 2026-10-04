@@ -11,6 +11,16 @@
 //! `SourceAlpha, OneMinusSourceAlpha` on RGB and `One, OneMinusSourceAlpha` on
 //! alpha, so the framebuffer accumulates premultiplied source-over.
 //!
+//! Layered windows (macOS native child views, `drawOverlay` / `drawTop`): a
+//! backdrop blur on an overlay or top plane must blur what is visible BENEATH
+//! it, not its own (mostly transparent) drawable. With `setPlaneBackdrops`
+//! armed, the main pass copies its drawable into `lower_planes` and the overlay
+//! pass composites itself onto that copy when the top plane needs it; an
+//! upper-plane blur then snapshots `lower_planes` with the plane's own content
+//! so far composited over it (`backdrop_composite`). Native views between the
+//! planes (web views, native glass) are not visible to Metal, so such a blur
+//! shows only zpui content beneath it.
+//!
 //! Instance data lives in pooled buffers (see `instance_buffer_pool.zig`).
 //! Completed frames are reclaimed by polling command-buffer status rather than
 //! completion-handler blocks, which keeps everything on the calling thread.
@@ -63,6 +73,9 @@ const Index = struct {
     // Backdrop blur.
     const blur_source_texture = 3;
     const blur_source_rect = 4;
+    // Backdrop composite (a plane over the lower-planes snapshot).
+    const composite_origin = 0;
+    const composite_texture = 0;
     // Path rasterization.
     const path_vertices = 0;
     const path_viewport_size = 1;
@@ -101,6 +114,7 @@ const Pipelines = struct {
     path_sprites: id,
     shadows: id,
     backdrop_blur: id,
+    backdrop_composite: id,
     quads: id,
     underlines: id,
     monochrome_sprites: id,
@@ -138,7 +152,8 @@ const BlurGpu = struct {
             .width = width,
             .height = height,
             .format = format,
-            .usage = mtl.TextureUsage.shader_read,
+            // RenderTarget: an upper-plane blur composites the plane over the copy.
+            .usage = mtl.TextureUsage.shader_read | mtl.TextureUsage.render_target,
             .storage = .private,
         });
         errdefer scratch.release();
@@ -231,6 +246,14 @@ pub const MetalRenderer = struct {
     /// what AppKit composited on top (native glass).
     layer_capture_armed: bool = false,
     drawing_plane: Plane = .main,
+    /// Upper planes (`.overlay` / `.top`) whose backdrop blurs this frame sample the
+    /// composited planes beneath (`setPlaneBackdrops`); empty: blurs sample their own plane.
+    plane_backdrops: std.EnumSet(Plane) = .empty,
+    /// Copy of the main drawable (then with the overlay plane composited over it when
+    /// the top plane needs it): what lies beneath an upper plane. Private, viewport-sized.
+    lower_planes: ?id = null,
+    /// `lower_planes` holds this frame's main content.
+    lower_planes_ready: bool = false,
     layer_captures: [3]?LayerCapture = .{ null, null, null },
     /// Offscreen mode: the render target (private storage).
     offscreen_target: ?id = null,
@@ -273,6 +296,18 @@ pub const MetalRenderer = struct {
             c.* = null;
         };
         self.layer_capture_armed = true;
+    }
+
+    /// Layered draw: the next `drawScene` (main), `drawOverlay` and `drawTop` belong to
+    /// one frame; backdrop blurs on `overlay` / `top` sample the planes beneath them
+    /// (main, plus the overlay for `top`) instead of their own transparent drawable.
+    /// Call before the main `drawScene`; `.{}`-equivalent (both false) disables it.
+    pub fn setPlaneBackdrops(self: *MetalRenderer, overlay: bool, top: bool) void {
+        self.plane_backdrops = .empty;
+        if (overlay) self.plane_backdrops.insert(.overlay);
+        if (top) self.plane_backdrops.insert(.top);
+        self.lower_planes_ready = false;
+        if (!overlay and !top) self.releaseLowerPlanes();
     }
 
     pub fn disarmLayerCapture(self: *MetalRenderer) void {
@@ -384,6 +419,7 @@ pub const MetalRenderer = struct {
         }
         self.sprite_atlas.deinit();
         self.releaseBackdropResources();
+        self.releaseLowerPlanes();
         self.backdrop_textures.deinit(self.gpa, &self.blur_gpu);
         self.releasePathIntermediates();
         if (self.offscreen_target) |t| t.release();
@@ -709,6 +745,8 @@ pub const MetalRenderer = struct {
         mtl.RenderEncoder.endEncoding(encoder.?);
         encoder = null;
 
+        try self.updateLowerPlanes(command_buffer, target, viewport);
+
         // Managed buffers must be flushed to the GPU.
         if (!self.is_unified_memory) mtl.Buffer.didModifyRange(frame.buffer, .{ .location = 0, .length = frame.offset });
         self.instance_buffers.noteUsage(&self.buffer_gpu, frame.offset);
@@ -774,9 +812,13 @@ pub const MetalRenderer = struct {
         const copy_x = backdrop.copyOrigin(region.x0, drawable_width, entry.width);
         const copy_y = backdrop.copyOrigin(region.y0, drawable_height, entry.height);
 
+        // An upper plane's own drawable is transparent where the planes beneath show
+        // through: snapshot those (main [+ overlay]) and composite this plane over them.
+        const lower: ?id = if (self.samplesLowerPlanes()) self.lower_planes else null;
         const blit = mtl.CommandBuffer.blitCommandEncoder(command_buffer) orelse return error.CommandBufferFailed;
-        mtl.BlitEncoder.copyTexture(blit, target, .{ .x = copy_x, .y = copy_y }, .{ .width = entry.width, .height = entry.height }, scratch, .{});
+        mtl.BlitEncoder.copyTexture(blit, lower orelse target, .{ .x = copy_x, .y = copy_y }, .{ .width = entry.width, .height = entry.height }, scratch, .{});
         mtl.BlitEncoder.endEncoding(blit);
+        if (lower != null) try self.compositePlane(command_buffer, target, scratch, .{ copy_x, copy_y }, .{ .width = @intCast(entry.width), .height = @intCast(entry.height) });
 
         var source = scratch;
         if (try self.gaussianKernel(backdrop.sigma(blur))) |kernel| {
@@ -801,6 +843,67 @@ pub const MetalRenderer = struct {
         mtl.RenderEncoder.setFragmentBytes(enc, &source_rect, @sizeOf(@TypeOf(source_rect)), Index.blur_source_rect);
         mtl.RenderEncoder.setFragmentTexture(enc, source, Index.blur_source_texture);
         mtl.RenderEncoder.drawInstanced(enc, .triangle, 0, 6, 1);
+    }
+
+    /// Whether a blur on the plane being drawn samples `lower_planes`.
+    fn samplesLowerPlanes(self: *const MetalRenderer) bool {
+        return self.drawing_plane != .main and self.plane_backdrops.contains(self.drawing_plane) and
+            self.lower_planes_ready and self.lower_planes != null;
+    }
+
+    /// End of a plane's pass: keep `lower_planes` (what lies beneath the next plane) current.
+    fn updateLowerPlanes(self: *MetalRenderer, command_buffer: id, target: id, viewport: DeviceSize) EncodeError!void {
+        switch (self.drawing_plane) {
+            .main => {
+                if (self.plane_backdrops.count() == 0 or self.metal_layer == null) return;
+                const lower = try self.ensureLowerPlanes(viewport);
+                const blit = mtl.CommandBuffer.blitCommandEncoder(command_buffer) orelse return error.CommandBufferFailed;
+                const size: mtl.Size = .{ .width = @intCast(viewport.width), .height = @intCast(viewport.height) };
+                mtl.BlitEncoder.copyTexture(blit, target, .{}, size, lower, .{});
+                mtl.BlitEncoder.endEncoding(blit);
+                self.lower_planes_ready = true;
+            },
+            .overlay => {
+                if (!self.plane_backdrops.contains(.top) or !self.lower_planes_ready) return;
+                try self.compositePlane(command_buffer, target, self.lower_planes.?, .{ 0, 0 }, viewport);
+            },
+            .top => {},
+        }
+    }
+
+    /// Composite `plane` (premultiplied, viewport-sized) source-over onto `dst`, whose
+    /// pixel (0, 0) corresponds to `plane` pixel `origin`; `dst_size` is `dst`'s extent.
+    fn compositePlane(self: *MetalRenderer, command_buffer: id, plane: id, dst: id, origin: [2]u64, dst_size: DeviceSize) Error!void {
+        const enc = try beginPass(command_buffer, dst, dst_size, .load);
+        const o: [2]u32 = .{ @intCast(origin[0]), @intCast(origin[1]) };
+        mtl.RenderEncoder.setPipeline(enc, self.pipelines.backdrop_composite);
+        mtl.RenderEncoder.setVertexBuffer(enc, self.unit_vertices, 0, Index.vertices);
+        mtl.RenderEncoder.setFragmentBytes(enc, &o, @sizeOf(@TypeOf(o)), Index.composite_origin);
+        mtl.RenderEncoder.setFragmentTexture(enc, plane, Index.composite_texture);
+        mtl.RenderEncoder.drawInstanced(enc, .triangle, 0, 6, 1);
+        mtl.RenderEncoder.endEncoding(enc);
+    }
+
+    fn ensureLowerPlanes(self: *MetalRenderer, viewport: DeviceSize) Error!id {
+        if (self.lower_planes) |t| {
+            if (mtl.Texture.width(t) == @as(u64, @intCast(viewport.width)) and mtl.Texture.height(t) == @as(u64, @intCast(viewport.height))) return t;
+            self.releaseLowerPlanes();
+        }
+        const t = try newTexture(self.device, .{
+            .width = @intCast(viewport.width),
+            .height = @intCast(viewport.height),
+            .format = target_format,
+            .usage = mtl.TextureUsage.render_target | mtl.TextureUsage.shader_read,
+            .storage = .private,
+        });
+        self.lower_planes = t;
+        return t;
+    }
+
+    fn releaseLowerPlanes(self: *MetalRenderer) void {
+        if (self.lower_planes) |t| t.release();
+        self.lower_planes = null;
+        self.lower_planes_ready = false;
     }
 
     /// The cached `MPSImageGaussianBlur` for `sigma`, or null when MPS is
@@ -1159,6 +1262,7 @@ fn buildPipelines(device: id, library: id) Error!Pipelines {
         .{ "shadows", "shadows", "shadow_vertex", "shadow_fragment", blend_straight, 1 },
         // Blending disabled: the blur REPLACES the region (outside fragments discard).
         .{ "backdrop_blur", "backdrop_blur", "backdrop_blur_vertex", "backdrop_blur_fragment", null, 1 },
+        .{ "backdrop_composite", "backdrop_composite", "backdrop_composite_vertex", "backdrop_composite_fragment", blend_premultiplied, 1 },
         .{ "quads", "quads", "quad_vertex", "quad_fragment", blend_straight, 1 },
         .{ "underlines", "underlines", "underline_vertex", "underline_fragment", blend_straight, 1 },
         .{ "monochrome_sprites", "monochrome_sprites", "monochrome_sprite_vertex", "monochrome_sprite_fragment", blend_straight, 1 },

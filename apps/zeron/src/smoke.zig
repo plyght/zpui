@@ -16,6 +16,20 @@
 //! the page reports loaded (FAIL on a load error or after ~20 s), let it paint, then
 //! capture as above. Exercises the native web view (WKWebView child view on macOS,
 //! the WebKitGTK helper's offscreen frames on Linux).
+//!
+//! `ZERON_SMOKE_MENU=1`: frosted-menu blur check, after the frames (and the browser
+//! page, when combined with `ZERON_SMOKE_BROWSER_URL`). Shows high-contrast stripes
+//! (`ui/shell/smoke_probe.zig`), captures, then opens a frosted floating card (the
+//! real menu chrome, deferred like every menu) over them and captures again. Under
+//! the card the stripes' high-frequency energy must drop to < 25% of the bare value
+//! (a working backdrop blur flattens them; a blur sampling the wrong plane leaves
+//! them crisp behind the tint), else `FAIL: zeron smoke: frosted menu is not blurred`.
+//! Writes `<out stem>-menu-off.png` / `-menu.png`. With a browser tab open the card
+//! sits on the macOS overlay plane above the WKWebView (the regression's path): the
+//! check then also reads the overlay plane back and requires the blurred backdrop
+//! there to be opaque (it was transparent when the blur sampled its own plane).
+//! When the GPU has no MetalPerformanceShaders (blurs draw unblurred), the energy
+//! check is skipped with a `SKIP:` line; the overlay-plane check still runs.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -38,11 +52,14 @@ pub const Options = struct {
     /// `<out>-onscreen.png` (the display in the window's rect) and
     /// `<out>-screencapture.png` (`screencapture -x`) next to the window capture.
     diag: bool = false,
+    /// ZERON_SMOKE_MENU=1: the frosted-menu blur check (see the file comment).
+    menu: bool = false,
 };
 
 const shell_mod = @import("ui/shell/shell.zig");
 const right_pane_mod = @import("ui/shell/right_pane.zig");
 const browser = @import("ui/browser/root.zig");
+const smoke_probe = @import("ui/shell/smoke_probe.zig");
 
 const State = struct {
     gpa: std.mem.Allocator,
@@ -83,6 +100,7 @@ const Tick = struct {
         if (self.left > 0) return win.onNextFrame(Tick{ .left = self.left - 1 }, tick);
         const s = &state.?;
         if (s.opts.browser_url) |url| return openBrowser(s, win, app, url);
+        if (s.opts.menu and self.waited == 0) return MenuProbe.begin(s, win, app);
         if (builtin.os.tag == .macos and s.opts.diag) {
             // Arm a readback of the next presented frame's planes, then wait for it.
             const mw = zpui.mac_platform.MacWindow.fromWindow(win.platform_window);
@@ -132,7 +150,10 @@ const BrowserWait = struct {
             std.debug.print("zeron smoke: browser page loaded\n", .{});
         }
         if (next.loaded) {
-            if (next.settle == 0) return Tick.finish(s, win, app);
+            if (next.settle == 0) {
+                if (s.opts.menu) return MenuProbe.begin(s, win, app);
+                return Tick.finish(s, win, app);
+            }
             next.settle -= 1;
         } else {
             if (next.left == 0) return failNow(s, app, "the browser page did not finish loading in time");
@@ -142,6 +163,189 @@ const BrowserWait = struct {
         win.onNextFrame(next, tick);
     }
 };
+
+/// ZERON_SMOKE_MENU: stripes → capture → frosted card over them → capture → compare.
+const MenuProbe = struct {
+    step: enum { stripes, menu },
+    /// Frames to let the current step paint before capturing.
+    settle: u32,
+    /// High-frequency energy of the bare stripes (set after the first capture).
+    bare: f64 = 0,
+
+    const settle_frames = 6;
+
+    fn begin(s: *State, win: *Window, app: *App) void {
+        const shell = shellOf(win, app) orelse return failNow(s, app, "frosted menu check: root view is not the shell");
+        std.debug.print("zeron smoke: frosted menu check: stripes, then a frosted card over them\n", .{});
+        _ = shell.update(app, shell_mod.Shell.setSmokeProbe, .{.stripes});
+        win.refresh();
+        win.onNextFrame(MenuProbe{ .step = .stripes, .settle = settle_frames }, tick);
+    }
+
+    fn shellOf(win: *Window, app: *App) ?zpui.Entity(shell_mod.Shell) {
+        const root = win.root orelse return null;
+        _ = app;
+        return root.entity.downcast(shell_mod.Shell);
+    }
+
+    fn tick(self: *const MenuProbe, win: *Window, app: *App) void {
+        _ = frames_seen.fetchAdd(1, .monotonic);
+        const s = &state.?;
+        var next = self.*;
+        if (next.settle > 0) {
+            next.settle -= 1;
+            // Read the planes of the last menu frame back (macOS overlay check).
+            if (builtin.os.tag == .macos and next.step == .menu and next.settle == 1 and win.present_overlay.items.len > 0)
+                macRenderer(win).armLayerCapture();
+            win.refresh();
+            return win.onNextFrame(next, tick);
+        }
+        const shell = shellOf(win, app) orelse return failNow(s, app, "frosted menu check: root view is not the shell");
+        switch (next.step) {
+            .stripes => {
+                next.bare = measure(s, win, "menu-off") catch |err| return failErr(s, app, err);
+                if (next.bare < 0.05) {
+                    std.debug.print("FAIL: zeron smoke: frosted menu check: the stripes are not visible (energy {d:.4}); capture/geometry mismatch?\n", .{next.bare});
+                    return failCode(s, app);
+                }
+                _ = shell.update(app, shell_mod.Shell.setSmokeProbe, .{.menu});
+                win.refresh();
+                next.step = .menu;
+                next.settle = settle_frames;
+                win.onNextFrame(next, tick);
+            },
+            .menu => {
+                const under = measure(s, win, "menu") catch |err| return failErr(s, app, err);
+                const ratio = under / next.bare;
+                const layered = win.present_overlay.items.len > 0;
+                std.debug.print("zeron smoke: frosted menu check: stripe energy bare {d:.4}, under the card {d:.4} (ratio {d:.3}); card on the {s}\n", .{ next.bare, under, ratio, if (layered) "overlay plane (native views present)" else "main plane" });
+                if (builtin.os.tag == .macos) {
+                    macRenderer(win).disarmLayerCapture();
+                    if (layered) checkOverlayPlane(s, win, app) catch return;
+                    if (!macRenderer(win).mps_supported) {
+                        std.debug.print("SKIP: zeron smoke: frosted menu energy check: MetalPerformanceShaders is unsupported on this GPU (blurs draw unblurred)\n", .{});
+                        return Tick.finish(s, win, app);
+                    }
+                }
+                if (ratio >= 0.25) {
+                    std.debug.print("FAIL: zeron smoke: frosted menu is not blurred: the content under it keeps {d:.0}% of its high-frequency energy (want < 25%)\n", .{ratio * 100});
+                    return failCode(s, app);
+                }
+                std.debug.print("zeron smoke: frosted menu check passed\n", .{});
+                Tick.finish(s, win, app);
+            },
+        }
+    }
+
+    fn macRenderer(win: *Window) *@TypeOf(zpui.mac_platform.MacWindow.fromWindow(win.platform_window).renderer) {
+        return &zpui.mac_platform.MacWindow.fromWindow(win.platform_window).renderer;
+    }
+
+    /// macOS overlay plane: the card's blurred backdrop must be opaque (the planes
+    /// beneath, composited); the regression left it transparent (its own empty plane).
+    fn checkOverlayPlane(s: *State, win: *Window, app: *App) !void {
+        if (builtin.os.tag != .macos) return;
+        const r = macRenderer(win);
+        const cap = r.takeLayerCapture(.overlay) orelse {
+            std.debug.print("FAIL: zeron smoke: frosted menu check: no overlay-plane readback\n", .{});
+            failCode(s, app);
+            return error.Failed;
+        };
+        defer s.gpa.free(cap.rgba);
+        const rect = pixelRect(win, cap.width, cap.height);
+        var min_alpha: u8 = 255;
+        var y = rect.y0;
+        while (y < rect.y1) : (y += 1) {
+            var x = rect.x0;
+            while (x < rect.x1) : (x += 1) min_alpha = @min(min_alpha, cap.rgba[(y * cap.width + x) * 4 + 3]);
+        }
+        std.debug.print("zeron smoke: frosted menu check: overlay plane alpha under the card >= {d}\n", .{min_alpha});
+        if (min_alpha < 250) {
+            std.debug.print("FAIL: zeron smoke: frosted menu is not blurred: its overlay-plane backdrop is translucent (alpha {d}); the blur sampled its own plane, not the content beneath\n", .{min_alpha});
+            failCode(s, app);
+            return error.Failed;
+        }
+    }
+
+    const PixelRect = struct { x0: usize, y0: usize, x1: usize, y1: usize };
+
+    /// `smoke_probe.measureRect` in an image of the window's content (`width` x `height`;
+    /// a taller image has the titlebar on top).
+    fn pixelRect(win: *Window, width: u32, height: u32) PixelRect {
+        const vp = win.viewportSize();
+        const scale = @as(f32, @floatFromInt(width)) / vp.width;
+        const top = @max(@as(f32, @floatFromInt(height)) - vp.height * scale, 0);
+        const m = smoke_probe.measureRect();
+        const cx = struct {
+            fn f(v: f32, lim: u32) usize {
+                return @intFromFloat(std.math.clamp(@round(v), 0, @as(f32, @floatFromInt(lim))));
+            }
+        }.f;
+        return .{
+            .x0 = cx(m.origin.x * scale, width),
+            .x1 = cx((m.origin.x + m.size.width) * scale, width),
+            .y0 = cx(top + m.origin.y * scale, height),
+            .y1 = cx(top + (m.origin.y + m.size.height) * scale, height),
+        };
+    }
+
+    /// Capture the window, write `<stem>-<tag>.png`, return the mean |d luma / dx|
+    /// (0..1) over the measured rect.
+    fn measure(s: *State, win: *Window, tag: []const u8) !f64 {
+        const gpa = s.gpa;
+        const img = switch (builtin.os.tag) {
+            .macos => try captureMac(gpa, win.platform_window),
+            .linux => try captureX11(gpa, s.io, win.platform_window),
+            else => return error.CaptureUnsupportedOnThisOs,
+        };
+        defer gpa.free(img.pixels);
+        var buf: [256]u8 = undefined;
+        const base = s.opts.out orelse (if (builtin.os.tag == .macos) "zig-out/zeron-macos.png" else "zig-out/zeron-linux.png");
+        const stem = if (std.mem.endsWith(u8, base, ".png")) base[0 .. base.len - 4] else base;
+        const path = try std.fmt.bufPrint(&buf, "{s}-{s}.png", .{ stem, tag });
+        if (std.fs.path.dirname(path)) |dir| std.Io.Dir.cwd().createDirPath(s.io, dir) catch {};
+        if (encodePng(gpa, img.width, img.height, img.pixels)) |encoded| {
+            defer gpa.free(encoded);
+            std.Io.Dir.cwd().writeFile(s.io, .{ .sub_path = path, .data = encoded }) catch {};
+            std.debug.print("zeron smoke: wrote {s}\n", .{path});
+        } else |_| {}
+        return highFrequencyEnergy(img, pixelRect(win, img.width, img.height));
+    }
+
+    fn highFrequencyEnergy(img: Image, r: PixelRect) f64 {
+        if (r.x1 <= r.x0 + 1 or r.y1 <= r.y0) return 0;
+        var sum: f64 = 0;
+        var n: usize = 0;
+        var y = r.y0;
+        while (y < r.y1) : (y += 1) {
+            var prev = luma(img, r.x0, y);
+            var x = r.x0 + 1;
+            while (x < r.x1) : (x += 1) {
+                const l = luma(img, x, y);
+                sum += @abs(l - prev);
+                prev = l;
+                n += 1;
+            }
+        }
+        return sum / @as(f64, @floatFromInt(n));
+    }
+
+    fn luma(img: Image, x: usize, y: usize) f64 {
+        const p = img.pixels[(y * img.width + x) * 4 ..][0..3];
+        return (0.2126 * @as(f64, @floatFromInt(p[0])) + 0.7152 * @as(f64, @floatFromInt(p[1])) + 0.0722 * @as(f64, @floatFromInt(p[2]))) / 255.0;
+    }
+};
+
+fn failErr(s: *State, app: *App, err: anyerror) void {
+    std.debug.print("FAIL: zeron smoke: frosted menu check: {t}\n", .{err});
+    failCode(s, app);
+}
+
+fn failCode(s: *State, app: *App) void {
+    s.exit_code = 1;
+    s.done.store(true, .release);
+    app.quit();
+}
 
 fn failNow(s: *State, app: *App, reason: []const u8) void {
     std.debug.print("FAIL: zeron smoke: {s}\n", .{reason});

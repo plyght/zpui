@@ -307,6 +307,8 @@ pub const Frame = struct {
     overlay_ranges: std.ArrayList(platform.OverlayRange) = .empty,
     /// The overlay holds interactive content (menus, drags): it takes the mouse.
     overlay_capture_input: bool = false,
+    /// [liquid-glass] `Window.paintBackdropHole` of this frame (last one wins).
+    backdrop_hole: ?platform.BackdropHole = null,
 
     fn init(gpa: Allocator, keymap: *const @import("../app/keymap.zig").Keymap) Frame {
         return .{ .gpa = gpa, .dispatch_tree = .init(gpa, keymap) };
@@ -348,6 +350,7 @@ pub const Frame = struct {
         self.native_views.clearRetainingCapacity();
         self.overlay_ranges.clearRetainingCapacity();
         self.overlay_capture_input = false;
+        self.backdrop_hole = null; // [liquid-glass]
         self.focus = null;
         self.window_active = false;
     }
@@ -474,6 +477,8 @@ pub const Window = struct {
     top_open_start: usize = 0,
     /// [liquid-glass] Native glass views of this window (liquid_glass.zig).
     liquid_glass: liquid_glass_mod.Pool = .{},
+    /// [liquid-glass] The backdrop hole last handed to the platform window.
+    applied_backdrop_hole: ?platform.BackdropHole = null,
     /// Native views placed by the last present (hidden when a frame omits them).
     presented_native_views: std.ArrayList(platform.NativeViewId) = .empty,
     /// Merged overlay ranges handed to `drawLayered` (reused buffer).
@@ -1249,9 +1254,15 @@ pub const Window = struct {
     pub fn present(self: *Window) void {
         self.applyNativeViews();
         liquid_glass_mod.sweep(self); // [liquid-glass]
+        self.applyBackdropHole(); // [liquid-glass]
         const drawn = if (self.platform_window.vtable.drawLayered) |draw_layered| blk: {
-            self.mergeOverlayRanges();
-            break :blk draw_layered(self.platform_window.ptr, &self.rendered_frame.scene, self.present_overlay.items, self.rendered_frame.overlay_capture_input);
+            // Planes only matter above native views: without one placed this frame,
+            // everything (menus, popovers, tooltips, drags) stays on the main surface,
+            // where backdrop blurs see the content beneath them.
+            const layered = self.hasPlacedNativeViews();
+            if (layered) self.mergeOverlayRanges() else self.present_overlay.clearRetainingCapacity();
+            const capture = layered and self.rendered_frame.overlay_capture_input;
+            break :blk draw_layered(self.platform_window.ptr, &self.rendered_frame.scene, self.present_overlay.items, capture);
         } else self.platform_window.draw(&self.rendered_frame.scene);
         drawn catch |err| {
             std.log.err("window present failed: {t}", .{err});
@@ -1895,6 +1906,23 @@ pub const Window = struct {
         return liquid_glass_mod.paint(self, gid.toKey(), kind, view_bounds, config);
     }
 
+    /// [liquid-glass] Cut `bounds` (logical px, rounded by `corner_radii`: tl, tr, br, bl)
+    /// out of the window's behind-window material for this frame, so native glass over a
+    /// region zpui leaves at alpha 0 samples the desktop (macOS `blurred` windows; a no-op
+    /// elsewhere). Paint it from a view that is redrawn every frame (the root view): a
+    /// frame that paints none removes the hole.
+    pub fn paintBackdropHole(self: *Window, hole_bounds: Bounds, corner_radii: [4]Pixels) void {
+        std.debug.assert(self.phase == .paint);
+        self.next_frame.backdrop_hole = .{ .bounds = hole_bounds, .corner_radii = corner_radii };
+    }
+
+    fn applyBackdropHole(self: *Window) void {
+        const hole = self.rendered_frame.backdrop_hole;
+        if (std.meta.eql(hole, self.applied_backdrop_hole)) return;
+        self.applied_backdrop_hole = hole;
+        self.platform_window.setBackdropHole(hole);
+    }
+
     /// [liquid-glass] Whether `paintLiquidGlass` can place native glass in this window.
     pub fn supportsLiquidGlass(self: *Window) bool {
         return liquid_glass_mod.supported(self);
@@ -1947,9 +1975,33 @@ pub const Window = struct {
         }
     }
 
+    /// The rendered frame places at least one visible native view (web view, native
+    /// glass): only then can plane content end up beneath or above something native.
+    fn hasPlacedNativeViews(self: *const Window) bool {
+        for (self.rendered_frame.native_views.items) |v| {
+            if (v.placement.clip.size.width > 0 and v.placement.clip.size.height > 0) return true;
+        }
+        return false;
+    }
+
     /// Sorted, disjoint ranges for `drawLayered`; [liquid-glass] top-plane ranges win
-    /// over the overlay ranges they nest in.
+    /// over the overlay ranges they nest in. Ranges holding a backdrop blur are flagged
+    /// `samples_lower_planes`.
     fn mergeOverlayRanges(self: *Window) void {
+        self.mergeOverlayRangesInner();
+        const ops = self.rendered_frame.scene.paint_operations.items;
+        for (self.present_overlay.items) |*r| {
+            r.samples_lower_planes = false;
+            const end = @min(r.end, ops.len);
+            if (r.start >= end) continue;
+            for (ops[r.start..end]) |op| if (op == .backdrop_blur) {
+                r.samples_lower_planes = true;
+                break;
+            };
+        }
+    }
+
+    fn mergeOverlayRangesInner(self: *Window) void {
         const out = &self.present_overlay;
         out.clearRetainingCapacity();
         const all = self.rendered_frame.overlay_ranges.items;

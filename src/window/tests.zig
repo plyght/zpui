@@ -1310,3 +1310,70 @@ test "native views are placed at their bounds, clipped, hidden when not painted;
     w.detachNativeView(id);
     try testing.expect(!tw.native_attached[i]);
 }
+
+/// A frosted (backdrop-blurred) deferred menu over high-contrast content, optionally
+/// next to a native child view.
+const FrostHost = struct {
+    id: ?@import("../platform/platform.zig").NativeViewId = null,
+    native: bool,
+
+    fn init(native: bool) fn (*Window, *Context(FrostHost)) FrostHost {
+        return if (native) struct {
+            fn f(window: *Window, _: *Context(FrostHost)) FrostHost {
+                var dummy: u8 = 0;
+                return .{ .id = window.attachNativeView(@ptrCast(&dummy), .{}) catch null, .native = true };
+            }
+        }.f else struct {
+            fn f(_: *Window, _: *Context(FrostHost)) FrostHost {
+                return .{ .native = false };
+            }
+        }.f;
+    }
+
+    pub fn render(self: *FrostHost, _: *Window, _: *Context(FrostHost)) elements.Div {
+        var root = div().size(px(400)).bg(color.white).child(div().w(px(100)).h(px(20)).bg(color.black));
+        if (self.id) |id| root = root.child(elements.nativeView(id).w(px(100)).h(px(50)));
+        return root.child(elements.deferred(elements.frosted(px(6), elements.effects.menu_blur, div().size(px(60)).bg(color.white.opacity(0.5)))));
+    }
+};
+
+fn frostedMenuBlurOps(scene: *const zpui_scene.Scene, start: usize, end: usize) usize {
+    var n: usize = 0;
+    for (scene.paint_operations.items[start..end]) |op| {
+        if (op == .backdrop_blur) n += 1;
+    }
+    return n;
+}
+
+test "without native views a frosted deferred menu paints on the main plane (its blur sees the content beneath)" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, FrostHost, FrostHost.init(false), .{});
+    const w = handle.window(app).?;
+    const tw = testWindow(w);
+    const scene = &w.rendered_frame.scene;
+    try testing.expectEqual(@as(usize, 1), scene.backdrop_blurs.items.len);
+    // The deferred draw was still recorded for the overlay plane...
+    try testing.expect(w.rendered_frame.overlay_ranges.items.len >= 1);
+    // ...but with nothing native to sit above, the backend gets one plane, no capture.
+    try testing.expectEqual(@as(usize, 0), tw.last_overlay_len);
+    try testing.expect(!tw.last_capture_input);
+}
+
+test "with a native view, overlay-plane ranges holding a backdrop blur sample the lower planes" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, FrostHost, FrostHost.init(true), .{});
+    const w = handle.window(app).?;
+    const tw = testWindow(w);
+    const scene = &w.rendered_frame.scene;
+    try testing.expect(handle.rootView(app).?.read(app).id != null);
+    try testing.expectEqual(@as(usize, 1), tw.last_overlay_len);
+    const r = tw.last_overlay[0];
+    try testing.expectEqual(@import("../platform/platform.zig").OverlayPlane.overlay, r.plane);
+    try testing.expectEqual(@as(usize, 1), frostedMenuBlurOps(scene, r.start, r.end));
+    try testing.expect(r.samples_lower_planes);
+    try testing.expect(tw.last_capture_input);
+    // The page beneath (main plane) holds no blur and is not flagged.
+    try testing.expectEqual(@as(usize, 0), frostedMenuBlurOps(scene, 0, r.start));
+}

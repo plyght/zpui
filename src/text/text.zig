@@ -56,6 +56,9 @@ pub const DecorationRun = line.DecorationRun;
 pub const GlyphPainter = line.GlyphPainter;
 pub const TextAlign = line.TextAlign;
 
+/// Installed font families with Latin metrics + fixed-width flags (font pickers).
+pub const font_catalog = @import("font_catalog.zig");
+
 /// The OS text backend module (`create(gpa) !platform.TextSystem`, `destroy(ts)`).
 pub const backend = switch (builtin.os.tag) {
     .linux => @import("freetype.zig"),
@@ -81,4 +84,5 @@ pub fn destroyPlatformTextSystem(ts: platform.TextSystem) void {
 test {
     std.testing.refAllDecls(@This());
     _ = @import("tests.zig");
+    _ = font_catalog;
 }

@@ -185,3 +185,73 @@ test "liquid resolves to frosted tokens and extends the offered list" {
     try testing.expectEqual(zt.SurfacePreference.liquid, zt.SurfacePreference.offered(true)[3]);
     for (zt.SurfacePreference.all, 0..) |p, i| try testing.expectEqual(p, zt.SurfacePreference.all_with_liquid[i]);
 }
+
+test "Theme default means Liquid Glass only on a real macOS 26+" {
+    // (is_macos, real platform, supported, ZERON_LIQUID_GLASS=0)
+    try testing.expect(store.defaultLiquidPolicy(true, true, true, false));
+    try testing.expect(!store.defaultLiquidPolicy(false, true, true, false)); // Linux / Windows
+    try testing.expect(!store.defaultLiquidPolicy(true, true, false, false)); // macOS < 26
+    try testing.expect(!store.defaultLiquidPolicy(true, false, true, false)); // headless tests
+    try testing.expect(!store.defaultLiquidPolicy(true, true, true, true)); // opted out
+    // The headless platform never flips the default (frosted stays pixel-identical).
+    var h = try Harness.init(true);
+    defer h.deinit();
+    try testing.expect(!store.defaultIsLiquid(h.app));
+    try testing.expectEqual(zt.SurfacePreference.theme_default, store.current(h.app).theme.surface);
+    try testing.expect(!ui.theme.get(h.app).isLiquid());
+}
+
+fn countKind(tw: *TestWindow, kind: zpui.platform.LiquidGlassKind) usize {
+    var n: usize = 0;
+    for (tw.glass_attach, tw.native_attached) |g, a| {
+        if (g != null and a and g.?.kind == kind) n += 1;
+    }
+    return n;
+}
+
+test "Liquid Glass sidebar sees the desktop: tint around it, a backdrop hole, capsules not a strip" {
+    var h = try Harness.init(true);
+    defer h.deinit();
+    store.force_liquid = true;
+    defer store.force_liquid = false;
+    const prev_mode = shell_mod.sidebar_glass_mode;
+    defer shell_mod.sidebar_glass_mode = prev_mode;
+    store.applyTheme(h.app);
+    h.app.runUntilParked();
+    h.window().drawAndPresent();
+    const tw = h.tw();
+    // Floating pane (macOS 26): hole = the glass rect, inset 8.
+    const hole = tw.backdrop_hole orelse return error.NoBackdropHole;
+    try testing.expectEqual(@as(f32, 8), hole.bounds.origin.x);
+    try testing.expectEqual(@as(f32, 8), hole.bounds.origin.y);
+    try testing.expectEqual(@as(usize, 0), countKind(tw, .sidebar_material));
+    // One titlebar container; its capsules are members (no full-width strip).
+    try testing.expectEqual(@as(usize, 1), countKind(tw, .container));
+    var members: usize = 0;
+    var full_width = false;
+    for (tw.glass_attach, tw.native_attached, tw.native_placement) |g, a, p| {
+        if (g == null or !a or g.?.kind != .glass) continue;
+        if (g.?.parent != null) members += 1;
+        if (p) |pl| if (pl.bounds.size.width >= 1000 and pl.bounds.size.height <= 40) {
+            full_width = true;
+        };
+    }
+    try testing.expect(members >= 2); // title + session controls / pane toggles
+    try testing.expect(!full_width);
+
+    // vev: AppKit's sidebar material under the pane, no hole.
+    shell_mod.sidebar_glass_mode = .vev;
+    h.window().refresh();
+    h.window().drawAndPresent();
+    try testing.expectEqual(@as(usize, 1), countKind(tw, .sidebar_material));
+    try testing.expect(tw.backdrop_hole == null);
+
+    // macOS 27: flush pane, square inner corners.
+    shell_mod.sidebar_glass_mode = .glass;
+    h.app.test_platform.?.liquid_glass_revision = 27;
+    h.window().refresh();
+    h.window().drawAndPresent();
+    const flush = tw.backdrop_hole orelse return error.NoBackdropHole;
+    try testing.expectEqual(@as(f32, 0), flush.bounds.origin.x);
+    try testing.expectEqual(@as(f32, 0), flush.corner_radii[1]);
+}

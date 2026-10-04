@@ -278,7 +278,10 @@ fn addZeronDesign(
         .optimize = optimize,
         .imports = &.{.{ .name = "zpui", .module = zpui }},
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = theme })).step);
+    const theme_tests = b.addRunArtifact(b.addTest(.{ .root_module = theme }));
+    theme_tests.setCwd(b.path("."));
+    test_step.dependOn(&theme_tests.step);
+    b.step("zeron-theme-test", "Run only the zeron_theme tests (themes, VS Code importer, theme library)").dependOn(&theme_tests.step);
 
     const files = b.addWriteFiles();
     _ = files.addCopyDirectory(b.path("apps/zeron/assets"), "assets", .{});
@@ -778,6 +781,15 @@ fn addZeronApp(
     run.setCwd(b.path("."));
     run.addPassthruArgs();
     b.step("run-zeron", "Run the zeron desktop app").dependOn(&run.step);
+
+    // [glass-lab] Liquid Glass lab (apps/zeron/src/glass_lab.zig): `zig build glass-lab`
+    // (interactive) or `zig build glass-lab -- --smoke-frames 90 --light` (diagnostics +
+    // captures to zig-out/glass-lab; ZERON_GLASS_LAB_BG=opaque|blurred|transparent).
+    const lab = b.addRunArtifact(exe);
+    lab.setCwd(b.path("."));
+    lab.setEnvironmentVariable("ZERON_GLASS_LAB", "1");
+    lab.addPassthruArgs();
+    b.step("glass-lab", "Run the Liquid Glass lab window (zeron, ZERON_GLASS_LAB=1)").dependOn(&lab.step);
 
     // Headless shell/sidebar tests (TestPlatform + checked-in fixtures).
     const tests = b.addRunArtifact(b.addTest(.{ .name = "zeron_app", .root_module = root }));

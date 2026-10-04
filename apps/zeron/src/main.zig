@@ -9,7 +9,9 @@
 //! client-side decorations on Linux).
 //!
 //! Flags:
-//!   --fixtures <dir>        run without an engine from JSON fixtures (also ZERON_FIXTURES)
+//!   --fixtures <dir>        run without an engine from JSON fixtures (also ZERON_FIXTURES;
+//!                           ZERON_FIXTURE_SETTINGS_DIR=<dir> seeds the in-memory settings
+//!                           from <dir>/ui-settings.json, never written back)
 //!   --frames <n>            quit after n presented frames (scripted screenshots)
 //!   --size <w>x<h>          initial window size
 //!   --light / --dark        appearance override
@@ -20,7 +22,10 @@
 //!                           --select <chat-id|none>, --compact, --detailed
 //!   --backend x11|wayland   force a Linux backend
 //!   ZERON_LIQUID_GLASS=1    force Settings → Appearance → Glass → Liquid Glass for this
-//!                           run (macOS 26+; frosted elsewhere; docs/LIQUID_GLASS.md)
+//!                           run (macOS 26+; frosted elsewhere; docs/LIQUID_GLASS.md);
+//!                           =0 keeps "Theme default" frosted (it means Liquid on 26+)
+//!   ZERON_SIDEBAR_GLASS=glass|vev, ZERON_SIDEBAR_LAYOUT=floating|flush
+//!                           Liquid Glass sidebar recipe / layout (docs/LIQUID_GLASS.md)
 //!   --smoke-frames <n>      CI smoke test (also ZERON_SMOKE_FRAMES): render n frames,
 //!                           capture the window to zig-out/zeron-<os>[-light].png and
 //!                           exit 0, or exit 1 after a FAIL: line (see smoke.zig)
@@ -115,12 +120,18 @@ fn onLaunch(l: *Launch, app: *App) void {
         if (model.settings.dataDir(l.gpa, l.environ, l.io)) |dir| {
             l.data_dir = dir;
             model.settings_store.init(app, l.io, dir) catch |err| log.warn("settings: {t}", .{err});
+            // The custom theme library joins the registry before the first theme is built.
+            settings_ui.theme_library.init(app, l.io, dir, true);
             if (model.settings_store.current(app)) |s| {
                 prefs.applySettings(s);
                 keymap_cfg = s.keymap;
                 send = s.composerSendBehavior;
             }
         } else |err| log.warn("data dir: {t}", .{err});
+    } else if (l.environ.get("ZERON_FIXTURE_SETTINGS_DIR")) |dir| {
+        // Fixture run with a real (read-only) ui-settings.json, e.g. a background image.
+        model.settings_store.initMemoryFrom(app, l.io, dir) catch |err| log.warn("settings: {t}", .{err});
+        settings_ui.theme_library.init(app, l.io, dir, false);
     }
     actions.keymap.applyKeymap(app, &keymap_cfg, send) catch |err| log.err("keymap: {t}", .{err});
 
@@ -152,6 +163,18 @@ fn onLaunch(l: *Launch, app: *App) void {
     // [liquid-glass] ZERON_LIQUID_GLASS=1: Liquid Glass for this run (not persisted);
     // unsupported systems (Linux, macOS < 26) keep the frosted look. The line below is
     // what CI greps to prove the fallback path ran.
+    // [liquid-glass] ZERON_LIQUID_GLASS=0 keeps "Theme default" frosted on macOS 26+
+    // (where it otherwise means Liquid Glass); ZERON_SIDEBAR_GLASS / _LAYOUT pick the
+    // sidebar recipe to compare on a Mac (docs/LIQUID_GLASS.md).
+    if (l.environ.get("ZERON_LIQUID_GLASS")) |v| if (std.mem.eql(u8, v, "0")) {
+        settings_ui.store.default_liquid_disabled = true;
+    };
+    if (l.environ.get("ZERON_SIDEBAR_GLASS")) |v| {
+        if (std.meta.stringToEnum(shell_mod.SidebarGlassMode, v)) |m| shell_mod.sidebar_glass_mode = m;
+    }
+    if (l.environ.get("ZERON_SIDEBAR_LAYOUT")) |v| {
+        if (std.meta.stringToEnum(shell_mod.SidebarLayout, v)) |m| shell_mod.sidebar_layout_override = m;
+    }
     if (l.environ.get("ZERON_LIQUID_GLASS")) |v| if (v.len > 0 and !std.mem.eql(u8, v, "0")) {
         settings_ui.store.force_liquid = true;
         const native = zpui.platformSupportsLiquidGlass(app);
@@ -165,6 +188,16 @@ fn onLaunch(l: *Launch, app: *App) void {
     };
     // Settings: theme from ui-settings.json (or an in-memory store in fixture mode).
     settings_ui.store.boot(app, l.io, if (l.fixtures != null) appearance else l.appearance);
+    // [liquid-glass] What the glass resolved to (also when it is just the default).
+    if (is_mac and ui.theme.get(app).isLiquid()) {
+        std.debug.print("zeron: liquid glass on (macOS {d}): sidebar={t} layout={t}\n", .{
+            zpui.liquidGlassRevision(app), shell_mod.sidebar_glass_mode, shell_mod.sidebarLayout(app),
+        });
+        if (!settings_ui.store.force_liquid) {
+            const a = zpui.mac_platform.glass_debug.accessibility();
+            std.debug.print("zeron: accessibility reduceTransparency={} increaseContrast={}\n", .{ a.reduce_transparency, a.increase_contrast });
+        }
+    }
     prefs_mod.install(app, prefs) catch @panic("prefs");
 
     // Model.
@@ -198,7 +231,7 @@ fn onLaunch(l: *Launch, app: *App) void {
     if (l.open_url) |url| zpui.lifecycle.openUrls(app, &.{url});
     // --- smoke test (CI): render N frames, capture, exit (smoke.zig) ---
     if (l.smoke_frames) |n|
-        smoke.start(l.gpa, l.io, window, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT"), .browser_url = l.environ.get("ZERON_SMOKE_BROWSER_URL"), .diag = l.environ.get("ZERON_SMOKE_DIAG") != null });
+        smoke.start(l.gpa, l.io, window, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT"), .browser_url = l.environ.get("ZERON_SMOKE_BROWSER_URL"), .diag = l.environ.get("ZERON_SMOKE_DIAG") != null, .menu = l.environ.get("ZERON_SMOKE_MENU") != null });
     if (l.max_frames) |n| {
         const Quit = struct {
             left: u64,
@@ -239,7 +272,27 @@ fn openMainWindow(ctx: *anyopaque, app: *App, restored: ?lifecycle.window_state.
     };
     const w = handle.window(app) orelse return null;
     w.setRemSize(16);
+    // Dev/testing knob (Rust parity): `ZERON_OPEN_ROUTE=settings[/<section>]`
+    // boots straight into a settings section (headless captures can't click there).
+    if (l.environ.get("ZERON_OPEN_ROUTE")) |route| if (settingsRoute(route, settings_ui.store.current(app).settingsSection)) |section| {
+        const Set = struct {
+            fn f(sec: model.settings.SettingsSection, s: *model.UiSettings, _: std.mem.Allocator) void {
+                s.settingsSection = sec;
+            }
+        };
+        settings_ui.store.update(app, .debounced, section, Set.f);
+        _ = handle.update(app, shell_mod.Shell.openSettings, .{});
+    };
     return handle.id;
+}
+
+/// `settings_open_route`: bare `settings` reopens the remembered section,
+/// `settings/<slug>` names one; null for anything else.
+fn settingsRoute(route: []const u8, remembered: model.settings.SettingsSection) ?model.settings.SettingsSection {
+    if (std.mem.eql(u8, route, "settings")) return remembered.reopenable();
+    if (!std.mem.startsWith(u8, route, "settings/")) return null;
+    const sec = model.settings.SettingsSection.fromSlug(route["settings/".len..]) orelse return null;
+    return sec.canonical();
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -359,6 +412,7 @@ test {
     _ = @import("engine_bin.zig");
     _ = @import("ui/shell/shell_test.zig");
     _ = @import("ui/settings/root.zig");
+    _ = @import("ui/background/root.zig");
     _ = @import("ui/pickers/root.zig");
     _ = @import("ui/shell/right_pane.zig");
     _ = @import("ui/sidebar/project_icon.zig");
