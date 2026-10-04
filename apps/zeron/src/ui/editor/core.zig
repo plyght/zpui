@@ -67,7 +67,9 @@ pub const Intent = enum { typing, backspace, delete_forward, atomic };
 /// Lines `[line, line + removed)` were replaced by `added` lines. For a
 /// single-line edit (`removed == added == 1`) `col`/`old_len`/`new_len`
 /// describe the byte edit inside the line.
-pub const LineEdit = struct { line: usize, removed: usize, added: usize, col: usize = 0, old_len: usize = 0, new_len: usize = 0 };
+/// One buffer edit as line bookkeeping (`start`: its byte offset; `full`: a
+/// whole-document reload, which detaches every tracked range).
+pub const LineEdit = struct { line: usize, removed: usize, added: usize, col: usize = 0, old_len: usize = 0, new_len: usize = 0, start: usize = 0, full: bool = false };
 
 const Edit = struct {
     start: usize,
@@ -170,7 +172,7 @@ pub const EditorCore = struct {
         self.next_version += 1;
         self.saved_version = self.base_version;
         self.search.computed_for = null;
-        try self.line_edits.append(self.gpa, .{ .line = 0, .removed = old_lines, .added = self.buffer.lineCount() });
+        try self.line_edits.append(self.gpa, .{ .line = 0, .removed = old_lines, .added = self.buffer.lineCount(), .full = true });
     }
 
     /// Replace the contents as a new disk baseline, keeping the selection
@@ -240,7 +242,7 @@ pub const EditorCore = struct {
         const col = start - self.buffer.lineStart(line);
         self.buffer.delete(start, start + old_len);
         try self.buffer.insert(start, new);
-        try self.line_edits.append(self.gpa, .{ .line = line, .removed = removed_nl + 1, .added = std.mem.count(u8, new, "\n") + 1, .col = col, .old_len = old_len, .new_len = new.len });
+        try self.line_edits.append(self.gpa, .{ .line = line, .removed = removed_nl + 1, .added = std.mem.count(u8, new, "\n") + 1, .col = col, .old_len = old_len, .new_len = new.len, .start = start });
     }
 
     /// Replace `range` with `text` as an undoable edit and select `after`.

@@ -1,0 +1,7692 @@
+{
+  "sections": [
+    {
+      "start": [
+        {
+          "id": "a",
+          "name": "Focus",
+          "session_ids": [
+            "x",
+            "y"
+          ],
+          "collapsed": false
+        },
+        {
+          "id": "b",
+          "name": "Later",
+          "session_ids": [],
+          "collapsed": true
+        }
+      ],
+      "steps": [
+        {
+          "change": {
+            "action": "section",
+            "change": {
+              "action": "create",
+              "id": "c",
+              "name": "New"
+            }
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [
+                "x",
+                "y"
+              ],
+              "collapsed": false
+            },
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [],
+              "collapsed": true
+            },
+            {
+              "id": "c",
+              "name": "New",
+              "session_ids": [],
+              "collapsed": false
+            }
+          ]
+        },
+        {
+          "change": {
+            "action": "section",
+            "change": {
+              "action": "create",
+              "id": "a",
+              "name": "Dup"
+            }
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [
+                "x",
+                "y"
+              ],
+              "collapsed": false
+            },
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [],
+              "collapsed": true
+            },
+            {
+              "id": "c",
+              "name": "New",
+              "session_ids": [],
+              "collapsed": false
+            }
+          ]
+        },
+        {
+          "change": {
+            "action": "section",
+            "change": {
+              "action": "rename",
+              "id": "b",
+              "name": "Today"
+            }
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [
+                "x",
+                "y"
+              ],
+              "collapsed": false
+            },
+            {
+              "id": "b",
+              "name": "Today",
+              "session_ids": [],
+              "collapsed": true
+            },
+            {
+              "id": "c",
+              "name": "New",
+              "session_ids": [],
+              "collapsed": false
+            }
+          ]
+        },
+        {
+          "change": {
+            "action": "section",
+            "change": {
+              "action": "rename",
+              "id": "zz",
+              "name": "Nope"
+            }
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [
+                "x",
+                "y"
+              ],
+              "collapsed": false
+            },
+            {
+              "id": "b",
+              "name": "Today",
+              "session_ids": [],
+              "collapsed": true
+            },
+            {
+              "id": "c",
+              "name": "New",
+              "session_ids": [],
+              "collapsed": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "start": [
+        {
+          "id": "a",
+          "name": "Focus",
+          "session_ids": [
+            "x",
+            "y"
+          ],
+          "collapsed": false
+        },
+        {
+          "id": "b",
+          "name": "Later",
+          "session_ids": [],
+          "collapsed": true
+        }
+      ],
+      "steps": [
+        {
+          "change": {
+            "action": "section",
+            "change": {
+              "action": "assign",
+              "sessionId": "x",
+              "sectionId": "b"
+            }
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [
+                "y"
+              ],
+              "collapsed": false
+            },
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [
+                "x"
+              ],
+              "collapsed": false
+            }
+          ]
+        },
+        {
+          "change": {
+            "action": "section",
+            "change": {
+              "action": "assign",
+              "sessionId": "y",
+              "sectionId": null
+            }
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [],
+              "collapsed": false
+            },
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [
+                "x"
+              ],
+              "collapsed": false
+            }
+          ]
+        },
+        {
+          "change": {
+            "action": "section",
+            "change": {
+              "action": "assign",
+              "sessionId": "z",
+              "sectionId": "gone"
+            }
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [],
+              "collapsed": false
+            },
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [
+                "x"
+              ],
+              "collapsed": false
+            }
+          ]
+        },
+        {
+          "change": {
+            "action": "section",
+            "change": {
+              "action": "collapse",
+              "id": "a",
+              "collapsed": true
+            }
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [],
+              "collapsed": true
+            },
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [
+                "x"
+              ],
+              "collapsed": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "start": [
+        {
+          "id": "a",
+          "name": "Focus",
+          "session_ids": [
+            "x",
+            "y"
+          ],
+          "collapsed": false
+        },
+        {
+          "id": "b",
+          "name": "Later",
+          "session_ids": [],
+          "collapsed": true
+        }
+      ],
+      "steps": [
+        {
+          "change": {
+            "action": "pin",
+            "sessionId": "x",
+            "after": null,
+            "before": null
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [
+                "y"
+              ],
+              "collapsed": false
+            },
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [],
+              "collapsed": true
+            }
+          ]
+        },
+        {
+          "change": {
+            "action": "move",
+            "sessionId": "y",
+            "after": null,
+            "before": null
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [
+                "y"
+              ],
+              "collapsed": false
+            },
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [],
+              "collapsed": true
+            }
+          ]
+        },
+        {
+          "change": {
+            "action": "unpin",
+            "sessionId": "y"
+          },
+          "after": [
+            {
+              "id": "a",
+              "name": "Focus",
+              "session_ids": [
+                "y"
+              ],
+              "collapsed": false
+            },
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [],
+              "collapsed": true
+            }
+          ]
+        },
+        {
+          "change": {
+            "action": "section",
+            "change": {
+              "action": "delete",
+              "id": "a"
+            }
+          },
+          "after": [
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [],
+              "collapsed": true
+            }
+          ]
+        },
+        {
+          "change": {
+            "action": "section",
+            "change": {
+              "action": "import",
+              "sections": [
+                {
+                  "id": "q",
+                  "name": "Q",
+                  "session_ids": [],
+                  "collapsed": false
+                }
+              ]
+            }
+          },
+          "after": [
+            {
+              "id": "b",
+              "name": "Later",
+              "session_ids": [],
+              "collapsed": true
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "after_auth": [
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "enabling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "enabling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "enabling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "enabling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "enabling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "enabling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "enabling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "canceling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "canceling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "canceling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "canceling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "canceling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "canceling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "canceling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "canceling"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "switch_offer",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "switch_offer",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switching",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "restart_pending",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "restart_pending",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "restart_pending",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "restart_pending",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "restart_pending",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "restart_pending",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "restart_pending",
+        "b": false
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switching",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "import_failed",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "restart_pending",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "restart_pending",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "restart_pending",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "restart_pending",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "restart_pending",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "restart_pending",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "restart_pending",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "sign_out_confirm"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "sign_out_confirm"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "sign_out_confirm"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "sign_out_confirm"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "sign_out_confirm"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "sign_out_confirm"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "sign_out_confirm"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "sign_out_confirm"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "sign_out_confirm"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "sign_out_confirm"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "signing_out"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signing_out"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "signing_out"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "signing_out"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "signing_out"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signing_out"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "signing_out"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "signing_out"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "signing_out"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "signing_out"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": null,
+      "auth": null,
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": null,
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": null,
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "local",
+      "auth": null,
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "local",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "switch_offer",
+        "b": true
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "synced",
+      "auth": null,
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "synced",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "signed_out_restart_required"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "development",
+      "auth": null,
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedOut"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "needsOrganization",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        }
+      },
+      "next": {
+        "kind": "idle"
+      }
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "development",
+      "auth": {
+        "state": "signedIn",
+        "user": {
+          "id": "u1",
+          "email": "ada@example.test",
+          "name": "  Ada  "
+        },
+        "orgId": "org"
+      },
+      "next": {
+        "kind": "idle"
+      }
+    }
+  ],
+  "menus": [
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "local",
+      "action": "enable_sync"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "synced",
+      "action": "sign_out"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "local",
+      "action": "sync_in_progress"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "synced",
+      "action": "sign_out"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "local",
+      "action": "sync_in_progress"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "synced",
+      "action": "sign_out"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "local",
+      "action": "restart_pending"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "synced",
+      "action": "sign_out"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "local",
+      "action": "sync_in_progress"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "synced",
+      "action": "sync_in_progress"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "local",
+      "action": "restart_pending"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "synced",
+      "action": "restart_pending"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "local",
+      "action": "restart_pending"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "synced",
+      "action": "sign_out"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "local",
+      "action": "restart_pending"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "synced",
+      "action": "sign_out"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "local",
+      "action": "sync_in_progress"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "synced",
+      "action": "sync_in_progress"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "local",
+      "action": "restart_pending"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "synced",
+      "action": "restart_pending"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "local",
+      "action": "restart_pending"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "synced",
+      "action": "sign_out"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "local",
+      "action": "sync_in_progress"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "synced",
+      "action": "sync_in_progress"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "local",
+      "action": "sync_in_progress"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "synced",
+      "action": "sync_in_progress"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "local",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "synced",
+      "action": "sign_out"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "local",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "synced",
+      "action": "sign_out"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "development",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": null,
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "local",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "synced",
+      "action": null
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "development",
+      "action": null
+    }
+  ],
+  "identities": [
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "idle"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "enabling"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "canceling"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": false
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": false
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": false
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Sync ready after restart"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Sync ready after restart"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Sync ready after restart"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": false
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switch_offer",
+        "b": true
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "switching",
+        "b": true
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "import_failed",
+        "b": true
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Sync ready after restart"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Sync ready after restart"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Sync ready after restart"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "restart_pending",
+        "b": true
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "importing",
+        "a": 1,
+        "c": 3
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "import_done",
+        "a": 2,
+        "c": 1
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "sign_out_confirm"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "signing_out"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": null,
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": null,
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": null,
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "local",
+      "user": null,
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "local",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Local",
+      "identity": "Stored on this device"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "synced",
+      "user": null,
+      "label": "Local",
+      "identity": "Not signed in"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Ada",
+      "identity": "ada@example.test"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "synced",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "b@x.test",
+      "identity": "b@x.test"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "development",
+      "user": null,
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u1",
+        "email": "ada@example.test",
+        "name": "  Ada  "
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    },
+    {
+      "flow": {
+        "kind": "signed_out_restart_required"
+      },
+      "scope": "development",
+      "user": {
+        "id": "u2",
+        "email": "b@x.test",
+        "name": null
+      },
+      "label": "Development",
+      "identity": "Authentication disabled"
+    }
+  ],
+  "phrases": [
+    {
+      "chats": 0,
+      "spaces": 0,
+      "phrase": null
+    },
+    {
+      "chats": 0,
+      "spaces": 1,
+      "phrase": "the 1 project"
+    },
+    {
+      "chats": 0,
+      "spaces": 3,
+      "phrase": "the 3 projects"
+    },
+    {
+      "chats": 1,
+      "spaces": 0,
+      "phrase": "the 1 session"
+    },
+    {
+      "chats": 1,
+      "spaces": 1,
+      "phrase": "the 1 session and 1 project"
+    },
+    {
+      "chats": 1,
+      "spaces": 3,
+      "phrase": "the 1 session and 3 projects"
+    },
+    {
+      "chats": 2,
+      "spaces": 0,
+      "phrase": "the 2 sessions"
+    },
+    {
+      "chats": 2,
+      "spaces": 1,
+      "phrase": "the 2 sessions and 1 project"
+    },
+    {
+      "chats": 2,
+      "spaces": 3,
+      "phrase": "the 2 sessions and 3 projects"
+    }
+  ],
+  "summaries": [
+    {
+      "item": {
+        "kind": "summary",
+        "importedChats": 3,
+        "skippedChats": 1,
+        "errors": []
+      },
+      "outcome": {
+        "ok": [
+          3,
+          1
+        ]
+      }
+    },
+    {
+      "item": {
+        "kind": "summary",
+        "importedChats": 0
+      },
+      "outcome": {
+        "ok": [
+          0,
+          0
+        ]
+      }
+    },
+    {
+      "item": {
+        "kind": "summary",
+        "importedChats": 2,
+        "errors": [
+          "disk full"
+        ]
+      },
+      "outcome": {
+        "err": "2 imported, 1 failure: disk full"
+      }
+    },
+    {
+      "item": {
+        "kind": "summary",
+        "importedChats": 5,
+        "skippedChats": 2,
+        "errors": [
+          "a",
+          "b",
+          "c"
+        ]
+      },
+      "outcome": {
+        "err": "5 imported, 3 failures — first: a"
+      }
+    },
+    {
+      "item": {
+        "kind": "summary",
+        "errors": [
+          1,
+          "only strings count"
+        ]
+      },
+      "outcome": {
+        "err": "0 imported, 1 failure: only strings count"
+      }
+    }
+  ],
+  "preferred": [
+    {
+      "actions": [],
+      "preferred": null,
+      "chosen": null
+    },
+    {
+      "actions": [],
+      "preferred": "setup",
+      "chosen": null
+    },
+    {
+      "actions": [],
+      "preferred": "test",
+      "chosen": null
+    },
+    {
+      "actions": [],
+      "preferred": "gone",
+      "chosen": null
+    },
+    {
+      "actions": [
+        {
+          "id": "setup",
+          "name": "setup",
+          "command": "setup",
+          "icon": "play",
+          "runOnWorktreeCreate": true
+        }
+      ],
+      "preferred": null,
+      "chosen": "setup"
+    },
+    {
+      "actions": [
+        {
+          "id": "setup",
+          "name": "setup",
+          "command": "setup",
+          "icon": "play",
+          "runOnWorktreeCreate": true
+        }
+      ],
+      "preferred": "setup",
+      "chosen": "setup"
+    },
+    {
+      "actions": [
+        {
+          "id": "setup",
+          "name": "setup",
+          "command": "setup",
+          "icon": "play",
+          "runOnWorktreeCreate": true
+        }
+      ],
+      "preferred": "test",
+      "chosen": "setup"
+    },
+    {
+      "actions": [
+        {
+          "id": "setup",
+          "name": "setup",
+          "command": "setup",
+          "icon": "play",
+          "runOnWorktreeCreate": true
+        }
+      ],
+      "preferred": "gone",
+      "chosen": "setup"
+    },
+    {
+      "actions": [
+        {
+          "id": "setup",
+          "name": "setup",
+          "command": "setup",
+          "icon": "play",
+          "runOnWorktreeCreate": true
+        },
+        {
+          "id": "dev",
+          "name": "dev",
+          "command": "dev",
+          "icon": "play",
+          "runOnWorktreeCreate": false
+        },
+        {
+          "id": "test",
+          "name": "test",
+          "command": "test",
+          "icon": "play",
+          "runOnWorktreeCreate": false
+        }
+      ],
+      "preferred": null,
+      "chosen": "dev"
+    },
+    {
+      "actions": [
+        {
+          "id": "setup",
+          "name": "setup",
+          "command": "setup",
+          "icon": "play",
+          "runOnWorktreeCreate": true
+        },
+        {
+          "id": "dev",
+          "name": "dev",
+          "command": "dev",
+          "icon": "play",
+          "runOnWorktreeCreate": false
+        },
+        {
+          "id": "test",
+          "name": "test",
+          "command": "test",
+          "icon": "play",
+          "runOnWorktreeCreate": false
+        }
+      ],
+      "preferred": "setup",
+      "chosen": "setup"
+    },
+    {
+      "actions": [
+        {
+          "id": "setup",
+          "name": "setup",
+          "command": "setup",
+          "icon": "play",
+          "runOnWorktreeCreate": true
+        },
+        {
+          "id": "dev",
+          "name": "dev",
+          "command": "dev",
+          "icon": "play",
+          "runOnWorktreeCreate": false
+        },
+        {
+          "id": "test",
+          "name": "test",
+          "command": "test",
+          "icon": "play",
+          "runOnWorktreeCreate": false
+        }
+      ],
+      "preferred": "test",
+      "chosen": "test"
+    },
+    {
+      "actions": [
+        {
+          "id": "setup",
+          "name": "setup",
+          "command": "setup",
+          "icon": "play",
+          "runOnWorktreeCreate": true
+        },
+        {
+          "id": "dev",
+          "name": "dev",
+          "command": "dev",
+          "icon": "play",
+          "runOnWorktreeCreate": false
+        },
+        {
+          "id": "test",
+          "name": "test",
+          "command": "test",
+          "icon": "play",
+          "runOnWorktreeCreate": false
+        }
+      ],
+      "preferred": "gone",
+      "chosen": "dev"
+    }
+  ],
+  "labels": [
+    {
+      "width": 0.0,
+      "show": false
+    },
+    {
+      "width": 419.0,
+      "show": false
+    },
+    {
+      "width": 419.989990234375,
+      "show": false
+    },
+    {
+      "width": 420.0,
+      "show": true
+    },
+    {
+      "width": 900.0,
+      "show": true
+    }
+  ],
+  "unknown": [
+    {
+      "message": "Unknown method ListProjectActions",
+      "unknown": true
+    },
+    {
+      "message": "UNKNOWNMETHOD",
+      "unknown": true
+    },
+    {
+      "message": "offline",
+      "unknown": false
+    },
+    {
+      "message": "unknown  method",
+      "unknown": false
+    }
+  ],
+  "usage": {
+    "snapshot": {
+      "accounts": [
+        {
+          "id": "c1",
+          "harness": "claude-code",
+          "email": null,
+          "planLabel": null,
+          "active": true,
+          "usageWindows": [
+            {
+              "label": "5h",
+              "usedFraction": 0.30000001192092896,
+              "resetsAt": null
+            },
+            {
+              "label": "5h",
+              "usedFraction": 0.9100000262260437,
+              "resetsAt": null
+            }
+          ],
+          "switchable": true
+        },
+        {
+          "id": "x1",
+          "harness": "codex",
+          "email": null,
+          "planLabel": null,
+          "active": false,
+          "usageWindows": [
+            {
+              "label": "5h",
+              "usedFraction": 0.10000000149011612,
+              "resetsAt": null
+            }
+          ],
+          "switchable": true
+        },
+        {
+          "id": "x2",
+          "harness": "codex",
+          "email": null,
+          "planLabel": null,
+          "active": true,
+          "usageWindows": [
+            {
+              "label": "5h",
+              "usedFraction": 1.399999976158142,
+              "resetsAt": null
+            },
+            {
+              "label": "5h",
+              "usedFraction": -0.20000000298023224,
+              "resetsAt": null
+            }
+          ],
+          "switchable": true
+        },
+        {
+          "id": "k1",
+          "harness": "cursor",
+          "email": null,
+          "planLabel": null,
+          "active": false,
+          "usageWindows": [],
+          "switchable": true
+        }
+      ],
+      "warnings": []
+    },
+    "cases": [
+      {
+        "harness": "claude-code",
+        "active": "c1",
+        "fraction": 0.9100000262260437
+      },
+      {
+        "harness": "codex",
+        "active": "x2",
+        "fraction": 1.0
+      },
+      {
+        "harness": "cursor",
+        "active": null,
+        "fraction": null
+      },
+      {
+        "harness": "antigravity",
+        "active": null,
+        "fraction": null
+      }
+    ]
+  }
+}

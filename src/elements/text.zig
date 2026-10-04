@@ -265,8 +265,10 @@ pub const StyledText = struct {
         return window.requestMeasuredLayout(.{}, ctx, measure);
     }
 
-    pub fn prepaint(self: *StyledText, _: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, _: *Window, _: *App) void {
+    pub fn prepaint(self: *StyledText, _: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, _: *App) void {
         self.layout_ptr.bounds = bounds;
+        // Accessibility: the text names / fills the enclosing node (src/a11y.zig).
+        window.a11yAppendText(self.text, bounds);
     }
 
     pub fn paint(self: *StyledText, _: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, _: *App) void {

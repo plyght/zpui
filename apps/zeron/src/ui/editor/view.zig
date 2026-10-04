@@ -33,11 +33,14 @@ const zeron_actions = @import("zeron_actions");
 const md = @import("zeron_ui_markdown");
 const ui = @import("../components/root.zig");
 const client = @import("../files/client.zig");
+const markdown_preview = @import("../files/markdown_preview.zig");
+const image_preview = @import("../files/image_preview.zig");
 const proto = @import("../files/protocol.zig");
 const core_mod = @import("core.zig");
 const wrap_mod = @import("wrap.zig");
 const hl = @import("highlight.zig");
 const A = @import("actions.zig");
+const review = @import("review.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -107,6 +110,8 @@ pub const WordWrapChanged = struct { enabled: bool };
 /// Dirty state or phase changed (hosts refresh the tab's unsaved dot).
 pub const StateChanged = struct {};
 pub const Saved = struct { path: []const u8 };
+/// A Markdown preview link opened another workspace document.
+pub const OpenPath = struct { path: []const u8 };
 
 const DragUnit = enum { char, word, line };
 
@@ -190,13 +195,26 @@ pub const FileEditor = struct {
     pending_goto: ?struct { line: usize, col: ?usize } = null,
     window_id: zpui.WindowId = undefined,
 
+    /// Markdown documents open rendered (`FileDocument::show_markdown`); the
+    /// toolbar toggles back to the code.
+    show_markdown: bool = false,
+    markdown: ?Entity(markdown_preview.MarkdownPreview) = null,
+    markdown_sub: ?zpui.Subscription = null,
+    /// Buffer version the preview last parsed.
+    markdown_version: ?u64 = null,
+    /// Workspace images render instead of the "binary" notice.
+    image_view: ?Entity(image_preview.ImagePreview) = null,
+    open_path_buf: std.ArrayList(u8) = .empty,
+
     /// Row layouts computed outside a draw (listeners, IME queries).
     tmp_arena: std.heap.ArenaAllocator,
     scratch: std.ArrayList(u8) = .empty,
     wrap_scratch: std.ArrayList(u8) = .empty,
     row_starts: std.ArrayList(usize) = .empty,
+    /// Review comments on this file's lines (`review.zig`).
+    review: review.State = .{},
 
-    pub const Events = .{ RevealFile, WordWrapChanged, StateChanged, Saved };
+    pub const Events = .{ RevealFile, WordWrapChanged, StateChanged, Saved, OpenPath };
 
     pub fn init(files: Entity(client.WorkspaceFiles), path: []const u8, opts: Options, cx: *Context(FileEditor)) !FileEditor {
         const gpa = cx.gpa();
@@ -213,17 +231,24 @@ pub const FileEditor = struct {
             .scroll = zpui.UniformListScrollHandle.init(gpa),
             .hscroll = zpui.ScrollHandle.init(gpa),
             .tmp_arena = .init(gpa),
+            .show_markdown = markdown_preview.isMarkdown(path),
         };
         self.files_sub = try cx.subscribe(files, onFileChanges);
         self.blink_anchor = cx.app.executor.now();
         files.update(cx, client.WorkspaceFiles.watchFile, .{ path, cx.entityId() });
         files.update(cx, client.WorkspaceFiles.ensureWatch, .{});
         self.startRead(cx);
+        review.attach(&self, cx);
         return self;
     }
 
     pub fn deinit(self: *FileEditor, app: *App) void {
+        self.review.deinit(self, app);
         self.files_sub.deinit();
+        if (self.markdown_sub) |*sub| sub.deinit();
+        if (self.markdown) |m| m.release(app);
+        if (self.image_view) |v| v.release(app);
+        self.open_path_buf.deinit(self.gpa);
         self.find_subs.deinit(self.gpa);
         if (self.goto_sub) |*s| s.deinit();
         self.highlight_task.cancel();
@@ -329,6 +354,8 @@ pub const FileEditor = struct {
     /// Jump to a 1-based line (and optional column) and center it
     /// (zeron `navigate_to_line`).
     pub fn goToLine(self: *FileEditor, line_1: usize, col_1: ?usize, cx: *Context(FileEditor)) void {
+        // Line navigation shows the code (`pending_line_navigation`).
+        self.show_markdown = false;
         const line = @min(line_1 -| 1, self.core.buffer.lineCount() - 1);
         const r = self.core.buffer.lineRange(line);
         const col = if (col_1) |c| @min(c -| 1, r.end - r.start) else 0;
@@ -341,6 +368,7 @@ pub const FileEditor = struct {
     pub fn goToLineWhenLoaded(self: *FileEditor, line_1: usize, col_1: ?usize, cx: *Context(FileEditor)) void {
         if (self.phase == .loading) {
             self.pending_goto = .{ .line = line_1, .col = col_1 };
+            self.show_markdown = false;
             return;
         }
         self.goToLine(line_1, col_1, cx);
@@ -361,8 +389,19 @@ pub const FileEditor = struct {
     pub fn setPath(self: *FileEditor, new_path: []const u8, cx: *Context(FileEditor)) void {
         if (std.mem.eql(u8, new_path, self.path)) return;
         self.files.update(cx, client.WorkspaceFiles.unwatchFile, .{ self.path, cx.entityId() });
+        const was_markdown = markdown_preview.isMarkdown(self.path);
+        review.renamed(self, self.path, new_path, cx);
         self.gpa.free(self.path);
         self.path = self.gpa.dupe(u8, new_path) catch @panic("OOM");
+        if (was_markdown != markdown_preview.isMarkdown(self.path)) self.show_markdown = !was_markdown;
+        if (self.markdown) |m| m.update(cx, markdown_preview.MarkdownPreview.setPath, .{self.path});
+        self.markdown_version = null;
+        if (self.image_view) |v| {
+            if (image_preview.isImage(self.path)) v.update(cx, image_preview.ImagePreview.setPath, .{self.path}) else {
+                v.release(cx);
+                self.image_view = null;
+            }
+        }
         self.files.update(cx, client.WorkspaceFiles.watchFile, .{ self.path, cx.entityId() });
         self.highlightable = hl.supported(self.path, null) and self.core.len() <= hl.max_source_bytes;
         self.highlights.clear();
@@ -373,6 +412,7 @@ pub const FileEditor = struct {
 
     /// The file was deleted by the explorer: keep the buffer for recovery.
     pub fn markDeleted(self: *FileEditor, cx: *Context(FileEditor)) void {
+        if (self.image_view) |v| v.update(cx, image_preview.ImagePreview.deleted, .{});
         if (self.phase == .loading or self.phase == .failed or self.phase == .unavailable) return;
         self.phase = .deleted_on_disk;
         cx.emit(StateChanged{});
@@ -553,6 +593,7 @@ pub const FileEditor = struct {
                 self.phase = if (c.reason == .deleted) .deleted_on_disk else .conflict;
             },
         };
+        review.onSaveOutcome(self, cx);
         cx.emit(StateChanged{});
         cx.notify();
     }
@@ -610,6 +651,7 @@ pub const FileEditor = struct {
         self.line_edits.clearRetainingCapacity();
         self.core.takeLineEdits(&self.line_edits, self.gpa);
         if (self.line_edits.items.len == 0) return;
+        review.applyEdits(self, self.line_edits.items, cx);
         for (self.line_edits.items) |e| {
             self.display.applyLineEdit(e.line, e.removed, e.added, self, lineTextFor);
             if (e.removed == 1 and e.added == 1)
@@ -694,6 +736,7 @@ pub const FileEditor = struct {
 
     fn afterEdit(self: *FileEditor, cx: *Context(FileEditor)) void {
         self.syncLineEdits(cx);
+        review.afterEdit(self, cx);
         self.scheduleAutosave(cx);
         self.reveal_cursor = true;
         self.blink_anchor = self.now(cx);
@@ -719,6 +762,11 @@ pub const FileEditor = struct {
         const n = self.core.buffer.lineCount();
         const digits = std.math.log10_int(@max(n, 1)) + 2;
         return @as(f32, @floatFromInt(digits)) * self.char_width + line_number_right_margin;
+    }
+
+    /// The gutter's width in px (comment overlays sit over it).
+    pub fn gutterWidthPx(self: *const FileEditor) f32 {
+        return self.gutterWidth();
     }
 
     fn lineNumberLen(self: *const FileEditor) usize {
@@ -1532,6 +1580,16 @@ pub const FileEditor = struct {
     fn onRevealClick(self: *FileEditor, _: *const zpui.ClickEvent, _: *Window, cx: *Context(FileEditor)) void {
         cx.emit(RevealFile{ .path = self.path });
     }
+    fn onMarkdownToggleClick(self: *FileEditor, _: *const zpui.ClickEvent, window: *Window, cx: *Context(FileEditor)) void {
+        self.show_markdown = !self.show_markdown;
+        if (!self.show_markdown) window.focus(self.focus);
+        cx.notify();
+    }
+    fn onPreviewOpenPath(self: *FileEditor, _: Entity(markdown_preview.MarkdownPreview), ev: *const markdown_preview.OpenPath, cx: *Context(FileEditor)) void {
+        self.open_path_buf.clearRetainingCapacity();
+        self.open_path_buf.appendSlice(self.gpa, ev.path) catch return;
+        cx.emit(OpenPath{ .path = self.open_path_buf.items });
+    }
     fn onWrapClick(self: *FileEditor, _: *const zpui.ClickEvent, _: *Window, cx: *Context(FileEditor)) void {
         self.setSoftWrap(!self.opts.soft_wrap, cx);
     }
@@ -1610,6 +1668,25 @@ pub const FileEditor = struct {
         return zpui.intoAnyElement(root);
     }
 
+    /// The Markdown preview, synced to the current buffer (`prepare_markdown_preview`).
+    fn markdownView(self: *FileEditor, cx: *Context(FileEditor)) ?Entity(markdown_preview.MarkdownPreview) {
+        if (self.markdown == null) {
+            const v = cx.newWith(markdown_preview.MarkdownPreview, markdown_preview.MarkdownPreview.init, .{ self.files, self.path }) catch return null;
+            self.markdown = v;
+            self.markdown_sub = cx.subscribe(v, onPreviewOpenPath) catch null;
+            self.markdown_version = null;
+        }
+        const v = self.markdown.?;
+        const version = self.core.currentVersion() ^ (self.read_generation << 40);
+        if (self.markdown_version != version) {
+            self.markdown_version = version;
+            const source = self.text(self.gpa) catch return v;
+            defer self.gpa.free(source);
+            v.update(cx, markdown_preview.MarkdownPreview.setSource, .{ source, self.truncated });
+        }
+        return v;
+    }
+
     /// Recompute wrap columns from the last body width; rebuild the row map on change.
     fn syncWrapWidth(self: *FileEditor, cx: *Context(FileEditor)) void {
         const b = self.body_bounds orelse return;
@@ -1649,6 +1726,13 @@ pub const FileEditor = struct {
         var bar = toolbarDiv(theme).pr(px(control_gap))
             .child(md.file_icons.icon(self.path, theme, 14))
             .child(crumbs);
+        if (markdown_preview.isMarkdown(self.path)) {
+            const on = self.show_markdown;
+            bar = bar.child(toolbarButton("files-toggle-markdown", on, theme)
+                .tooltipWith(@as([]const u8, if (on) "Show Markdown code" else "Preview Markdown"), ui.tooltip.build)
+                .onClick(cx.listener(onMarkdownToggleClick))
+                .child(ui.icon.of(if (on) .file_code else .eye, icon_size, theme.text_muted)));
+        }
         if (self.saveStatus(theme)) |st| {
             var chip = div().id("files-save-status").h(px(control_size)).px(px(6)).rounded(px(control_radius)).flex().itemsCenter().flexNone()
                 .fontFamily(theme.font_sans).textSize(px(11)).textColor(st.color);
@@ -1738,8 +1822,16 @@ pub const FileEditor = struct {
                 .child(div().id("files-retry-read").h(px(28)).px(px(12)).rounded(px(7)).border1().borderColor(theme.border)
                 .bg(theme.wash(0.04)).hover(sb.bg(theme.wash(0.09))).cursorPointer().flex().itemsCenter()
                 .textSize(px(11.5)).textColor(theme.text).child("Retry").onClick(cx.listener(onRetryReadClick)))),
-            .unavailable => return zpui.intoAnyElement(centered(theme, self.message orelse "This file cannot be previewed.", theme.text_muted)),
             else => {},
+        }
+        // Workspace images render (`ImagePreview`), whatever the text read said.
+        if (image_preview.isImage(self.path)) {
+            if (self.image_view == null) self.image_view = cx.newWith(image_preview.ImagePreview, image_preview.ImagePreview.init, .{ self.files, self.path, self.checkout_id }) catch null;
+            if (self.image_view) |v| return zpui.intoAnyElement(div().flex1().minH0().minW0().child(v));
+        }
+        if (self.phase == .unavailable) return zpui.intoAnyElement(centered(theme, self.message orelse "This file cannot be previewed.", theme.text_muted));
+        if (self.show_markdown and markdown_preview.isMarkdown(self.path)) {
+            if (self.markdownView(cx)) |v| return zpui.intoAnyElement(div().flex1().minH0().minW0().child(v));
         }
         const caret_on = self.caretShown(window, cx);
         const total_rows = self.rowCount() + bottom_margin_rows;
@@ -1808,6 +1900,7 @@ pub const FileEditor = struct {
         if (!self.opts.soft_wrap and self.maxScrollX() > 0) {
             body = body.child(zpui.scrollbar(self.hscroll).id("file-editor-hbar").axis(.horizontal).withStyle(scrollbarStyle(theme)));
         }
+        for (review.overlays(self, theme, cx)) |o| body = body.child(o);
         if (self.find_open) body = body.child(self.renderFindBar(theme, cx));
         if (self.goto_open) body = body.child(self.renderGoTo(theme, cx));
         if (self.context_menu) |m| body = body.child(self.renderContextMenu(m, theme, cx));

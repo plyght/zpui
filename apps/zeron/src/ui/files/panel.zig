@@ -1061,7 +1061,7 @@ pub const FilesPanel = struct {
     fn renderTree(self: *FilesPanel, theme: *const Theme, cx: *Context(FilesPanel)) zpui.StatefulDiv {
         const n = self.tree.rows().len;
         const list = zpui.uniformList("files-tree-rows", n, cx, renderTreeRows).trackScroll(self.scroll).sizeFull();
-        return div().id("files-tree").relative().flex1().minH0().flex().flexCol()
+        return div().id("files-tree").role(.tree).ariaLabel("Workspace file tree").relative().flex1().minH0().flex().flexCol()
             .trackFocus(self.tree_focus)
             .onMouseDown(.left, cx.listener(onTreeMouseDown))
             .onKeyDown(cx.listener(onTreeKey))
@@ -1132,10 +1132,12 @@ pub const FilesPanel = struct {
         const decoration = self.decorations.get(n.path, is_dir);
         const text_color = if (decoration) |d| d.color(theme) else if (selected) theme.text else theme.text_muted;
         const focused = if (cx.app.windowById(self.window_id)) |w| self.tree_focus.isFocused(w) else false;
-        var row = div().id(.{ "files-tree-entry", ix }).h(px(tree_row_height)).wFull().flexNone().pl(px(padding)).pr(px(8))
+        var row = div().id(.{ "files-tree-entry", ix }).role(.tree_item).ariaLabel(std.fs.path.basename(n.path)).ariaSelected(selected)
+            .h(px(tree_row_height)).wFull().flexNone().pl(px(padding)).pr(px(8))
             .flex().itemsCenter().gap(px(4)).cursorPointer()
             .onClick(cx.listenerWith(ix, onRowClick))
             .onMouseDown(.right, cx.listenerWith(ix, onRowRightDown));
+        if (is_dir) row = row.ariaExpanded(expanded);
         if (n.ignored and decoration == null) row = row.opacity(0.52);
         row = if (selected) row.bg(theme.wash(if (focused) 0.12 else 0.08)) else row.hover(sb.bg(theme.wash(0.055)));
         var disclosure = div().size(px(14)).flexNone().flex().itemsCenter().justifyCenter();

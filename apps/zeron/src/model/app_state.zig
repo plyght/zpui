@@ -21,6 +21,8 @@ const workspace_mod = @import("workspace.zig");
 const transcript_mod = @import("transcript_store.zig");
 const queue_mod = @import("queue_store.zig");
 const status = @import("status.zig");
+const review_comments_mod = @import("review_comments.zig");
+const change_requests_mod = @import("change_requests.zig");
 
 const App = zpui.App;
 const Context = zpui.Context;
@@ -32,6 +34,8 @@ pub const EngineState = es.EngineState;
 pub const WorkspaceStore = workspace_mod.WorkspaceStore;
 pub const TranscriptStore = transcript_mod.TranscriptStore;
 pub const QueueStore = queue_mod.QueueStore;
+pub const ReviewCommentStore = review_comments_mod.ReviewCommentStore;
+pub const ChangeRequestStore = change_requests_mod.ChangeRequestStore;
 
 pub const transcript_cache_cap = 12;
 
@@ -46,6 +50,10 @@ pub const AppState = struct {
     sync: Entity(status.SyncStore),
     updates: Entity(status.UpdateStore),
     catalog: Entity(status.CatalogStore),
+    /// Staged review comments per composer key (`review_comments`).
+    review_comments: Entity(ReviewCommentStore),
+    /// PR status per active checkout (`WatchCheckoutChangeRequest`).
+    change_requests: Entity(ChangeRequestStore),
     /// The selected chat's transcript / queue (null on the new-session canvas).
     transcript: ?Entity(TranscriptStore) = null,
     queue: ?Entity(QueueStore) = null,
@@ -66,7 +74,11 @@ pub const AppState = struct {
             .sync = try cx.newWith(status.SyncStore, status.SyncStore.init, .{engine}),
             .updates = try cx.newWith(status.UpdateStore, status.UpdateStore.init, .{engine}),
             .catalog = try cx.newWith(status.CatalogStore, status.CatalogStore.init, .{engine}),
+            .review_comments = try cx.newWith(ReviewCommentStore, ReviewCommentStore.init, .{@as(?std.Io, io)}),
+            .change_requests = undefined,
         };
+        self.change_requests = try cx.newWith(ChangeRequestStore, ChangeRequestStore.init, .{ engine, self.workspace });
+        try cx.app.setGlobal(review_comments_mod.Global{ .store = self.review_comments.downgrade() });
         try self.subs.add(cx.gpa(), try cx.subscribe(self.workspace, onSelection));
         return self;
     }
@@ -77,6 +89,10 @@ pub const AppState = struct {
         if (self.queue) |q| q.release(app);
         for (self.cache.items) |t| t.release(app);
         self.cache.deinit(self.gpa);
+        // The `review_comments.Global` weak handle goes stale on its own (the
+        // app may already be tearing its globals down here).
+        self.change_requests.release(app);
+        self.review_comments.release(app);
         self.catalog.release(app);
         self.updates.release(app);
         self.sync.release(app);
@@ -94,6 +110,8 @@ pub const AppState = struct {
 
     fn onSelection(self: *AppState, ws: Entity(WorkspaceStore), _: *const workspace_mod.SelectionChanged, cx: *Context(AppState)) void {
         const selected = ws.read(cx).selected_chat;
+        // `composer_key()`: comments stage onto the selected chat ("" on the canvas).
+        self.review_comments.update(cx, ReviewCommentStore.setComposerKey, .{selected orelse ""});
         const current_id: ?[]const u8 = if (self.transcript) |t| t.read(cx).chat_id else null;
         if (eqlOpt(selected, current_id)) return;
         self.swapSelected(selected, cx) catch |err| std.log.scoped(.zeron_app_state).warn("cannot open chat stores: {t}", .{err});

@@ -35,6 +35,11 @@ pub const queue_store = @import("queue_store.zig");
 pub const status = @import("status.zig");
 pub const app_state = @import("app_state.zig");
 pub const attachments = @import("attachments.zig");
+pub const comments = @import("comments.zig");
+pub const review_comments = @import("review_comments.zig");
+pub const change_requests = @import("change_requests.zig");
+/// Test-only loopback WebSocket engine (UI tests drive real RPC through it).
+pub const fake_server = @import("fake_server.zig");
 
 pub const Timestamp = time.Timestamp;
 pub const UiSettings = settings.UiSettings;
@@ -51,6 +56,8 @@ pub const SyncStore = status.SyncStore;
 pub const UpdateStore = status.UpdateStore;
 pub const CatalogStore = status.CatalogStore;
 pub const AppState = app_state.AppState;
+pub const ReviewCommentStore = review_comments.ReviewCommentStore;
+pub const ChangeRequestStore = change_requests.ChangeRequestStore;
 
 test {
     const std = @import("std");

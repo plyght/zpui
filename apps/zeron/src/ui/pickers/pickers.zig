@@ -110,6 +110,7 @@ pub const Pickers = struct {
         };
         try self.subs.add(cx.gpa(), try cx.subscribe(search, onSearch));
         try self.subs.add(cx.gpa(), try cx.observe(state.read(cx).workspace, onWorkspace));
+        try self.subs.add(cx.gpa(), try cx.observe(state.read(cx).change_requests, onChangeRequests)); // [pr-status]
         // Dev/testing knob (Rust parity): `ZERON_OPEN_PICKER=branch|checkout|
         // project|device` boots with that popover open (headless captures).
         if (std.c.getenv("ZERON_OPEN_PICKER")) |raw| {
@@ -133,6 +134,10 @@ pub const Pickers = struct {
         self.focus.release(app);
         self.search.release(app);
         self.state.release(app);
+    }
+
+    fn onChangeRequests(_: *Pickers, _: Entity(model.ChangeRequestStore), cx: *Context(Pickers)) void {
+        cx.notify(); // [pr-status]
     }
 
     fn ws(self: *const Pickers, cx: anytype) *const model.WorkspaceStore {
@@ -724,9 +729,14 @@ pub const Pickers = struct {
         var branch_chip = self.footerChip(.branch, "picker-branch", .git_branch, self.refLabel(), theme, cx);
         if (self.open == .checkout) checkout_chip = checkout_chip.child(self.overlayStart(.checkout, cx));
         if (self.open == .branch) branch_chip = branch_chip.child(self.overlayStart(.branch, cx));
-        return div().wFull().minW0().flex().flexRow().itemsCenter().gap(px(4))
+        var row = div().wFull().minW0().flex().flexRow().itemsCenter().gap(px(4))
             .child(div().flex().flexRow().itemsCenter().minW0().child(checkout_chip))
             .child(div().flex().flexRow().itemsCenter().minW0().child(branch_chip));
+        // [pr-status] The selected chat's checkout PR, pinned right (composer surface).
+        if (w.selectedChatRow()) |chat| if (self.state.read(cx).change_requests.read(cx).forChat(chat)) |pr| {
+            row = row.child(div().flex1().minW0()).child(div().flexNone().child(@import("../components/change_request_badge.zig").badge("composer-pull-request", pr, .composer, true, theme)));
+        };
+        return row;
     }
 
     // ---- render: popovers ---------------------------------------------------------------

@@ -17,6 +17,7 @@ const terminal_dock = @import("terminal_dock.zig");
 const background = @import("../background/root.zig");
 const settings_store_ui = @import("../settings/store.zig");
 const harness_updates = @import("harness_updates.zig");
+const right_pane = @import("right_pane.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -88,7 +89,8 @@ pub const MainPanel = struct {
         // (`chat_dropzone`), with the "Drop to attach" overlay while a file
         // drag hovers it.
         var col = div().id("chat-dropzone").relative().sizeFull().flex().flexCol().overflowHidden()
-            .onDrop(zpui.ExternalPaths, cx.listener(MainPanel.onDropPaths));
+            .onDrop(zpui.ExternalPaths, cx.listener(MainPanel.onDropPaths))
+            .onDrop(right_pane.TabDrag, cx.listener(MainPanel.onDropTab));
         const width = self.width;
         if (has_chat) {
             const stack = self.slots.composer_view.read(cx).last_rendered_height;
@@ -129,7 +131,6 @@ pub const MainPanel = struct {
             col = col.child(div().absolute().left(px(0)).right(px(0)).bottom(px(harness_updates.bottom_inset))
                 .flex().justifyCenter().child(self.harness_updates));
         }
-        col = col.child(attachmentDropOverlay(theme));
         if (terminal_open) {
             if (self.terminal == null) {
                 const chat = ws.selectedChatRow();
@@ -146,6 +147,11 @@ pub const MainPanel = struct {
                 col = col.child(div().flexNone().h(px(h)).wFull().child(t));
             }
         }
+        // Last child: the overlay covers the terminal dock too (Rust order).
+        // A file tab dragged out of the right-pane strip reveals it as well;
+        // other surfaces never do (Rust's `drag_over::<RightTabDrag>` predicate).
+        const tab_file = if (cx.app.activeDrag(right_pane.TabDrag)) |d| d.workspacePath() != null else false;
+        col = col.child(attachmentDropOverlay(theme, tab_file));
         return col;
     }
 
@@ -173,6 +179,17 @@ pub const MainPanel = struct {
         cx.notify();
     }
 
+    /// `on_drop::<RightTabDrag>`: a file tab of this chat's strip attaches its
+    /// workspace path (`attach_workspace_drag`).
+    fn onDropTab(self: *MainPanel, payload: *const right_pane.TabDrag, window: *Window, cx: *Context(MainPanel)) void {
+        const path = payload.workspacePath() orelse return;
+        const chat = self.state.read(cx).workspace.read(cx).selected_chat orelse return;
+        if (!payload.belongsTo(chat)) return;
+        const ComposerView = @TypeOf(self.slots.composer_view).Type;
+        self.slots.composer_view.update(cx, ComposerView.addWorkspacePath, .{ path, false, window });
+        cx.notify();
+    }
+
     fn onTerminalHide(_: *MainPanel, _: Entity(terminal_dock.TerminalDock), _: *const terminal_dock.Hide, cx: *Context(MainPanel)) void {
         prefs_mod.mut(cx).terminal_open = false;
         cx.notify();
@@ -181,12 +198,14 @@ pub const MainPanel = struct {
 
 /// `attachment_drop_overlay`: a scrim with "Drop to attach", shown only
 /// while an external file drag hovers the conversation (typed drag style).
-fn attachmentDropOverlay(theme: *const Theme) zpui.StatefulDiv {
-    return div().id("attachment-drop-overlay").absolute().inset0().opacity(0)
+fn attachmentDropOverlay(theme: *const Theme, tab_file: bool) zpui.StatefulDiv {
+    var overlay = div().id("attachment-drop-overlay").absolute().inset0().opacity(0)
         .bg(theme.scrim().opacity(0.4 / 0.6)).flex().itemsCenter().justifyCenter()
         .textSize(ui.rems(13)).textColor(theme.text)
         .dragOver(zpui.ExternalPaths, sb.opacity(1))
         .child("Drop to attach");
+    if (tab_file) overlay = overlay.dragOver(right_pane.TabDrag, sb.opacity(1));
+    return overlay;
 }
 
 /// First boot: no folders to work in yet.

@@ -11,7 +11,12 @@
 //! pub fn prepaint(self: *E, id: ?GlobalElementId, bounds: Bounds, rl: *S1, state: *S2, window: *Window, cx: *App) void
 //! pub fn paint(self: *E, id: ?GlobalElementId, bounds: Bounds, rl: *S1, pp: *S2, window: *Window, cx: *App) void
 //! pub fn deinit(self: *E) void                               // optional, at arena clear
+//! pub fn a11yNode(self: *E, id: GlobalElementId, bounds: Bounds, window: *Window) ?a11y.NodeSpec  // optional
 //! ```
+//!
+//! `a11yNode` (zui `a11y_role` + `write_a11y_info`) is asked during prepaint while the
+//! accessibility tree is being built, only for elements with an id; a returned node wraps
+//! the element's prepaint so nodes pushed by descendants become its children.
 //!
 //! The window drives every element through request layout → prepaint → paint exactly once
 //! per frame (calling out of order panics, like gpui). Elements, their states and the
@@ -183,6 +188,13 @@ pub fn Drawable(comptime E: type) type {
             if (eid) |id| _ = window.pushElementId(id);
             defer if (eid != null) window.popElementId();
             self.bounds = window.layoutBounds(self.layout_id);
+            // Accessibility (zui `Drawable::prepaint`): an element with an id that reports a
+            // node pushes it around its own prepaint, so descendants become its children.
+            var pushed_a11y = false;
+            if (comptime @hasDecl(E, "a11yNode")) if (self.global_id) |gid| if (window.a11yBuilding()) {
+                if (self.element.a11yNode(gid, self.bounds, window)) |spec| pushed_a11y = window.a11yPushNode(spec);
+            };
+            defer if (pushed_a11y) window.a11yPopNode();
             self.node_id = window.next_frame.dispatch_tree.pushNode() catch @panic("OOM");
             self.element.prepaint(self.global_id, self.bounds, &self.rl, &self.pp, window, cx);
             window.next_frame.dispatch_tree.popNode();

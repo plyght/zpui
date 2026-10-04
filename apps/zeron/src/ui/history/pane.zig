@@ -519,21 +519,42 @@ pub const HistoryPane = struct {
             .child(ui.icon.of(i, icon_size, tint));
     }
 
+    const CountQuery = struct {
+        theme: *const Theme,
+        count: ?usize,
+        comparison: ?struct { base: []const u8, ahead: u64, behind: u64 },
+
+        /// `GitHistoryCount`: the ahead/behind comparison only shows once the
+        /// count's own container is `comparison_min_width` wide.
+        fn render(q: CountQuery, size: zpui.Size(f32), _: *Window, _: *App) zpui.Div {
+            const theme = q.theme;
+            var row = div().sizeFull().minW0().flex().itemsCenter().gap(px(10));
+            if (q.count) |n| row = row.child(div().flexNone().whitespaceNowrap().textSize(px(11)).lineHeight(px(14)).textColor(theme.text_muted)
+                .child(zpui.fmt("{d} commit{s}", .{ n, if (n == 1) "" else "s" })));
+            if (size.width >= graph.comparison_min_width) if (q.comparison) |cmp| {
+                var c = div().id("history-comparison").relative().top(px(1)).flexNone().flex().itemsCenter().gap(px(4))
+                    .tooltipWith(zpui.fmt("Compared with {s}: {d} ahead, {d} behind", .{ cmp.base, cmp.ahead, cmp.behind }), ui.tooltip.build);
+                if (cmp.ahead > 0) c = c.child(div().whitespaceNowrap().textSize(px(10.5)).lineHeight(px(13)).textColor(theme.accent.opacity(0.88)).child(zpui.fmt("{d} ahead", .{cmp.ahead})));
+                if (cmp.ahead > 0 and cmp.behind > 0) c = c.child(div().textSize(px(10)).textColor(theme.text_faint).child("\u{00b7}"));
+                if (cmp.behind > 0) c = c.child(div().whitespaceNowrap().textSize(px(10.5)).lineHeight(px(13)).textColor(theme.warning.opacity(0.82)).child(zpui.fmt("{d} behind", .{cmp.behind})));
+                row = row.child(c);
+            };
+            return row;
+        }
+    };
+
     fn countLabel(self: *HistoryPane, theme: *const Theme, cx: *Context(HistoryPane)) zpui.Div {
         const st = self.store.read(cx);
-        var row = div().hFull().minW0().flex1().flex().itemsCenter().gap(px(10)).overflowHidden();
-        const count: ?usize = if (st.searchActive()) (st.search_total orelse self.visible.len) else st.commitCount();
-        if (count) |n| row = row.child(div().flexNone().whitespaceNowrap().textSize(px(11)).lineHeight(px(14)).textColor(theme.text_muted)
-            .child(zpui.fmt("{d} commit{s}", .{ n, if (n == 1) "" else "s" })));
-        if (st.comparison) |cmp| if (cmp.ahead > 0 or cmp.behind > 0) {
-            var c = div().id("history-comparison").relative().top(px(1)).flexNone().flex().itemsCenter().gap(px(4))
-                .tooltipWith(zpui.fmt("Compared with {s}: {d} ahead, {d} behind", .{ cmp.base, cmp.ahead, cmp.behind }), ui.tooltip.build);
-            if (cmp.ahead > 0) c = c.child(div().whitespaceNowrap().textSize(px(10.5)).lineHeight(px(13)).textColor(theme.accent.opacity(0.88)).child(zpui.fmt("{d} ahead", .{cmp.ahead})));
-            if (cmp.ahead > 0 and cmp.behind > 0) c = c.child(div().textSize(px(10)).textColor(theme.text_faint).child("\u{00b7}"));
-            if (cmp.behind > 0) c = c.child(div().whitespaceNowrap().textSize(px(10.5)).lineHeight(px(13)).textColor(theme.warning.opacity(0.82)).child(zpui.fmt("{d} behind", .{cmp.behind})));
-            row = row.child(c);
+        var q: CountQuery = .{
+            .theme = theme,
+            .count = if (st.searchActive()) (st.search_total orelse self.visible.len) else st.commitCount(),
+            .comparison = null,
         };
-        return div().flex1().minW0().overflowHidden().h(px(control_size)).flex().itemsCenter().child(row);
+        if (st.comparison) |cmp| if (cmp.ahead > 0 or cmp.behind > 0) {
+            q.comparison = .{ .base = frame().dupe(u8, cmp.base) catch "", .ahead = cmp.ahead, .behind = cmp.behind };
+        };
+        return div().hFull().minW0().flex1().flex().itemsCenter().overflowHidden()
+            .child(zpui.containerQuery(q, CountQuery.render));
     }
 
     fn searchControl(self: *HistoryPane, theme: *const Theme, window: *Window, cx: *Context(HistoryPane)) zpui.StatefulDiv {
@@ -711,11 +732,21 @@ pub const HistoryPane = struct {
         return area;
     }
 
-    fn commitColumnWidth(self: *const HistoryPane) f32 {
-        const total = self.list.viewportBounds().size.width;
-        const w = if (total > 0) total else 520;
-        return @max(w - self.geometry.width - self.optionalColumnsWidth(), graph.subject_min_width);
-    }
+    /// The commit column: refs get `ref_area_width` of the column's laid-out width.
+    const CommitQuery = struct {
+        theme: *const Theme,
+        subject: []const u8,
+        refs: []const types.GitHistoryRef,
+        ix: usize,
+        opacity: f32,
+
+        fn render(q: CommitQuery, size: zpui.Size(f32), _: *Window, _: *App) zpui.Div {
+            var col = div().sizeFull().flex().itemsCenter().gap(px(graph.ref_gap)).pr(px(8)).opacity(q.opacity)
+                .child(div().flex1().minW0().truncate().whitespaceNowrap().textSize(px(12)).textColor(q.theme.text).child(q.subject));
+            if (q.refs.len > 0) col = col.child(refArea(q.refs, q.ix, graph.refAreaWidth(size.width), q.theme));
+            return col;
+        }
+    };
 
     pub fn renderRow(self: *HistoryPane, ix: usize, _: *Window, cx: *Context(HistoryPane)) AnyElement {
         const theme = arenaTheme(ui.theme.get(cx).*);
@@ -736,10 +767,8 @@ pub const HistoryPane = struct {
             row = row.bg(theme.ink(0.018 * f.amount));
         };
         const subject = if (c.subject.len == 0) "(no subject)" else c.subject;
-        var commit_col = div().flex1().minW(px(graph.subject_min_width)).overflowHidden().hFull().flex().itemsCenter()
-            .gap(px(graph.ref_gap)).pr(px(8)).opacity(content_opacity)
-            .child(div().flex1().minW0().truncate().whitespaceNowrap().textSize(px(12)).textColor(theme.text).child(subject));
-        if (c.refs.len > 0) commit_col = commit_col.child(refArea(c.refs, ix, graph.refAreaWidth(self.commitColumnWidth()), theme));
+        const commit_col = zpui.containerQuery(CommitQuery{ .theme = theme, .subject = subject, .refs = c.refs, .ix = ix, .opacity = content_opacity }, CommitQuery.render)
+            .flex1().minW(px(graph.subject_min_width)).hFull().overflowHidden();
         row = row.child(self.graphCell(ix, focus, theme, cx)).child(commit_col);
         var cells = div().hFull().flex().flexRow().flexShrink(1);
         if (self.show_author) {
@@ -1005,10 +1034,25 @@ pub const HistoryPane = struct {
         self.ensureLoaded(cx);
         self.rebuild(cx);
         const st = self.store.read(cx);
-        const vw = self.list.viewportBounds().size.width;
-        self.updateGeometry(if (vw > 0) vw else 519, window.scaleFactor());
 
-        const body: AnyElement = blk: {
+        var root = div().id("history-pane").trackFocus(self.focus).keyContext("HistoryPane")
+            .onKeyDown(cx.listener(onKey))
+            .onDragMove(ColumnResize, cx.listener(onColumnResize))
+            .sizeFull().flex().flexCol().fontFamily(theme.font_sans_fixed).textColor(theme.text);
+        if (self.show_toolbar) root = root.child(self.toolbar(theme, window, cx));
+        if (st.fetch_error) |e| root = root.child(errorBanner(zpui.fmt("Fetch failed: {s}", .{e}), theme));
+        if ((if (st.searchActive()) st.search_error else st.error_message)) |e| if (self.visible.len > 0) {
+            root = root.child(errorBanner(e, theme));
+        };
+        root = root.child(zpui.containerQuery(MainQuery{ .pane = cx.weakEntity(), .theme = theme }, MainQuery.render).wFull().flex1().minH0());
+        if (self.column_menu_at) |at| root = root.child(self.columnMenu(at, theme, cx));
+        if (self.author_menu_at) |at| root = root.child(self.authorMenu(at, theme, cx));
+        return zpui.intoAnyElement(root);
+    }
+
+    fn renderBodyArea(self: *HistoryPane, theme: *const Theme, window: *Window, cx: *Context(HistoryPane)) AnyElement {
+        const st = self.store.read(cx);
+        return blk: {
             if (st.target_key == null) break :blk zpui.intoAnyElement(div().flex1().flex().itemsCenter().justifyCenter().textSize(px(12)).textColor(theme.text_faint).child("No repository selected"));
             if (st.loading and st.commits.items.len == 0) {
                 window.requestAnimationFrame();
@@ -1036,21 +1080,25 @@ pub const HistoryPane = struct {
                 .child(zpui.list(self.list, cx, renderRow).sizeFull().withSizingBehavior(.auto)));
         };
 
-        var root = div().id("history-pane").trackFocus(self.focus).keyContext("HistoryPane")
-            .onKeyDown(cx.listener(onKey))
-            .onDragMove(ColumnResize, cx.listener(onColumnResize))
-            .sizeFull().flex().flexCol().fontFamily(theme.font_sans_fixed).textColor(theme.text);
-        if (self.show_toolbar) root = root.child(self.toolbar(theme, window, cx));
-        if (st.fetch_error) |e| root = root.child(errorBanner(zpui.fmt("Fetch failed: {s}", .{e}), theme));
-        if ((if (st.searchActive()) st.search_error else st.error_message)) |e| if (self.visible.len > 0) {
-            root = root.child(errorBanner(e, theme));
-        };
-        var main = div().wFull().flex1().minH0().flex().flexCol();
+    }
+
+    /// The column header + rows, laid out from the area's own width
+    /// (`container_query` → `responsive_graph_geometry`), so the lane graph,
+    /// the header spacer and every row agree in the same frame.
+    const MainQuery = struct {
+        pane: zpui.WeakEntity(HistoryPane),
+        theme: *const Theme,
+
+        fn render(q: MainQuery, size: zpui.Size(f32), window: *Window, app: *App) AnyElement {
+            return q.pane.update(app, HistoryPane.renderMain, .{ q.theme, size.width, window }) orelse zpui.empty();
+        }
+    };
+
+    fn renderMain(self: *HistoryPane, theme: *const Theme, width: f32, window: *Window, cx: *Context(HistoryPane)) AnyElement {
+        self.updateGeometry(width, window.scaleFactor());
+        var main = div().sizeFull().flex().flexCol();
         if (self.visible.len > 0) main = main.child(self.columnHeader(theme, cx));
-        root = root.child(main.child(body));
-        if (self.column_menu_at) |at| root = root.child(self.columnMenu(at, theme, cx));
-        if (self.author_menu_at) |at| root = root.child(self.authorMenu(at, theme, cx));
-        return zpui.intoAnyElement(root);
+        return zpui.intoAnyElement(main.child(self.renderBodyArea(theme, window, cx)));
     }
 
     fn errorBanner(text: []const u8, theme: *const Theme) zpui.Div {

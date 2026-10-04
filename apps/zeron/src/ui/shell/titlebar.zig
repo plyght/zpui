@@ -16,6 +16,7 @@ const zt = @import("zeron_theme");
 const ui = @import("../components/root.zig");
 const shell_mod = @import("shell.zig");
 const prefs_mod = @import("prefs.zig");
+const project_actions = @import("project_actions.zig");
 
 const Shell = shell_mod.Shell;
 const Window = zpui.Window;
@@ -161,9 +162,18 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, files_now: f3
         inner = inner.child(capsule(liquid, "titlebar-session-glass", capsule_pad, div().flexNone().flex().flexRow().itemsCenter().gap(px(2))
             .child(button.headerIcon("session-new-side-chat", .plus, "New side chat", theme))
             .child(button.headerIcon("session-fork", .git_branch, "Fork this session", theme))));
-        // Project actions: the empty state's "Add action" pill (24px, radius 7,
-        // the composer's material and edge).
-        if (chat.?.spaceId != null) inner = inner.child(if (liquid) liquidActionPill(theme) else zpui.intoAnyElement(addActionPill(theme)));
+        // Project actions: the split Run/Setup control (24px, radius 7, the
+        // composer's material and edge) — project_actions.zig.
+        // `available_titlebar_width` (tabs.rs): the row minus the trailing strip,
+        // the gaps and the session controls; it decides the action's label.
+        const fc = @max(files_now - right_pad, panel_toggle_slots);
+        const trailing_w = fc + (if (right_now > 0.5) @max(right_now + files_now - right_pad - fc, 0) else 0);
+        const available = @max(shell.viewport_w - row_left - right_pad - trailing_w - 8 * 3 - (28 * 2 + 2 + 8), 0);
+        if (chat.?.spaceId != null) {
+            if (project_actions.control(shell, available, theme, liquid, cx)) |ctrl| {
+                inner = inner.child(if (liquid) capsule(true, "titlebar-action-glass", 0, ctrl) else zpui.intoAnyElement(ctrl));
+            }
+        }
     }
     if (!on_canvas) {
         // Trailing strip: explorer + pane toggles, right-aligned over the pane.

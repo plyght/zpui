@@ -7,6 +7,7 @@
 //! try app.onReopen(&state, State.reopen);              // dock click with no visible window
 //! try app.onShouldQuit(&state, State.mayQuit);         // veto OS / requested quits (return false)
 //! try app.onQuit(&state, State.flush);                 // the app is exiting (run once)
+//! try app.onQuitAsync(&state, State.drain);            // ... returning a QuitTeardown task
 //! try app.setMenus(&.{ .{ .name = "Zeron", .items = &.{
 //!     .action("Settings", OpenSettings{}),
 //!     .separator,
@@ -19,7 +20,10 @@
 //! (menu Quit, ⌘Q) and OS termination requests run every `onShouldQuit` listener; any
 //! `false` cancels (the listener finishes its work and calls `requestQuit` / `quit`
 //! again). `app.quit()` is never vetoed. `onQuit` listeners run once, when the platform
-//! is about to leave its run loop.
+//! is about to leave its run loop. `onQuitAsync` listeners (gpui `on_app_quit` returning a
+//! future) run right after them and hand back a `QuitTeardown` (a spawned task); the exit
+//! waits up to `shutdown_timeout_ns` (gpui `SHUTDOWN_TIMEOUT`, 200 ms) for every teardown's
+//! background phase to finish, then drops whatever is left.
 //!
 //! Menu items carry actions; picking one dispatches the action to the active window's
 //! focused element (else to global `onAction` listeners), and menus validate items with
@@ -39,6 +43,39 @@ const AnyAction = action_mod.AnyAction;
 const type_id = @import("type_id.zig");
 const TypeId = type_id.TypeId;
 const keymap_mod = @import("keymap.zig");
+const executor_mod = @import("executor.zig");
+
+/// gpui `SHUTDOWN_TIMEOUT`: how long the exit waits for `onQuitAsync` teardowns.
+pub const shutdown_timeout_ns: u64 = 200 * std.time.ns_per_ms;
+
+/// The async part of an `onQuitAsync` listener (gpui's `on_app_quit` future): owns a
+/// spawned task; the exit waits for its background phase (`run`) to finish. Its `finish`
+/// phase is not awaited (the main loop is gone), so put the teardown in `run`.
+pub const QuitTeardown = struct {
+    header: ?*executor_mod.Header = null,
+
+    /// Nothing to wait for.
+    pub const none: QuitTeardown = .{};
+
+    /// Take ownership of `task` (an `executor.Task(R)`); don't cancel / detach it yourself.
+    pub fn of(task: anytype) QuitTeardown {
+        return .{ .header = task.header };
+    }
+
+    fn done(self: QuitTeardown) bool {
+        const h = self.header orelse return true;
+        return switch (h.state.load(.acquire)) {
+            .ran, .completed, .canceled => true,
+            else => false,
+        };
+    }
+
+    fn release(self: *QuitTeardown) void {
+        var t: executor_mod.Task(void) = .{ .header = self.header };
+        self.header = null;
+        t.detach();
+    }
+};
 
 // ---------------------------------------------------------------------------------------
 // Menus (app-level model)
@@ -148,12 +185,14 @@ fn makeEntry(comptime L: type, comptime Args: type, comptime Ret: type, ctx: any
 
 const VoidList = ListenerList(void, void);
 const BoolList = ListenerList(void, bool);
+const TeardownList = ListenerList(void, QuitTeardown);
 const UrlsList = ListenerList([]const []const u8, void);
 const TagList = ListenerList([]const u8, void);
 
 /// Lifecycle state embedded in `App` (`app.lifecycle`).
 pub const Lifecycle = struct {
     quit: VoidList = .{},
+    quit_async: TeardownList = .{},
     reopen: VoidList = .{},
     open_urls: UrlsList = .{},
     system_wake: VoidList = .{},
@@ -177,6 +216,7 @@ pub const Lifecycle = struct {
 
     pub fn deinit(self: *Lifecycle, gpa: Allocator) void {
         self.quit.deinit(gpa);
+        self.quit_async.deinit(gpa);
         self.reopen.deinit(gpa);
         self.open_urls.deinit(gpa);
         self.system_wake.deinit(gpa);
@@ -225,6 +265,10 @@ fn appOf(ctx: ?*anyopaque) *App {
 
 pub fn onQuit(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
     try app.lifecycle.quit.add(app.gpa, makeEntry(VoidList, void, void, ctx, f));
+}
+/// `f(ctx, app) QuitTeardown`: like `onQuit`, but the exit waits (bounded) for the task.
+pub fn onQuitAsync(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+    try app.lifecycle.quit_async.add(app.gpa, makeEntry(TeardownList, void, QuitTeardown, ctx, f));
 }
 pub fn onReopen(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
     try app.lifecycle.reopen.add(app.gpa, makeEntry(VoidList, void, void, ctx, f));
@@ -317,6 +361,46 @@ pub fn runQuitListeners(app: *App) void {
     if (app.lifecycle.quit_ran) return;
     app.lifecycle.quit_ran = true;
     runVoid(app, &app.lifecycle.quit);
+    if (app.lifecycle.quit_async.items.items.len == 0) return;
+    var teardowns: std.ArrayList(QuitTeardown) = .empty;
+    defer teardowns.deinit(app.gpa);
+    {
+        app.startUpdate();
+        defer app.finishUpdate();
+        const items = app.lifecycle.quit_async.snapshot(app.gpa);
+        defer app.gpa.free(items);
+        for (items) |*e| {
+            var t = e.func(&e.cap, {}, app);
+            teardowns.append(app.gpa, t) catch t.release();
+        }
+    }
+    awaitTeardowns(app, teardowns.items);
+    for (teardowns.items) |*t| t.release();
+}
+
+/// gpui `block_with_timeout(SHUTDOWN_TIMEOUT, join_all(futures))`. The TestPlatform runs
+/// its queued work deterministically instead of sleeping.
+fn awaitTeardowns(app: *App, teardowns: []const QuitTeardown) void {
+    const allDone = struct {
+        fn f(ts: []const QuitTeardown) bool {
+            for (ts) |t| if (!t.done()) return false;
+            return true;
+        }
+    }.f;
+    if (app.test_platform) |tp| {
+        const d = tp.dispatcher();
+        while (!allDone(teardowns)) if (!d.tick()) break;
+        return;
+    }
+    const start = app.executor.now();
+    while (!allDone(teardowns)) {
+        if (app.executor.now() -| start >= shutdown_timeout_ns) {
+            std.log.scoped(.zpui).err("timed out waiting on app quit teardown", .{});
+            return;
+        }
+        const ts: std.c.timespec = .{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
+        _ = std.c.nanosleep(&ts, null);
+    }
 }
 
 fn cbQuit(ctx: ?*anyopaque) void {

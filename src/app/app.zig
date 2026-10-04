@@ -376,6 +376,11 @@ pub const App = struct {
     pub fn onQuit(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
         return lifecycle_mod.onQuit(app, ctx, f);
     }
+    /// `f(ctx, app) QuitTeardown` once, when the app exits; the exit waits up to
+    /// `lifecycle.shutdown_timeout_ns` for the returned task (gpui `on_app_quit` future).
+    pub fn onQuitAsync(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        return lifecycle_mod.onQuitAsync(app, ctx, f);
+    }
     /// `f(ctx, app) bool` before quitting; false cancels (the listener re-requests later).
     pub fn onShouldQuit(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
         return lifecycle_mod.onShouldQuit(app, ctx, f);

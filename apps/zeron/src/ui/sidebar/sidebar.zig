@@ -18,11 +18,17 @@ const model = @import("zeron_model");
 const engine = @import("zeron_engine");
 const zt = @import("zeron_theme");
 const ui = @import("../components/root.zig");
+const crb = @import("../components/change_request_badge.zig"); // [pr-status]
 const prefs_mod = @import("../shell/prefs.zig");
 const app_update = @import("../../lifecycle/app_update.zig"); // [lifecycle]
 const project_icon_mod = @import("project_icon.zig");
 // [wiring] chat context menu: Rename (inline), Copy ▸, Delete… (shell confirms).
 const chat_menu = @import("chat_menu.zig");
+// Custom sections + session transfers (sections.zig / sections_ui.zig).
+const sections = @import("sections.zig");
+const sections_ui = @import("sections_ui.zig");
+const SessionDrag = sections_ui.SessionDrag;
+const sync_flow = @import("../shell/sync_flow.zig"); // account menu: sync / sign-out rows
 const input_mod = @import("zeron_input");
 const TextInput = input_mod.TextInput;
 
@@ -41,33 +47,6 @@ const Timestamp = model.time.Timestamp;
 const Chat = engine.protocol.Chat;
 const ChatIndicator = view.ChatIndicator;
 
-/// A pinned row being dragged (manual pin order; regular rows never move).
-pub const PinDrag = struct {
-    from: usize,
-    title_buf: [64]u8 = undefined,
-    title_len: u8 = 0,
-};
-
-/// The floating row under the pointer while a pin drags.
-pub const PinGhost = struct {
-    buf: [64]u8 = undefined,
-    len: u8 = 0,
-
-    pub fn render(self: *PinGhost, _: *Window, cx: *Context(PinGhost)) zpui.Div {
-        const theme = ui.theme.get(cx);
-        return div().h(px(29)).w(px(220)).px(px(zt.layout.space_sm)).flex().itemsCenter().rounded(px(8))
-            .bg(theme.surface_raised).border1().borderColor(theme.border_strong).opacity(0.9)
-            .fontFamily(theme.font_sans).textSize(rems(13)).textColor(theme.text)
-            .child(div().truncate().whitespaceNowrap().child(self.buf[0..self.len]));
-    }
-};
-
-fn buildPinGhost(drag: *const PinDrag, _: zpui.Point(f32), _: *Window, app: *App) Entity(PinGhost) {
-    var g: PinGhost = .{ .len = drag.title_len };
-    @memcpy(g.buf[0..drag.title_len], drag.title_buf[0..drag.title_len]);
-    return app.new(PinGhost, g) catch @panic("OOM");
-}
-
 /// Slot `y` px into the pinned list (cumulative row slots) → drop index.
 pub fn pinDropIndex(y: f32, slots: []const f32) usize {
     if (slots.len == 0) return 0;
@@ -77,6 +56,16 @@ pub fn pinDropIndex(y: f32, slots: []const f32) usize {
         top += h;
     }
     return slots.len - 1;
+}
+
+/// Insertion slot `y` px into the pinned list for a row joining it (0…len).
+pub fn pinInsertIndex(y: f32, slots: []const f32) usize {
+    var top: f32 = 0;
+    for (slots, 0..) |h, i| {
+        if (y < top + h / 2) return i;
+        top += h;
+    }
+    return slots.len;
 }
 
 /// Move `from` to `to` in `ids` (the drop's "after"/"before" neighbours
@@ -105,6 +94,8 @@ pub const SignOut = struct {};
 pub const DeleteChat = struct { chat_id: []const u8 };
 /// [wiring] User menu "Enable sync": the shell starts the browser sign-in.
 pub const EnableSync = struct {};
+/// The account menu's sync row (`AccountMenuAction`): the shell runs it.
+pub const AccountAction = struct { action: sync_flow.AccountMenuAction };
 /// [wiring] Project row menu (spaces filter): "Rename…" / "Remove…" (shell dialogs).
 pub const RenameSpace = struct { space_id: []const u8 };
 pub const DeleteSpace = struct { space_id: []const u8 };
@@ -184,6 +175,8 @@ pub const Sidebar = struct {
     state: Entity(model.AppState),
     scroll: zpui.ScrollHandle,
     subs: zpui.Subscriptions = .{},
+    /// [pr-status] This frame's checkout PR snapshots (`WatchCheckoutChangeRequest`).
+    prs: ?*const model.ChangeRequestStore = null,
 
     pinned_open: bool = true,
     sessions_open: bool = true,
@@ -208,7 +201,8 @@ pub const Sidebar = struct {
     /// Project artwork (favicons) per local project folder.
     icons: project_icon_mod.Cache = .{},
     /// Pinned-row drag: hovered slot + slide epoch (Rust `PinnedSessionDragState`).
-    pin_drag: ?struct { from: usize, over: usize, prev_over: usize, epoch: usize } = null,
+    /// `from` is the pinned count when a non-pinned row is joining (`slot`: its row + gap).
+    pin_drag: ?struct { from: usize, over: usize, prev_over: usize, epoch: usize, slot: f32 = 0 } = null,
     /// Pinned rows rendered last frame: count and slot heights (row + gap).
     pinned_count: usize = 0,
     pin_slots: std.ArrayList(f32) = .empty,
@@ -218,11 +212,16 @@ pub const Sidebar = struct {
     rename: ?ChatRename = null,
     notice: ?[]u8 = null,
 
+    /// Custom sections, their menu / dialog, and session transfers (sections_ui.zig).
+    sec: sections_ui.State = .{},
+    /// The row drawn in the movement layer this frame.
+    moving: ?struct { row: zpui.AnyElement, height: f32 } = null,
+
     /// [wiring] Right-click menu over a project row in the spaces menu.
     space_ctx: ?struct { id: []u8, pos: zpui.Point(f32) } = null,
     emitted_space_id: ?[]u8 = null,
 
-    pub const Events = .{ OpenSettings, NewSession, SignOut, DeleteChat, EnableSync, RenameSpace, DeleteSpace };
+    pub const Events = .{ OpenSettings, NewSession, SignOut, DeleteChat, EnableSync, RenameSpace, DeleteSpace, AccountAction };
 
     pub fn init(state: Entity(model.AppState), cx: *Context(Sidebar)) !Sidebar {
         var self: Sidebar = .{
@@ -234,6 +233,7 @@ pub const Sidebar = struct {
         try self.subs.add(cx.gpa(), try cx.observe(s.workspace, onModelChanged));
         try self.subs.add(cx.gpa(), try cx.observe(s.auth, onModelChanged));
         try self.subs.add(cx.gpa(), try cx.observe(s.updates, onModelChanged));
+        try self.subs.add(cx.gpa(), try cx.observe(s.change_requests, onModelChanged)); // [pr-status]
         return self;
     }
 
@@ -251,6 +251,7 @@ pub const Sidebar = struct {
         self.icons.deinit(self.gpa);
         self.pin_slots.deinit(self.gpa);
         self.dropRename(app);
+        self.sec.deinit(self.gpa, app);
         self.clearSpaceCtx();
         if (self.emitted_space_id) |e| self.gpa.free(e);
         if (self.notice) |n| self.gpa.free(n);
@@ -287,8 +288,37 @@ pub const Sidebar = struct {
         return zpui.intoAnyElement(mono);
     }
 
-    fn onPinDragMove(self: *Sidebar, ev: *const zpui.DragMoveEvent(PinDrag), _: *Window, cx: *Context(Sidebar)) void {
-        const over = pinDropIndex(ev.event.position.y - ev.bounds.origin.y, self.pin_slots.items);
+    fn onPinDragMove(self: *Sidebar, ev: *const zpui.DragMoveEvent(SessionDrag), _: *Window, cx: *Context(Sidebar)) void {
+        const inside = ev.bounds.contains(ev.event.position);
+        const y = ev.event.position.y - ev.bounds.origin.y;
+        if (ev.value.pinned_from) |from| {
+            // Pin-to-pin: sibling slide (Rust `update_pinned_session_drag`).
+            const over = if (inside) pinDropIndex(y, self.pin_slots.items) else from;
+            if (inside) sections_ui.setPreview(self, .pinned);
+            if (self.pin_drag) |*d| {
+                if (d.over != over) {
+                    d.prev_over = d.over;
+                    d.over = over;
+                    d.epoch += 1;
+                    cx.notify();
+                }
+            } else {
+                self.pin_drag = .{ .from = from, .over = over, .prev_over = from, .epoch = 0 };
+                cx.notify();
+            }
+            return;
+        }
+        // A row joining Pinned opens a slot at its insertion point.
+        if (!inside) {
+            if (self.pin_drag != null) {
+                self.pin_drag = null;
+                cx.notify();
+            }
+            return;
+        }
+        sections_ui.setPreview(self, .pinned);
+        const n = self.pin_slots.items.len;
+        const over = pinInsertIndex(y, self.pin_slots.items);
         if (self.pin_drag) |*d| {
             if (d.over != over) {
                 d.prev_over = d.over;
@@ -297,23 +327,28 @@ pub const Sidebar = struct {
                 cx.notify();
             }
         } else {
-            self.pin_drag = .{ .from = ev.value.from, .over = over, .prev_over = ev.value.from, .epoch = 0 };
+            self.pin_drag = .{ .from = n, .over = over, .prev_over = n, .epoch = 0, .slot = ev.value.height + list_gap };
             cx.notify();
         }
     }
 
-    /// Drop: reorder the local pin list and tell the engine (`changeSidebarPin`
+    /// Drop on Pinned: reorder, or pin a joining row (sections_ui.finishTransfer).
+    fn onPinDrop(self: *Sidebar, payload: *const SessionDrag, window: *Window, cx: *Context(Sidebar)) void {
+        cx.stopPropagation();
+        sections_ui.finishTransfer(self, payload, .pinned, window, cx);
+    }
+
+    /// Reorder the local pin list and tell the engine (`changeSidebarPin`
     /// move with the new neighbours).
-    fn onPinDrop(self: *Sidebar, payload: *const PinDrag, _: *Window, cx: *Context(Sidebar)) void {
-        const to = if (self.pin_drag) |d| d.over else payload.from;
+    pub fn reorderPins(self: *Sidebar, from: usize, to: usize, cx: *Context(Sidebar)) void {
         self.pin_drag = null;
         defer cx.notify();
         const n = @min(self.pinned_count, self.row_ids.items.len);
-        if (payload.from >= n or to >= n or payload.from == to) return;
+        if (from >= n or to >= n or from == to) return;
         const order = self.gpa.alloc([]const u8, n) catch return;
         defer self.gpa.free(order);
         for (0..n) |i| order[i] = self.row_ids.items[i];
-        movePin(order, payload.from, to);
+        movePin(order, from, to);
         const p = prefs_mod.mut(cx);
         // Visible pins take the new order; hidden pins (other filters) keep theirs after.
         var rest: std.ArrayList([]u8) = .empty;
@@ -337,14 +372,14 @@ pub const Sidebar = struct {
         } } } }}) catch {};
     }
 
+    pub fn rowId(self: *Sidebar, ix: usize) ?[]const u8 {
+        return if (ix < self.row_ids.items.len) self.row_ids.items[ix] else null;
+    }
+
     fn onIconLoaded(self: *Sidebar, r: project_icon_mod.LoadJob.Result, cx: *Context(Sidebar)) void {
         const landed = r.art != null;
         self.icons.finish(self.gpa, r);
         if (landed) cx.notify();
-    }
-
-    fn rowId(self: *Sidebar, ix: usize) ?[]const u8 {
-        return if (ix < self.row_ids.items.len) self.row_ids.items[ix] else null;
     }
 
     // ---- listeners --------------------------------------------------------------------
@@ -539,7 +574,11 @@ pub const Sidebar = struct {
         self.ctx_menu = null;
         const id = self.rowId(m.ix) orelse return;
         const p = prefs_mod.mut(cx);
-        p.setPinned(id, !p.isPinned(id));
+        const pin = !p.isPinned(id);
+        const copy = self.gpa.dupe(u8, id) catch return;
+        defer self.gpa.free(copy);
+        p.setPinned(copy, pin);
+        sections_ui.onPinned(self, copy, pin, cx);
         cx.notify();
     }
 
@@ -727,6 +766,10 @@ pub const Sidebar = struct {
         cx.notify();
     }
 
+    fn onCreateSection(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        sections_ui.openDialog(self, null, cx);
+    }
+
     fn onViewGroupHover(self: *Sidebar, group: u8, hovered: *const bool, _: *Window, cx: *Context(Sidebar)) void {
         if (hovered.* and self.view_submenu != group) {
             self.view_submenu = if (group < 3) group else null;
@@ -745,7 +788,6 @@ pub const Sidebar = struct {
         prefs: *const prefs_mod.Prefs,
         selected_id: ?[]const u8,
     ) RowData {
-        _ = self;
         const space = ws.spaceForChat(c);
         const project: []const u8 = if (space) |s| view.spaceDisplayName(s) else if (c.spaceId == null) "~" else "?";
         const dev_name = ws.deviceName(c.deviceId);
@@ -771,7 +813,7 @@ pub const Sidebar = struct {
             .project_seed = if (space) |s| s.path else "home",
             .space_path = if (space) |s| (if (remote) null else s.path) else null,
             .branch = branch,
-            .pr = if (prefs.show_pull_request) prefs.pullRequest(c.id) else null,
+            .pr = if (prefs.show_pull_request) (prefs.pullRequest(c.id) orelse if (self.livePr(c)) |pr| pr.number else null) else null,
             .time_ago = ago,
             .remote = remote,
             .selected = if (selected_id) |s| std.mem.eql(u8, s, c.id) else false,
@@ -802,10 +844,19 @@ pub const Sidebar = struct {
         const ws = app_state.workspace.read(cx);
         const now = prefs.now(ws.io);
         const arena = zpui.window.arena_mod.frameAllocator();
+        self.prs = app_state.change_requests.read(cx); // [pr-status]
 
         self.clearIds(&self.row_ids);
+        // A release outside the sidebar ends the drag without a drop: heal.
+        sections_ui.heal(self, cx);
+        if (self.pin_drag != null and !cx.app.hasActiveDrag()) self.pin_drag = null;
+        sections_ui.migrate(self, cx);
+        const secs = sections_ui.active(self, arena, cx);
+        sections_ui.beginFrame(self, secs);
+        const transfer = sections_ui.transferActive(self);
+        self.moving = null;
 
-        // Active rows: sidebar order, pinned first.
+        // Active rows: sidebar order; section members, then pins, then the rest.
         const active: []view.ActiveRow = ws.sidebarChats(arena, now, prefs.space_filter) catch arena.alloc(view.ActiveRow, 0) catch unreachable;
         std.sort.block(view.ActiveRow, active, prefs.sort, struct {
             fn lt(sort: prefs_mod.Sort, a: view.ActiveRow, b: view.ActiveRow) bool {
@@ -814,15 +865,21 @@ pub const Sidebar = struct {
         }.lt);
         var pinned: std.ArrayList(RowData) = .empty;
         var regular: std.ArrayList(RowData) = .empty;
+        const section_rows: []std.ArrayList(RowData) = arena.alloc(std.ArrayList(RowData), secs.len) catch &.{};
+        for (section_rows) |*l| l.* = .empty;
         for (active) |r| {
             const d = self.buildRow(ws, r.chat, r.status, now, prefs, ws.selected_chat);
-            if (prefs.isPinned(r.chat.id)) pinned.append(arena, d) catch {} else regular.append(arena, d) catch {};
+            if (sections.sectionOf(secs, r.chat.id)) |si| {
+                if (si < section_rows.len) section_rows[si].append(arena, d) catch {};
+            } else if (prefs.isPinned(r.chat.id)) pinned.append(arena, d) catch {} else regular.append(arena, d) catch {};
         }
         std.sort.block(RowData, pinned.items, prefs, struct {
             fn lt(p: *const prefs_mod.Prefs, a: RowData, b: RowData) bool {
                 return (p.pinIndex(a.chat.id) orelse 0) < (p.pinIndex(b.chat.id) orelse 0);
             }
         }.lt);
+        var sectioned: usize = 0;
+        for (section_rows) |l| sectioned += l.items.len;
 
         // Archived shelf.
         var archived: std.ArrayList(RowData) = .empty;
@@ -839,33 +896,31 @@ pub const Sidebar = struct {
 
         var any_working = false;
         var list = div().flex().flexCol().gap(px(list_gap)).pb(px(zt.layout.space_sm));
-        const show_pinned = pinned.items.len > 0;
-        if (pinned.items.len + regular.items.len == 0) {
+        const show_pinned = pinned.items.len > 0 or transfer;
+        if (pinned.items.len + regular.items.len + sectioned == 0 and secs.len == 0 and !transfer) {
             list = div().px(px(8)).pb(px(8)).textSize(rems(12)).textColor(theme.text_faint).child("No sessions yet");
         } else {
             self.pin_slots.clearRetainingCapacity();
             self.pinned_count = 0;
-            if (self.pin_drag != null and !cx.app.hasActiveDrag()) self.pin_drag = null;
             if (show_pinned) {
                 var body = div().id("sidebar-pinned").flex().flexCol().gap(px(list_gap)).pt(px(disclosure_body_inset))
-                    .onDragMove(PinDrag, cx.listener(Sidebar.onPinDragMove))
-                    .onDrop(PinDrag, cx.listener(Sidebar.onPinDrop));
+                    .onDragMove(SessionDrag, cx.listener(Sidebar.onPinDragMove))
+                    .onDrop(SessionDrag, cx.listener(Sidebar.onPinDrop));
+                if (pinned.items.len == 0) body = body.minH(px(if (self.pin_drag) |d| d.slot else 32));
                 for (pinned.items, 0..) |*r, pi| {
                     any_working = any_working or r.status == .working;
                     const h = rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null);
                     self.pin_slots.append(self.gpa, h + list_gap) catch {};
-                    var drag: PinDrag = .{ .from = pi };
-                    const n: u8 = @intCast(@min(r.title.len, drag.title_buf.len));
-                    @memcpy(drag.title_buf[0..n], r.title[0..n]);
-                    drag.title_len = n;
-                    const row = self.renderRow(r, theme, prefs, cx).onDrag(drag, buildPinGhost).onDrop(PinDrag, cx.listener(Sidebar.onPinDrop));
+                    const row = self.activeRow(r, h, pi, theme, prefs, cx).onDrop(SessionDrag, cx.listener(Sidebar.onPinDrop));
+                    if (sections_ui.isMoving(self, r.chat.id)) {
+                        body = body.child(div().h(px(h)).flexNone());
+                        continue;
+                    }
                     if (self.pin_drag) |d| {
-                        if (pi == d.from) {
-                            body = body.child(div().h(px(h)).flexNone());
-                            continue;
-                        }
-                        const dragged = &pinned.items[@min(d.from, pinned.items.len - 1)];
-                        const slot = rowHeight(prefs.sidebar_compact, prefs.show_project_label, dragged.branch != null, dragged.pr != null) + list_gap;
+                        const slot = if (d.from < pinned.items.len) blk: {
+                            const dragged = &pinned.items[d.from];
+                            break :blk rowHeight(prefs.sidebar_compact, prefs.show_project_label, dragged.branch != null, dragged.pr != null) + list_gap;
+                        } else d.slot;
                         const target = slideOffsetY(pi, d.from, d.over) * slot;
                         const start = slideOffsetY(pi, d.from, d.prev_over) * slot;
                         const Slide = struct {
@@ -878,22 +933,40 @@ pub const Sidebar = struct {
                     }
                     body = body.child(row);
                 }
+                // A joining row grows the list by one slot.
+                if (self.pin_drag) |d| if (d.from >= pinned.items.len and pinned.items.len > 0) {
+                    body = body.child(div().h(px(d.slot - list_gap)).flexNone());
+                };
                 self.pinned_count = pinned.items.len;
                 list = list.child(div().flex().flexCol()
                     .child(self.sectionHeader(0, if (self.pinned_open) "Pinned" else zpui.fmt("Pinned ({d})", .{pinned.items.len}), self.pinned_open, theme, cx))
-                    .child(if (self.pinned_open) body else null));
+                    .child(if (self.pinned_open or transfer) body else null));
             }
+            // Custom sections (account-synced), between Pinned and Sessions.
+            for (secs, 0..) |sec, si| {
+                var body = div().flex().flexCol().gap(px(list_gap));
+                const rows = if (si < section_rows.len) section_rows[si].items else &.{};
+                if (!sec.collapsed) for (rows) |*r| {
+                    any_working = any_working or r.status == .working;
+                    body = body.child(self.placedRow(r, theme, prefs, cx));
+                };
+                list = list.child(sections_ui.renderSection(self, si, sec, body, rows.len == 0, sections_ui.extraGap(self, .{ .section = si }), theme, cx));
+            }
+            const follows = show_pinned or secs.len > 0;
             if (regular.items.len > 0 and prefs.organization != .in_one_list) {
-                list = list.child(self.renderGroups(regular.items, show_pinned, ws, theme, prefs, cx, &any_working));
-            } else if (regular.items.len > 0) {
+                list = list.child(self.dropRegion(self.renderGroups(regular.items, follows, ws, theme, prefs, cx, &any_working), cx));
+            } else if (regular.items.len > 0 or transfer) {
                 var body = div().flex().flexCol().gap(px(list_gap)).pt(px(disclosure_body_inset));
+                if (regular.items.len == 0) body = body.child(div().h(px(48)).flex().itemsCenter().px(px(10))
+                    .textColor(theme.text_muted).textSize(rems(12)).child("Drop here to unpin"));
                 for (regular.items) |*r| {
                     any_working = any_working or r.status == .working;
-                    body = body.child(self.renderRow(r, theme, prefs, cx));
+                    body = body.child(self.placedRow(r, theme, prefs, cx));
                 }
-                list = list.child(div().flex().flexCol().pt(px(if (show_pinned) section_gap else 0))
+                body = body.child(sections_ui.extraGap(self, .regular));
+                list = list.child(self.dropRegion(div().flex().flexCol().pt(px(if (follows) section_gap else 0))
                     .child(self.sectionHeader(1, if (self.sessions_open) "Sessions" else zpui.fmt("Sessions ({d})", .{regular.items.len}), self.sessions_open, theme, cx))
-                    .child(if (self.sessions_open) body else null));
+                    .child(if (self.sessions_open or transfer) body else null), cx));
             }
         }
 
@@ -920,14 +993,19 @@ pub const Sidebar = struct {
             archived_section = sec;
         }
 
-        if (any_working) window.requestAnimationFrame();
+        if (any_working or transfer) window.requestAnimationFrame();
 
+        const moving: ?zpui.AnyElement = if (self.moving) |m| sections_ui.renderMoving(self, m.row, m.height, theme) else null;
         const lists = ui.effects.edgeFaded(
             div().relative().flex1().minH0().child(
                 div().id("sidebar-lists").relative().sizeFull().overflowYScroll().trackScroll(self.scroll)
                     .px(px(zt.layout.space_sm)).flex().flexCol().pt(px(4))
+                    .onDragMove(SessionDrag, cx.listener(sections_ui.onListDragMove))
+                    // Empty space and Archived are not transfer targets.
+                    .onDrop(SessionDrag, cx.listener(Sidebar.onListDrop))
                     .child(list)
-                    .child(archived_section),
+                    .child(archived_section)
+                    .child(moving),
             ),
             .{ .band = fade_band, .top = true, .bottom = true, .scroll = self.scroll },
         );
@@ -937,11 +1015,47 @@ pub const Sidebar = struct {
             .fontFamily(theme.font_sans)
             .child(self.renderFilterRow(theme, prefs, ws, now, cx))
             .child(lists)
+            .child(self.renderStarBanner(theme, cx))
             .child(self.renderUpdateStrip(theme, cx))
             .child(self.renderNotice(theme, cx))
             .child(self.renderSpaceMenu(theme, cx))
             .child(div().p(px(zt.layout.space_sm)).flexNone().child(self.renderFooter(theme, cx)))
-            .child(self.renderContextMenu(theme, cx));
+            .child(self.renderContextMenu(theme, cx))
+            .child(sections_ui.renderMenu(self, theme, cx))
+            .child(sections_ui.renderDialog(self, window, theme, cx));
+    }
+
+    fn onListDrop(self: *Sidebar, _: *const SessionDrag, _: *Window, cx: *Context(Sidebar)) void {
+        sections_ui.cancelTransfer(self, cx);
+    }
+
+    /// The Sessions group (or the project/device accordions) as a drop target.
+    fn dropRegion(self: *Sidebar, el: zpui.Div, cx: *Context(Sidebar)) zpui.StatefulDiv {
+        _ = self;
+        return el.id("sidebar-regular-sessions")
+            .onDragMove(SessionDrag, cx.listenerWith(@as(sections_ui.Target, .regular), sections_ui.onGroupDragMove))
+            .onDrop(SessionDrag, cx.listenerWith(@as(sections_ui.Target, .regular), sections_ui.onGroupDrop));
+    }
+
+    /// An active (draggable) row: rendered in place, or — while it moves —
+    /// an empty slot here and the row in the movement layer.
+    fn placedRow(self: *Sidebar, r: *const RowData, theme: *const Theme, prefs: *const prefs_mod.Prefs, cx: *Context(Sidebar)) zpui.AnyElement {
+        const h = rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null);
+        const row = self.activeRow(r, h, null, theme, prefs, cx);
+        if (sections_ui.isMoving(self, r.chat.id)) return zpui.intoAnyElement(div().h(px(h)).flexNone());
+        return zpui.intoAnyElement(row);
+    }
+
+    /// `renderRow` + the session drag (`SidebarSessionDrag`); stashes the
+    /// moving row for the movement layer.
+    fn activeRow(self: *Sidebar, r: *const RowData, h: f32, pinned_ix: ?usize, theme: *const Theme, prefs: *const prefs_mod.Prefs, cx: *Context(Sidebar)) zpui.StatefulDiv {
+        var drag: SessionDrag = .{ .ix = self.row_ids.items.len, .pinned_from = pinned_ix, .height = h };
+        const n: u8 = @intCast(@min(r.title.len, drag.title_buf.len));
+        @memcpy(drag.title_buf[0..n], r.title[0..n]);
+        drag.title_len = n;
+        const row = self.renderRow(r, theme, prefs, cx).onDrag(drag, sections_ui.buildGhost);
+        if (sections_ui.isMoving(self, r.chat.id)) self.moving = .{ .row = zpui.intoAnyElement(row), .height = h };
+        return row;
     }
 
     /// Project / device accordions (`SidebarOrganization::ByProject/ByDevice`):
@@ -995,8 +1109,9 @@ pub const Sidebar = struct {
                 var body = div().flex().flexCol().gap(px(list_gap)).pt(px(disclosure_body_inset));
                 for (g.rows.items) |r| {
                     any_working.* = any_working.* or r.status == .working;
-                    body = body.child(self.renderRow(r, theme, prefs, cx));
+                    body = body.child(self.placedRow(r, theme, prefs, cx));
                 }
+                body = body.child(sections_ui.extraGap(self, .regular));
                 sec = sec.child(body);
             }
             out = out.child(sec);
@@ -1043,6 +1158,19 @@ pub const Sidebar = struct {
             .child(div().textSize(rems(12)).fontWeight(500).textColor(tone).whitespaceNowrap().child(label))
             .child(div().flex1())
             .child(icon.of(if (open) .alt_arrow_down else .alt_arrow_right, 12, tone));
+    }
+
+    /// [pr-status] The live PR for a chat's checkout (`change_request_for_chat`).
+    fn livePr(self: *const Sidebar, c: *const Chat) ?*const engine.protocol.ChangeRequestSummary {
+        return if (self.prs) |p| p.forChat(c) else null;
+    }
+
+    /// [pr-status] The interactive badge for live PRs (tooltip, open in
+    /// browser); fixture numbers keep the static chip.
+    fn prBadge(self: *const Sidebar, r: *const RowData, n: u64, theme: *const Theme) zpui.AnyElement {
+        if (self.livePr(r.chat)) |pr| if (pr.number == n)
+            return zpui.intoAnyElement(crb.badge(.{ "sidebar-pr", std.hash.Wyhash.hash(0, r.chat.id) }, pr, .sidebar, true, theme));
+        return zpui.intoAnyElement(ui.badge.pullRequest(n, theme));
     }
 
     fn renderRow(self: *Sidebar, r: *const RowData, theme: *const Theme, prefs: *const prefs_mod.Prefs, cx: *Context(Sidebar)) zpui.StatefulDiv {
@@ -1126,7 +1254,7 @@ pub const Sidebar = struct {
                 .child(project_icon)
                 .child(self.titleCell(r));
             if (r.remote or hovered) line = line.child(corner);
-            if (r.pr) |n| line = line.child(ui.badge.pullRequest(n, theme));
+            if (r.pr) |n| line = line.child(self.prBadge(r, n, theme));
             line = line.child(div().w(px(30)).flexNone().whitespaceNowrap().textRight().textSize(rems(11)).lineHeight(px(14)).textColor(subline).child(r.time_ago));
             return row.child(line);
         }
@@ -1151,7 +1279,7 @@ pub const Sidebar = struct {
             if (r.branch) |b| meta = meta.child(icon.of(.git_branch, 11, subline))
                 .child(div().minW0().flexShrink1().flex().textSize(rems(11)).lineHeight(px(14)).textColor(subline).child(ui.effects.fadedText(b, .{})));
             meta = meta.child(div().flex1().minW0());
-            if (r.pr) |n| meta = meta.child(ui.badge.pullRequest(n, theme));
+            if (r.pr) |n| meta = meta.child(self.prBadge(r, n, theme));
             row = row.child(meta);
         }
         return row;
@@ -1335,8 +1463,58 @@ pub const Sidebar = struct {
         card = card.child(ui.popover.separator(theme));
         card = card.child(ui.popover.menuRow(theme, false).id("sidebar-create-section")
             .onHover(cx.listenerWith(@as(u8, 4), Sidebar.onViewGroupHover))
+            .onClick(cx.listener(Sidebar.onCreateSection))
             .child(icon.of(.plus, 14, theme.text_muted)).child("Create Section"));
         return card;
+    }
+
+    /// "Star on GitHub" (`render_github_star_banner`): styled like the update
+    /// strip; a click opens the repository, either it or ✕ dismisses for good.
+    fn renderStarBanner(self: *Sidebar, theme: *const Theme, cx: *Context(Sidebar)) ?zpui.StatefulDiv {
+        const s = model.settings_store.current(cx.app) orelse return null;
+        if (s.githubStarBannerDismissed) return null;
+        if (prefs_mod.get(cx).star_banner_hidden) return null;
+        const above_strip = self.renderUpdateStrip(theme, cx) != null;
+        const tone = theme.accent;
+        var banner = div().id("github-star-banner").mx(px(zt.layout.space_sm));
+        if (above_strip) banner = banner.mb(px(zt.layout.space_xs));
+        return banner.pl(px(zt.layout.space_sm)).pr(px(zt.layout.space_xs)).py(px(4))
+            .rounded(px(zt.layout.control_radius)).bg(theme.accent_wash)
+            .flex().flexRow().itemsCenter().gap(px(6))
+            .textSize(rems(11)).fontWeight(500).textColor(tone)
+            .cursorPointer().hover(sb.bg(theme.accent.opacity(0.16)))
+            .onClick(cx.listener(Sidebar.onStarBanner))
+            // Glyphs sit below the line box's optical center: nudge the star.
+            .child(icon.of(.star_bold, 12, tone).relative().top(px(0.5)))
+            .child(div().flex1().minW0().truncate().child("Star on GitHub"))
+            .child(div().id("github-star-banner-dismiss").flexNone().size(px(18)).rounded(px(4))
+            .flex().itemsCenter().justifyCenter().cursorPointer()
+            .hover(sb.bg(theme.accent.opacity(0.22)))
+            .onClick(cx.listener(Sidebar.onStarDismiss))
+            .tooltipWith(@as([]const u8, "Dismiss"), ui.tooltip.build)
+            .child(icon.of(.close, 10, tone)));
+    }
+
+    pub const github_repo_url = "https://github.com/zeronsh/comet";
+
+    fn onStarBanner(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        cx.app.platform.vtable.openUrl(cx.app.platform.ptr, github_repo_url);
+        self.dismissStarBanner(cx);
+    }
+
+    fn onStarDismiss(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        cx.stopPropagation();
+        self.dismissStarBanner(cx);
+    }
+
+    fn dismissStarBanner(_: *Sidebar, cx: *Context(Sidebar)) void {
+        const W = struct {
+            fn f(_: void, s: *model.UiSettings, _: std.mem.Allocator) void {
+                s.githubStarBannerDismissed = true;
+            }
+        };
+        _ = model.settings_store.update(cx.app, .debounced, {}, W.f);
+        cx.notify();
     }
 
     /// The update strip above the footer (`render_update_strip`): accent
@@ -1377,29 +1555,21 @@ pub const Sidebar = struct {
         if (app_update.AppUpdate.global(cx.app)) |u| u.update(cx.app, app_update.AppUpdate.checkForUpdates, .{});
     }
 
+    fn onAccountAction(self: *Sidebar, action: sync_flow.AccountMenuAction, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        self.user_menu_open = false;
+        if (action == .sync_in_progress) return cx.notify();
+        cx.emit(AccountAction{ .action = action });
+        cx.notify();
+    }
+
     fn renderFooter(self: *Sidebar, theme_in: *const Theme, cx: *Context(Sidebar)) zpui.Div {
         const theme = &zpui.window.arena_mod.current().create(Theme, theme_in.forPopup()).*;
         const app_state = self.state.read(cx);
         const scope = app_state.engine.read(cx).workspaceScope() orelse app_state.workspace.read(cx).workspace_scope;
-        const user = app_state.auth.read(cx).user();
-        var user_line: []const u8 = "Local";
-        var identity: []const u8 = "Stored on this device";
-        var signed_in = false;
-        if (scope) |sc| switch (sc) {
-            .local => {},
-            .development => {
-                user_line = "Development";
-                identity = "Authentication disabled";
-            },
-            .synced => if (user) |u| {
-                const name = std.mem.trim(u8, u.name orelse "", " ");
-                user_line = if (name.len > 0) name else u.email;
-                identity = u.email;
-                signed_in = true;
-            } else {
-                identity = "Not signed in";
-            },
-        };
+        const flow = sync_flow.current(cx.app);
+        // `sidebar_account_identity` + `account_menu_action`.
+        const user_line, const identity = sync_flow.identity(scope, flow, app_state.auth.read(cx).user());
+        const menu_action = sync_flow.accountMenuAction(scope, flow);
         const initial = blk: {
             const t = std.mem.trim(u8, user_line, " ");
             if (t.len == 0) break :blk "?";
@@ -1426,14 +1596,15 @@ pub const Sidebar = struct {
             var menu = ui.popover.card(theme).w(px(prefs.sidebar_width - 2 * zt.layout.space_sm))
                 .onMouseDownOut(cx.listener(Sidebar.onCloseMenus))
                 .child(div().px(px(8)).pt(px(6)).pb(px(4)).textSize(rems(11)).textColor(theme.text_muted).truncate().child(identity));
-            if (scope != null and scope.? == .local) {
-                menu = menu.child(ui.popover.menuRow(theme, false).id("user-menu-enable-sync")
-                    .onClick(cx.listener(Sidebar.onEnableSync))
-                    .child(icon.of(.global, 16, theme.text_muted)).child("Enable sync"));
-            } else if (signed_in) {
-                menu = menu.child(ui.popover.menuRow(theme, false).id("user-menu-signout")
-                    .onClick(cx.listener(Sidebar.onSignOut))
-                    .child(icon.of(.logout_2, 16, theme.text_muted)).child("Sign out"));
+            if (menu_action) |action| {
+                const base = ui.popover.menuRow(theme, false);
+                const row = switch (action) {
+                    .enable_sync => base.id("user-menu-enable-sync").child(icon.of(.global, 16, theme.text_muted)).child("Enable sync"),
+                    .sync_in_progress => base.id("user-menu-sync-progress").opacity(0.6).cursorDefault().child(icon.of(.global, 16, theme.text_muted)).child("Sync setup in progress"),
+                    .restart_pending => base.id("user-menu-sync-restart").child(icon.of(.restart, 16, theme.text_muted)).child("Finish sync setup"),
+                    .sign_out => base.id("user-menu-signout").child(icon.of(.logout_2, 16, theme.text_muted)).child("Sign out"),
+                };
+                menu = menu.child(row.onClick(cx.listenerWith(action, Sidebar.onAccountAction)));
             }
             if (@import("builtin").os.tag != .macos) {
                 menu = menu.child(ui.popover.menuRow(theme, false).id("user-menu-check-updates")

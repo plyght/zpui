@@ -1086,6 +1086,7 @@ pub const Window = struct {
     fn closeWindow(self: *Window) void {
         const gpa = self.client.gpa;
         self.client.removeWindow(self);
+        if (self.client.plat.atspi) |br| br.removeWindow(&self.common);
         if (self.first_frame_timer) |t| self.client.plat.loop.cancelTimer(t);
         if (self.presenter) |*p| p.deinit(gpa);
         if (self.frame_callback) |cb| c.wl_callback_destroy(cb);
@@ -1313,10 +1314,18 @@ pub const Window = struct {
         .spriteAtlas = spriteAtlas,
         .updateImePosition = updateImePosition,
         .close = close,
+        .a11yUpdate = a11yUpdate,
     };
 
     fn setCallbacks(ptr: *anyopaque, cbs: platform.WindowCallbacks) void {
-        cast(ptr).common.callbacks = cbs;
+        const self = cast(ptr);
+        self.common.callbacks = cbs;
+        // Accessibility: windows with core callbacks are exposed over AT-SPI (atspi.zig).
+        if (self.client.plat.atspi) |br| if (cbs.ctx != null) br.addWindow(&self.common, self.window()) else br.removeWindow(&self.common);
+    }
+    fn a11yUpdate(ptr: *anyopaque, update: platform.a11y.Update) void {
+        const self = cast(ptr);
+        if (self.client.plat.atspi) |br| br.update(&self.common, update);
     }
     fn bounds(ptr: *anyopaque) platform.Bounds {
         // Wayland never reveals global window positions.

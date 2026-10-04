@@ -248,3 +248,61 @@ test "external change on a dirty buffer: banner, Keep Editing, then save overwri
     defer testing.allocator.free(d);
     try testing.expectEqualStrings("xbase\n", d);
 }
+
+test "review comments follow their line through edits and hold the send until saved" {
+    var h = try Harness.init("src/main.rs", "fn main() {\n    let a = 1;\n}\n");
+    defer h.deinit();
+    const model = @import("zeron_model");
+    const review = @import("review.zig");
+    const store = try h.app.newWith(model.ReviewCommentStore, model.ReviewCommentStore.init, .{null});
+    defer store.release(h.app);
+    try h.app.setGlobal(model.review_comments.Global{ .store = store.downgrade() });
+    const Attach = struct {
+        fn f(ed: *FileEditor, cx: *Context(FileEditor)) void {
+            review.attach(ed, cx);
+        }
+    };
+    h.ed.update(h.app, Attach.f, .{});
+    const id = try store.update(h.app, model.ReviewCommentStore.add, .{ "", model.review_comments.NewComment{ .path = "src/main.rs", .line = 2, .body = "why 1?", .source = .file } });
+    const id_owned = try testing.allocator.dupe(u8, id);
+    defer testing.allocator.free(id_owned);
+    h.settle();
+    try testing.expectEqual(@as(usize, 1), h.ed.read(h.app).review.anchors.count());
+
+    // Insert a line above: the comment moves to line 3 and the send waits.
+    h.focus();
+    h.typeText("// x");
+    h.key("enter");
+    const c = store.read(h.app).find("", id_owned).?;
+    try testing.expectEqual(@as(u32, 3), c.line);
+    try testing.expect(store.read(h.app).flushPending(""));
+
+    // Saving releases the composer.
+    const Save = struct {
+        fn f(ed: *FileEditor, cx: *Context(FileEditor)) void {
+            ed.save(cx);
+        }
+    };
+    h.ed.update(h.app, Save.f, .{});
+    h.settle();
+    try testing.expect(!h.ed.read(h.app).hasUnsavedChanges());
+    try testing.expect(!store.read(h.app).flushPending(""));
+
+    // Deleting the commented line detaches it; it re-anchors from its last line.
+    const Del = struct {
+        fn f(ed: *FileEditor, w: *Window, cx: *Context(FileEditor)) void {
+            ed.replaceTextInRange(.{ .start = 17, .end = 32 }, "", w, cx);
+        }
+    };
+    _ = h.ed.update(h.app, Del.f, .{h.window()});
+    h.settle();
+    try testing.expectEqual(@as(usize, 1), h.ed.read(h.app).review.anchors.count());
+    const Remove = struct {
+        fn f(ed: *FileEditor, cid: []const u8, cx: *Context(FileEditor)) void {
+            review.removeComment(ed, cid, cx);
+        }
+    };
+    h.ed.update(h.app, Remove.f, .{id_owned});
+    try testing.expectEqual(@as(usize, 0), store.read(h.app).comments("").len);
+    try testing.expect(!store.read(h.app).flushPending(""));
+}

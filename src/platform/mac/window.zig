@@ -32,6 +32,7 @@ const scene_mod = @import("../../scene.zig");
 const atlas_mod = @import("../../atlas.zig");
 const Renderer = @import("../../renderer/renderer.zig").Renderer;
 const native_views = @import("native_views.zig");
+const mac_a11y = @import("a11y.zig");
 
 const log = std.log.scoped(.mac_window);
 
@@ -75,6 +76,7 @@ pub fn registerClasses() void {
     panel_class = buildWindowClass("NSPanel", "ZPUIPanel");
     view_class = buildViewClass();
     blurred_view_class = buildBlurredViewClass();
+    mac_a11y.registerClasses();
 }
 
 fn buildWindowClass(comptime super: [:0]const u8, comptime name: [:0]const u8) *objc.Class {
@@ -138,6 +140,7 @@ fn buildViewClass() *objc.Class {
     _ = b.addMethod("doCommandBySelector:", &doCommandBySelector, "v@::");
     if (!objc.addProtocol(b, "NSTextInputClient")) log.warn("NSTextInputClient protocol not found; IME will not work", .{});
     _ = objc.addProtocol(b, "CALayerDelegate");
+    mac_a11y.addViewMethods(b);
     return b.register();
 }
 
@@ -200,6 +203,8 @@ pub const MacWindow = struct {
     closed: bool = false,
     /// Native child views + the overlay plane (native_views.zig).
     natives: native_views.Host = .{},
+    /// NSAccessibility bridge (a11y.zig), created on first use.
+    a11y: ?*mac_a11y.Bridge = null,
 
     // -- construction ---------------------------------------------------------
 
@@ -567,6 +572,7 @@ pub const MacWindow = struct {
             v.release();
         }
         self.natives.deinit(self);
+        mac_a11y.deinit(self);
         self.renderer.deinit();
         self.native_window.release();
         self.gpa.destroy(self);
@@ -611,7 +617,12 @@ pub const MacWindow = struct {
         .attachLiquidGlass = vAttachLiquidGlass, // [liquid-glass]
         .configureLiquidGlass = vConfigureLiquidGlass,
         .setBackdropHole = vSetBackdropHole,
+        .a11yUpdate = vA11yUpdate,
     };
+
+    fn vA11yUpdate(ptr: *anyopaque, update: platform.a11y.Update) void {
+        mac_a11y.update(cast(ptr), update);
+    }
 
     // [liquid-glass] A hole in the behind-window material (native_views.zig).
     fn vSetBackdropHole(ptr: *anyopaque, hole: ?platform.BackdropHole) void {

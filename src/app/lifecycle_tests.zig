@@ -136,6 +136,48 @@ test "requestQuit asks should-quit listeners; a veto keeps the app alive; quit l
     try testing.expectEqual(@as(u32, 1), log.quits);
 }
 
+const Drain = struct {
+    drained: *std.atomic.Value(u32),
+    pub fn run(self: *Drain) void {
+        _ = self.drained.fetchAdd(1, .acq_rel);
+    }
+};
+
+const AsyncQuit = struct {
+    drained: std.atomic.Value(u32) = .init(0),
+    sync_ran: bool = false,
+    order_ok: bool = true,
+    fn sync(self: *AsyncQuit, _: *App) void {
+        self.sync_ran = true;
+    }
+    fn teardown(self: *AsyncQuit, app: *App) lifecycle.QuitTeardown {
+        // gpui runs every quit observer before awaiting the futures.
+        if (!self.sync_ran) self.order_ok = false;
+        const task = app.backgroundExecutor().spawn(Drain{ .drained = &self.drained }) catch return .none;
+        return .of(task);
+    }
+    fn nothing(_: *AsyncQuit, _: *App) lifecycle.QuitTeardown {
+        return .none;
+    }
+};
+
+test "onQuitAsync: the exit waits for every teardown task's background phase, once" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    var q: AsyncQuit = .{};
+    try app.onQuit(&q, AsyncQuit.sync);
+    try app.onQuitAsync(&q, AsyncQuit.teardown);
+    try app.onQuitAsync(&q, AsyncQuit.nothing);
+    try app.onQuitAsync(&q, AsyncQuit.teardown);
+    app.quit();
+    // `quit` returns after the teardowns drained (no runUntilParked needed).
+    try testing.expectEqual(@as(u32, 2), q.drained.load(.acquire));
+    try testing.expect(q.order_ok);
+    app.quit();
+    app.runUntilParked();
+    try testing.expectEqual(@as(u32, 2), q.drained.load(.acquire));
+}
+
 const MenuView = struct {
     focus: @import("../window/focus.zig").FocusHandle,
     saves: *u32,

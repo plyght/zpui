@@ -50,6 +50,8 @@ pub const Meta = struct {
     updateAvailable: ?[]const u8 = null,
     /// Keep the boot splash up (screenshots of the splash).
     splash: bool = false,
+    /// Show the sidebar's "Star on GitHub" banner (references capture it dismissed).
+    githubStarBanner: bool = false,
 };
 
 pub const Fixtures = struct {
@@ -135,6 +137,7 @@ pub fn applyPrefs(f: *const Fixtures, p: *prefs_mod.Prefs) void {
     if (m.rightPaneWidth) |v| p.right_pane_width = v;
     if (m.spaceFilter) |v| p.setFilter(v);
     if (m.updateAvailable) |v| p.update_label = v;
+    p.star_banner_hidden = !m.githubStarBanner;
     for (m.pins) |id| p.setPinned(id, true);
     if (m.pullRequests) |prs| {
         var it = prs.map.iterator();

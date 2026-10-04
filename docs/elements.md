@@ -381,6 +381,34 @@ deltas from wheels. `list` coalesces same-direction deltas per frame (20 px per 
 gpui). gpui implements no kinetic/momentum scrolling for desktop Linux (its momentum is only
 for touch-screen pans), so neither does zpui; use `animation.Spring`/`Tween` for glides.
 
+## 5a′. Accessibility
+
+Port of zui's AccessKit layer (`src/a11y.zig`; platform bridges in
+`src/platform/mac/a11y.zig` (NSAccessibility) and `src/platform/linux/atspi.zig` (AT-SPI2)).
+An element joins the tree when it has an **id and a role**; its descendants become child nodes.
+
+```zig
+div().id("save").role(.button).ariaLabel("Save").onClick(...)        // click → AXPress / AT-SPI "click"
+div().id("sync").role(.@"switch").ariaLabel("Sync").ariaToggled(on)   // bool or a11y.Toggled
+div().id("q").role(.search_input).ariaPlaceholder("Search").ariaValue(text)
+    .onA11yAction(.set_value, cx.listener(Self.onSetValue))            // fn(*Self, *const a11y.ActionRequest, ...)
+div().id(.{ "opt", ix }).role(.list_box_option).ariaSelected(sel).ariaActiveDescendant()
+```
+
+Also `ariaDescription ariaKeyshortcuts ariaExpanded ariaDisabled ariaReadOnly ariaNumericValue
+ariaMin/MaxNumericValue ariaNumericValueStep ariaOrientation ariaLevel ariaPositionInSet ariaSizeOfSet
+ariaRow/ColumnIndex ariaRow/ColumnCount` (and `role`/`ariaLabel`/… on `svg()` with an id).
+Text elements inside a node name it when it has no label (buttons, tabs, menu items, …), become
+the value of a text field, or appear as static-text children of other nodes. `click` is implied by
+`onClick`, `focus` by a focus handle; requests without an `onA11yAction` listener fall back to a
+synthesized click at the node's center / focusing its handle / blur.
+
+The tree is only built while assistive technology is connected (`window.a11yActive()`; the
+platform activates it, tests call `window.setA11yActive(true)` or
+`TestWindow.simulateA11yActivation(true)`). `window.a11yTree()` is the last frame's tree
+(`dump` prints it), `window.a11yChanges()` the diff the bridges turn into notifications.
+Linux: `ZPUI_A11Y=1` forces the AT-SPI bridge on, `ZPUI_NO_A11Y=1` / `NO_AT_BRIDGE=1` off.
+
 ## 5b. Native child views and the overlay plane
 
 Platform views created by the app (macOS: any `NSView*` — a `WKWebView`, an

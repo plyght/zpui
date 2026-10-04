@@ -507,8 +507,9 @@ pub const SettingsView = struct {
     pub fn toggle(self: *SettingsView, which: Toggle, on: bool, interactive: bool, theme_: *const Theme, cx: *Context(SettingsView)) zpui.StatefulDiv {
         const pos = self.travel(cx, 0x10000 | @as(u32, @intFromEnum(which)), if (on) 1 else 0, 180);
         var d = div().id(.{ "settings-toggle", @intFromEnum(which) }).flexNone()
+            .role(.@"switch").ariaLabel(select_mod.toggleLabel(which)).ariaToggled(on)
             .w(px(w.switch_width)).h(px(w.switch_height)).child(w.switchVisual(theme_, pos));
-        if (interactive) d = d.cursorPointer().onClick(cx.listenerWith(which, SettingsView.onToggle));
+        if (interactive) d = d.cursorPointer().onClick(cx.listenerWith(which, SettingsView.onToggle)) else d = d.ariaDescription("Unavailable while its parent setting is off");
         return d;
     }
 
@@ -983,6 +984,7 @@ pub const SettingsView = struct {
 
         const page = self.renderPage(t, window, cx);
         var root = div().id("settings-page")
+            .role(.group).ariaLabel("Settings")
             .trackFocus(self.focus)
             .keyContext("Settings")
             .captureKeyDown(cx.listener(SettingsView.onKeyCapture))
@@ -1024,7 +1026,7 @@ pub const SettingsView = struct {
 
     fn backTab(self: *SettingsView, t: *const Theme, cx: *Context(SettingsView)) zpui.StatefulDiv {
         const key = "settings-back-hover";
-        return self.sectionTab(t, false, 0, key, cx).id("settings-back").cursorPointer()
+        return self.sectionTab(t, false, 0, key, cx).id("settings-back").role(.button).ariaLabel("Back").cursorPointer()
             .onHover(cx.listener(SettingsView.onBackHover))
             .onClick(cx.listener(SettingsView.onBack))
             .child(ui.icon.of(.arrow_left, 16, ui.hover.blend(cx, key, t.text_muted, t.text)))
@@ -1040,6 +1042,7 @@ pub const SettingsView = struct {
             const key = navHoverKey(item);
             const text = ui.hover.blend(cx, key, w.mix(t.text_muted, t.text, sel_t), t.text);
             var tab = self.sectionTab(t, selected, sel_t, key, cx).id(.{ "settings-nav", @intFromEnum(item) })
+                .role(.tab).ariaLabel(sectionLabel(item)).ariaSelected(selected)
                 .cursorPointer()
                 .onHover(cx.listenerWith(item, SettingsView.onNavHover))
                 .onClick(cx.listenerWith(item, SettingsView.onNav))
@@ -1048,7 +1051,7 @@ pub const SettingsView = struct {
             if (startsNavGroup(item)) tab = tab.mt(px(zt.layout.space_lg));
             list = list.child(tab);
         }
-        const scroller = div().id("settings-sections").wFull().hFull().overflowYScroll().trackScroll(self.nav_scroll)
+        const scroller = div().id("settings-sections").role(.tab_list).ariaLabel("Settings sections").wFull().hFull().overflowYScroll().trackScroll(self.nav_scroll)
             .flex().flexCol().child(list);
         return zpui.intoAnyElement(ui.effects.edgeFaded(scroller, .{ .band = 16, .top = true, .bottom = true, .scroll = self.nav_scroll }));
     }
@@ -1079,7 +1082,7 @@ pub const SettingsView = struct {
             .child(div().minW0().lineHeight(px(17)).child(user_line));
         return div().wFull().flex().itemsCenter().justifyBetween().gap(px(4))
             .child(pill)
-            .child(div().id("settings-footer-gear").size(px(28)).flexNone().rounded(px(8))
+            .child(div().id("settings-footer-gear").role(.button).ariaLabel("Close settings").size(px(28)).flexNone().rounded(px(8))
             .flex().itemsCenter().justifyCenter().cursorPointer()
             .bg(t.glassHover())
             .onClick(cx.listener(SettingsView.onBack))

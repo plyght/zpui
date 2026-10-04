@@ -473,6 +473,10 @@ pub const TestWindow = struct {
     /// [liquid-glass] The last `setBackdropHole` (and how many calls were made).
     backdrop_hole: ?pf.BackdropHole = null,
     backdrop_hole_sets: u32 = 0,
+    /// Accessibility: the last `a11yUpdate` (tree valid until the next frame) and how
+    /// many arrived.
+    a11y_update: ?pf.a11y.Update = null,
+    a11y_update_count: u32 = 0,
 
     pub fn window(self: *TestWindow) pf.Window {
         return .{ .ptr = self, .vtable = &vtable };
@@ -561,6 +565,23 @@ pub const TestWindow = struct {
         if (self.callbacks.moved) |f| f(self.callbacks.ctx);
     }
 
+    /// Assistive technology connects (`true`) or leaves: the core starts/stops building
+    /// the accessibility tree. Run `frame(false)` afterwards to draw it.
+    pub fn simulateA11yActivation(self: *TestWindow, active: bool) void {
+        if (self.callbacks.a11y_activation) |f| f(self.callbacks.ctx, active);
+    }
+
+    /// An assistive-technology request (press, focus, set value, ...).
+    pub fn simulateA11yAction(self: *TestWindow, request: pf.a11y.ActionRequest) void {
+        if (self.callbacks.a11y_action) |f| f(self.callbacks.ctx, request);
+    }
+
+    /// The last accessibility tree the core sent (null before the first one).
+    pub fn a11yTree(self: *const TestWindow) ?*const pf.a11y.Tree {
+        const u = self.a11y_update orelse return null;
+        return u.tree;
+    }
+
     /// Simulate key-window changes (`active_status_change`).
     pub fn simulateActive(self: *TestWindow, active: bool) void {
         self.active = active;
@@ -602,7 +623,14 @@ pub const TestWindow = struct {
         .attachLiquidGlass = vAttachGlass,
         .configureLiquidGlass = vConfigureGlass,
         .setBackdropHole = vSetBackdropHole,
+        .a11yUpdate = vA11yUpdate,
     };
+
+    fn vA11yUpdate(ptr: *anyopaque, update: pf.a11y.Update) void {
+        const self = c(ptr);
+        self.a11y_update = update;
+        self.a11y_update_count += 1;
+    }
 
     fn vSetBackdropHole(ptr: *anyopaque, hole: ?pf.BackdropHole) void {
         const self = c(ptr);

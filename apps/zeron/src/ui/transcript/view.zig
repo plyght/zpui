@@ -136,6 +136,31 @@ pub const TranscriptView = struct {
     /// [wiring] The "Scroll to bottom" pill is offered (hysteresis: 320px / 2px).
     show_jump: bool = false,
 
+    /// Compact mode (`transcriptCompactMode`) as last applied to the row split.
+    compact_mode: bool = false,
+    /// Natural heights of compact-fold body rows (row key → px), written by
+    /// each row's paint probe; the shell header tweens one budget over them.
+    compact_heights: std.AutoHashMapUnmanaged(u64, f32) = .empty,
+    /// Compact work headers that were live this session: "Worked for" fades
+    /// in only for those, not historical rows.
+    compact_live: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    /// When a compact work header first settled this session (ns).
+    compact_worked_fade_at: std.AutoHashMapUnmanaged(u64, u64) = .empty,
+    /// Entry id hash → the last live trailer elapsed (s): "Worked for" when
+    /// the doc carries no `durationMs`.
+    compact_last_elapsed: std.AutoHashMapUnmanaged(u64, i64) = .empty,
+    /// Pending close-sweep timer for a compact fold (drops the body rows once
+    /// the close tween ends).
+    compact_settle: zpui.Task(void) = .none,
+
+    /// Streaming fade veils, one per live markdown row (dropped on the
+    /// live→complete flip).
+    veils: std.AutoHashMapUnmanaged(u64, *md.veil.RowVeil) = .empty,
+    /// Live rows already carrying text when the transcript attached: their
+    /// veils start seeded, so only post-attach appends fade in.
+    veil_baseline: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    veil_attach_pending: bool = true,
+
     // [wiring] spawn-chip links: the shell hosts the subagent surface.
     pub const Events = .{subagents.OpenSubagent};
 
@@ -174,6 +199,14 @@ pub const TranscriptView = struct {
         if (self.workspace_root) |r| self.gpa.free(r);
         self.folds.deinit(self.gpa);
         self.details.deinit(self.gpa);
+        self.compact_heights.deinit(self.gpa);
+        self.compact_live.deinit(self.gpa);
+        self.compact_worked_fade_at.deinit(self.gpa);
+        self.compact_last_elapsed.deinit(self.gpa);
+        self.compact_settle.cancel();
+        self.clearVeils();
+        self.veils.deinit(self.gpa);
+        self.veil_baseline.deinit(self.gpa);
         self.user_expanded.deinit(self.gpa);
         self.entrance.deinit(self.gpa);
         self.list.release();
@@ -379,6 +412,36 @@ pub const TranscriptView = struct {
         });
     }
 
+    fn clearVeils(self: *TranscriptView) void {
+        var it = self.veils.valueIterator();
+        while (it.next()) |v| {
+            v.*.deinit();
+            self.gpa.destroy(v.*);
+        }
+        self.veils.clearRetainingCapacity();
+    }
+
+    fn dropVeil(self: *TranscriptView, key: u64) void {
+        const kv = self.veils.fetchRemove(key) orelse return;
+        kv.value.deinit();
+        self.gpa.destroy(kv.value);
+    }
+
+    /// The veil of a live markdown row (created on first paint; seeded when
+    /// the row was already on screen at attach time).
+    fn veilFor(self: *TranscriptView, key: u64) ?*md.veil.RowVeil {
+        const gop = self.veils.getOrPut(self.gpa, key) catch return null;
+        if (!gop.found_existing) {
+            const v = self.gpa.create(md.veil.RowVeil) catch {
+                _ = self.veils.remove(key);
+                return null;
+            };
+            v.* = if (self.veil_baseline.contains(key)) .seeded(self.gpa) else .init(self.gpa);
+            gop.value_ptr.* = v;
+        }
+        return gop.value_ptr.*;
+    }
+
     fn clearEntries(self: *TranscriptView) void {
         var it = self.entries.iterator();
         while (it.next()) |e| {
@@ -422,6 +485,10 @@ pub const TranscriptView = struct {
         self.versions.clearRetainingCapacity();
         self.folds.clearRetainingCapacity();
         self.details.clearRetainingCapacity();
+        self.compact_heights.clearRetainingCapacity();
+        self.clearVeils();
+        self.veil_baseline.clearRetainingCapacity();
+        self.veil_attach_pending = true;
         self.entrance.clearRetainingCapacity();
         self.user_expanded.clearRetainingCapacity();
         self.synced_revision = null;
@@ -490,10 +557,10 @@ pub const TranscriptView = struct {
 
         const n = store.len();
         var i: usize = 0;
-        while (i < n) : (i += 1) try self.syncEntry(store.entry(i), false, &seen, &new_order);
+        while (i < n) : (i += 1) try self.syncEntry(store.entry(i), false, now_ns, &seen, &new_order);
         for (store.pendingEchoes()) |*echo| {
             if (store.findEntry(echo.entry.id) != null) continue;
-            try self.syncEntry(&echo.entry, true, &seen, &new_order);
+            try self.syncEntry(&echo.entry, true, now_ns, &seen, &new_order);
         }
         // Sweep entries that left the transcript.
         var stale: std.ArrayList([]const u8) = .empty;
@@ -526,13 +593,37 @@ pub const TranscriptView = struct {
                 self.list.remeasureItems(.{ .start = sp.start - 1, .end = sp.start });
         }
         if (self.loaded) {
-            for (new_rows) |r| if (!old_keys.contains(r.key)) try self.entrance.put(gpa, r.key, now_ns);
+            // Compact-fold body rows reveal under the fold tween, not the entrance.
+            for (new_rows) |r| if (!old_keys.contains(r.key) and r.compact_fold == null) try self.entrance.put(gpa, r.key, now_ns);
         }
         if (new_rows.len > 0 and !self.loaded and self.start_at_top) {
             self.list.setFollowMode(.normal);
             self.list.scrollTo(.{ .item_ix = 0, .offset_in_item = 0 });
         }
         if (new_rows.len > 0) self.loaded = true;
+
+        // Text already streamed before this (re)attach is the veil baseline:
+        // captured from the first non-empty sync after attach.
+        if (self.veil_attach_pending and new_rows.len > 0) {
+            self.veil_attach_pending = false;
+            self.veil_baseline.clearRetainingCapacity();
+            for (new_rows) |r| if (r.kind == .markdown and r.kind.markdown.live) try self.veil_baseline.put(gpa, r.key, {});
+        }
+        // Veils live exactly as long as their live row.
+        {
+            var live: std.AutoHashMapUnmanaged(u64, void) = .empty;
+            defer live.deinit(gpa);
+            for (new_rows) |r| if (r.kind == .markdown and r.kind.markdown.live) try live.put(gpa, r.key, {});
+            var drop: std.ArrayList(u64) = .empty;
+            defer drop.deinit(gpa);
+            var vit = self.veils.keyIterator();
+            while (vit.next()) |k| if (!live.contains(k.*)) try drop.append(gpa, k.*);
+            for (drop.items) |k| self.dropVeil(k);
+            drop.clearRetainingCapacity();
+            var bit = self.veil_baseline.keyIterator();
+            while (bit.next()) |k| if (!live.contains(k.*)) try drop.append(gpa, k.*);
+            for (drop.items) |k| _ = self.veil_baseline.remove(k);
+        }
 
         self.order.clearRetainingCapacity();
         try self.order.appendSlice(gpa, new_order.items);
@@ -549,9 +640,9 @@ pub const TranscriptView = struct {
         }
     }
 
-    fn syncEntry(self: *TranscriptView, entry: *const protocol.SessionMessageEntry, pending: bool, seen: *std.StringHashMapUnmanaged(void), out: *std.ArrayList(*const Row)) !void {
+    fn syncEntry(self: *TranscriptView, entry: *const protocol.SessionMessageEntry, pending: bool, now_ns: u64, seen: *std.StringHashMapUnmanaged(void), out: *std.ArrayList(*const Row)) !void {
         const gpa = self.gpa;
-        const fp = rows.entryFingerprint(entry, pending, false);
+        const fp = rows.entryFingerprint(entry, pending, self.compact_mode);
         const gop = try self.entries.getOrPut(gpa, entry.id);
         if (!gop.found_existing) {
             gop.key_ptr.* = try gpa.dupe(u8, entry.id);
@@ -566,11 +657,161 @@ pub const TranscriptView = struct {
             gop.value_ptr.*.* = fresh;
         }
         try seen.put(gpa, gop.key_ptr.*, {});
-        for (gop.value_ptr.*.rows) |*r| try out.append(gpa, r);
+        const worked = self.compactWorkedSecsFor(entry);
+        for (gop.value_ptr.*.rows) |*r| {
+            if (worked) |secs| switch (r.kind) {
+                .tool_group => |*g| if (g.compact_shell) {
+                    g.worked_secs = secs;
+                },
+                else => {},
+            };
+            if (r.compact_fold) |work_id| if (!self.compactFoldMounted(rows.hashStr(work_id), now_ns)) continue;
+            try out.append(gpa, r);
+        }
     }
 
     fn buildOpts(self: *TranscriptView, pending: bool) rows.BuildOptions {
-        return .{ .pending = pending, .probe = if (self.workspace_root != null) &self.probe else null };
+        return .{ .pending = pending, .probe = if (self.workspace_root != null) &self.probe else null, .compact = self.compact_mode };
+    }
+
+    // ---- compact mode -----------------------------------------------------------------
+
+    /// Settle window of a closing compact fold (`FOLD_TWEEN_WINDOW`).
+    pub const fold_tween_window_ns: u64 = 400 * std.time.ns_per_ms;
+
+    /// Apply the `transcriptCompactMode` setting: the mode is part of the row
+    /// split, so every entry rebuilds.
+    pub fn setCompactMode(self: *TranscriptView, on: bool) void {
+        if (self.compact_mode == on) return;
+        self.compact_mode = on;
+        self.compact_heights.clearRetainingCapacity();
+        self.clearEntries();
+        self.synced_revision = null;
+    }
+
+    fn syncCompactSetting(self: *TranscriptView, app: *App) void {
+        const s = model.settings_store.current(app) orelse return;
+        self.setCompactMode(s.transcriptCompactMode);
+    }
+
+    /// `compact_worked_secs_for`: the doc's duration, else the live trailer's
+    /// last elapsed seconds for that entry.
+    fn compactWorkedSecsFor(self: *const TranscriptView, entry: *const protocol.SessionMessageEntry) ?i64 {
+        if (!self.compact_mode or entry.role != .assistant or entry.status == .streaming) return null;
+        if (entry.durationMs) |ms| return if (ms > 0) @max(@divTrunc(ms, 1000), 1) else null;
+        const secs = self.compact_last_elapsed.get(rows.hashStr(entry.id)) orelse return null;
+        return if (secs > 0) secs else null;
+    }
+
+    /// A compact fold's body rows stay in the list while it is open, and
+    /// through the close tween (the settle sweep drops them afterwards).
+    fn compactFoldMounted(self: *const TranscriptView, key: u64, now_ns: u64) bool {
+        const fold = self.folds.get(key) orelse return false;
+        if (fold.open orelse false) return true;
+        const at = fold.toggled_at orelse return false;
+        return now_ns -| at < fold_tween_window_ns;
+    }
+
+    /// `compact_body_height`: the fold's animated body budget.
+    pub fn compactBodyHeight(fold: tools.Fold, total: f32, reduced: bool, now_ns: u64) f32 {
+        const target: f32 = if (fold.open orelse false) total else 0;
+        const at = fold.toggled_at orelse return target;
+        if (reduced) return target;
+        const t = tools.tool_fold.progressAt(now_ns -| at, 1.0);
+        return fold.from + (target - fold.from) * t;
+    }
+
+    /// Natural height of the body rows following the shell at `shell_ix`.
+    fn compactFoldTotal(self: *const TranscriptView, shell_ix: usize, work_id: []const u8) f32 {
+        var total: f32 = 0;
+        var i = shell_ix + 1;
+        while (i < self.order.items.len) : (i += 1) {
+            const r = self.order.items[i];
+            const f = r.compact_fold orelse break;
+            if (!std.mem.eql(u8, f, work_id)) break;
+            total += self.compact_heights.get(r.key) orelse 0;
+        }
+        return total;
+    }
+
+    /// `compact_fold_geometry`: `(prefix, own, total)` natural heights over the
+    /// contiguous `work_id` run containing `ix`.
+    pub fn compactFoldGeometry(order: []const *const Row, heights: *const std.AutoHashMapUnmanaged(u64, f32), work_id: []const u8, ix: usize) [3]f32 {
+        var start = ix;
+        while (start > 0) {
+            const f = order[start - 1].compact_fold orelse break;
+            if (!std.mem.eql(u8, f, work_id)) break;
+            start -= 1;
+        }
+        var prefix: f32 = 0;
+        var own: f32 = 0;
+        var total: f32 = 0;
+        var j = start;
+        while (j < order.len) : (j += 1) {
+            const f = order[j].compact_fold orelse break;
+            if (!std.mem.eql(u8, f, work_id)) break;
+            const h = heights.get(order[j].key) orelse 0;
+            if (j < ix) prefix += h else if (j == ix) own = h;
+            total += h;
+        }
+        return .{ prefix, own, total };
+    }
+
+    pub fn toggleCompactFold(self: *TranscriptView, key: u64, reduced: bool, cx: *Context(TranscriptView)) void {
+        const now = cx.app.executor.now();
+        const shell_ix = self.indexOfKey(key) orelse return;
+        const shell = self.order.items[shell_ix];
+        const gop = self.folds.getOrPut(self.gpa, key) catch return;
+        if (!gop.found_existing) gop.value_ptr.* = .{};
+        const total = self.compactFoldTotal(shell_ix, shell.id);
+        // The tween opens from the body's CURRENT rendered height (reversals
+        // included), not the header's chip height.
+        gop.value_ptr.from = compactBodyHeight(gop.value_ptr.*, total, reduced, now);
+        const now_open = !(gop.value_ptr.open orelse false);
+        gop.value_ptr.open = now_open;
+        gop.value_ptr.toggled_at = if (reduced) null else now;
+        // Mount the folded rows so the tween has content to reveal — or drop
+        // them right away under reduced motion.
+        self.synced_revision = null;
+        self.compact_settle.cancel();
+        self.compact_settle = .none;
+        if (!now_open and !reduced) {
+            self.compact_settle = cx.timer(fold_tween_window_ns + 50 * std.time.ns_per_ms, onCompactSettle) catch .none;
+        }
+        cx.notify();
+    }
+
+    fn onCompactSettle(self: *TranscriptView, cx: *Context(TranscriptView)) void {
+        self.compact_settle = .none;
+        self.synced_revision = null;
+        cx.notify();
+    }
+
+    /// Probe that records a compact-fold body row's natural height.
+    const HeightProbe = struct { view: *TranscriptView, key: u64 };
+
+    fn probeHeight(p: HeightProbe, b: zpui.Bounds(f32), _: *Window, _: *App) void {
+        const gop = p.view.compact_heights.getOrPut(p.view.gpa, p.key) catch return;
+        if (!gop.found_existing or @abs(gop.value_ptr.* - b.size.height) > 0.5) gop.value_ptr.* = b.size.height;
+    }
+
+    /// A compact-fold body row: each clips to `budget - prefix`, reproducing
+    /// an ordinary fold's single overflow-hidden container.
+    fn compactFoldBody(self: *TranscriptView, ix: usize, row: *const Row, work_id: []const u8, outer: zpui.StatefulDiv, window: *Window, cx: *Context(TranscriptView)) AnyElement {
+        const body = div().relative().flexNone().wFull().child(outer)
+            .child(zpui.canvas(HeightProbe{ .view = self, .key = row.key }, probeHeight).absolute().inset0());
+        const fold = self.folds.get(rows.hashStr(work_id)) orelse tools.Fold{};
+        const open = fold.open orelse false;
+        const reduced = window.prefersReducedMotion();
+        const now = cx.app.executor.now();
+        const animating = !reduced and fold.toggled_at != null and now -| fold.toggled_at.? < tools.tool_fold.totalNs(1.0);
+        if (!animating) return if (open) zpui.intoAnyElement(body) else zpui.empty();
+        const g = compactFoldGeometry(self.order.items, &self.compact_heights, work_id, ix);
+        const clip = std.math.clamp(compactBodyHeight(fold, g[2], reduced, now) - g[0], 0, g[1]);
+        window.requestAnimationFrame();
+        if (g[1] > 0 and clip >= g[1]) return zpui.intoAnyElement(body);
+        if (g[1] > 0 and clip <= 0) return zpui.empty();
+        return zpui.intoAnyElement(div().relative().wFull().overflowHidden().h(px(clip)).child(body));
     }
 
     pub fn rowCount(self: *const TranscriptView) usize {
@@ -592,8 +833,9 @@ pub const TranscriptView = struct {
 
     // ---- listeners -----------------------------------------------------------------
 
-    pub fn onToggleGroup(self: *TranscriptView, data: tools.GroupToggle, _: *const zpui.ClickEvent, _: *Window, cx: *Context(TranscriptView)) void {
+    pub fn onToggleGroup(self: *TranscriptView, data: tools.GroupToggle, _: *const zpui.ClickEvent, window: *Window, cx: *Context(TranscriptView)) void {
         cx.app.propagate_event = false;
+        if (data.compact_shell) return self.toggleCompactFold(data.key, window.prefersReducedMotion(), cx);
         const gop = self.folds.getOrPut(self.gpa, data.key) catch return;
         if (!gop.found_existing) gop.value_ptr.* = .{};
         const currently = gop.value_ptr.open orelse data.auto_open;
@@ -684,6 +926,7 @@ pub const TranscriptView = struct {
     // ---- render --------------------------------------------------------------------
 
     pub fn render(self: *TranscriptView, window: *Window, cx: *Context(TranscriptView)) AnyElement {
+        self.syncCompactSetting(cx.app);
         self.sync(cx);
         md.setClock(cx.app);
         {
@@ -817,9 +1060,20 @@ pub const TranscriptView = struct {
         const is_last = ix + 1 == self.order.items.len;
         const bottom_pad: f32 = if (is_last) self.bottom_clearance + layout.transcript_fade_band + 8 else 0;
 
+        // Per-appended-chunk fade veil on live rows (reduced motion: none; the
+        // text painted meanwhile becomes the next veil's baseline).
+        var row_veil: ?*md.veil.RowVeil = null;
+        if (row.kind == .markdown and row.kind.markdown.live) {
+            if (window.prefersReducedMotion()) {
+                self.dropVeil(row.key);
+                self.veil_baseline.put(self.gpa, row.key, {}) catch {};
+            } else row_veil = self.veilFor(row.key);
+        }
         const inner: AnyElement = switch (row.kind) {
             .user => self.renderUser(row, theme, window, cx),
             .markdown => |m| md.renderTopBlock(m.tree.*, m.block_ix, .{
+                .veil = row_veil,
+                .now_ns = now,
                 .theme = theme,
                 .key = row.key,
                 .copy = true,
@@ -838,6 +1092,12 @@ pub const TranscriptView = struct {
             .fork_marker => |f| forkMarker(f.source_title, theme),
             .generated_image => self.generatedImage(row, theme, cx),
         };
+        if (row_veil) |v| {
+            // The attach pass for this row is done: elements appearing from
+            // the next pass on are newly streamed and fade normally.
+            v.finishSeeding();
+            if (v.isFading()) window.requestAnimationFrame();
+        }
 
         const entry_key = rows.hashStr(row.entry_id);
         var column = div().wFull().maxW(px(self.content_width)).minW0().child(inner);
@@ -859,10 +1119,12 @@ pub const TranscriptView = struct {
             }
         }
 
-        return zpui.intoAnyElement(div().id(.{ "row", row.key })
+        const outer = div().id(.{ "row", row.key })
             .onHover(cx.listenerWith([2]u64{ row.key, entry_key }, onRowHover))
             .wFull().flex().justifyCenter().pt(px(top_gap)).pb(px(bottom_pad)).px(px(48))
-            .child(column));
+            .child(column);
+        if (row.compact_fold) |work_id| return self.compactFoldBody(ix, row, work_id, outer, window, cx);
+        return zpui.intoAnyElement(outer);
     }
 
     /// Hover-revealed metadata lane (reserved 32px) under an entry's last row.
@@ -889,6 +1151,11 @@ pub const TranscriptView = struct {
         if (u.attachments.len > 0) {
             var strip = div().wFull().minW0().flexNone().flex().flexRow().flexWrap().justifyEnd().itemsStart().gap(px(8)).px(px(4)).pt(px(4)).pb(px(6));
             for (u.attachments, 0..) |a, aix| strip = strip.child(self.attachmentThumb(row, a, aix, theme, window, cx));
+            column = column.child(strip);
+        }
+        if (u.badges.len > 0) {
+            var strip = div().wFull().flex().flexRow().flexWrap().justifyEnd().itemsCenter().gap(px(6)).pb(px(6));
+            for (u.badges, 0..) |*b, bix| strip = strip.child(rows.badges.pill(.{ "badge", mixKey(row.key, bix) }, b, theme));
             column = column.child(strip);
         }
         if (u.text.len > 0) {
@@ -998,6 +1265,16 @@ pub const TranscriptView = struct {
         }
         if (!working) return null;
         const elapsed: i64 = @divTrunc(@max(now_ms - started_ms, 0), 1000);
+        if (self.compact_mode and !sending and elapsed > 0) {
+            var i = n;
+            while (i > 0) {
+                i -= 1;
+                const e = store.entry(i);
+                if (e.role != .assistant) continue;
+                self.compact_last_elapsed.put(self.gpa, rows.hashStr(e.id), elapsed) catch {};
+                break;
+            }
+        }
         const seed = rows.fnv1a(store.chat_id);
         const word = if (sending) "Sending" else rows.flavourWord(seed, elapsed);
         const phase = spinPhase(cx.app.executor.now(), window.prefersReducedMotion());

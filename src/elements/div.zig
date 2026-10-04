@@ -52,6 +52,7 @@ const FocusHandle = focus_mod.FocusHandle;
 const events = @import("../window/events.zig");
 const ClickEvent = events.ClickEvent;
 const AnyView = @import("../window/view.zig").AnyView;
+const a11y = @import("../a11y.zig");
 
 const Pixels = geometry.Pixels;
 const Point = geometry.Point(Pixels);
@@ -391,8 +392,158 @@ pub fn InteractiveMethods(comptime Self: type, comptime stateful: bool) type {
             it(self).tracked_scroll_handle = handle;
             return self;
         }
+
+        // ---- accessibility (zui `StatefulInteractiveElement::role` / `aria_*`) --------------
+        // An element joins the accessibility tree when it has an id and a role. Text inside
+        // it names it (buttons, tabs, ...) unless `ariaLabel` is set.
+
+        fn aria(self: Self) *a11y.Info {
+            const i = it(self);
+            if (i.aria == null) i.aria = arena_mod.current().create(a11y.Info, .{});
+            return i.aria.?;
+        }
+
+        /// The accessible role (gpui `role(Role::Button)`). Needs an id.
+        pub fn role(self: Self, r: a11y.Role) Self {
+            requireId("role");
+            it(self).a11y_role = r;
+            return self;
+        }
+        /// The accessible name (`aria-label`). The string must outlive the frame.
+        pub fn ariaLabel(self: Self, label: []const u8) Self {
+            requireId("ariaLabel");
+            aria(self).label = label;
+            return self;
+        }
+        /// Supplementary text announced after the name (`aria-description`).
+        pub fn ariaDescription(self: Self, text: []const u8) Self {
+            requireId("ariaDescription");
+            aria(self).description = text;
+            return self;
+        }
+        /// The shortcut announced for this control (`aria-keyshortcuts`); no keymap.
+        pub fn ariaKeyshortcuts(self: Self, keys: []const u8) Self {
+            requireId("ariaKeyshortcuts");
+            aria(self).keyshortcuts = keys;
+            return self;
+        }
+        /// Report this element as focused while a focused ancestor holds keyboard focus
+        /// (`aria-activedescendant`, set on the selected child of a menu/list box).
+        pub fn ariaActiveDescendant(self: Self) Self {
+            requireId("ariaActiveDescendant");
+            aria(self).active_descendant = true;
+            return self;
+        }
+        pub fn ariaSelected(self: Self, selected: bool) Self {
+            requireId("ariaSelected");
+            aria(self).selected = selected;
+            return self;
+        }
+        pub fn ariaExpanded(self: Self, expanded: bool) Self {
+            requireId("ariaExpanded");
+            aria(self).expanded = expanded;
+            return self;
+        }
+        /// Toggle state: a `bool` or `a11y.Toggled` (`.mixed`).
+        pub fn ariaToggled(self: Self, toggled: anytype) Self {
+            requireId("ariaToggled");
+            aria(self).toggled = if (@TypeOf(toggled) == bool) (if (toggled) .on else .off) else toggled;
+            return self;
+        }
+        pub fn ariaDisabled(self: Self, disabled: bool) Self {
+            requireId("ariaDisabled");
+            aria(self).disabled = disabled;
+            return self;
+        }
+        pub fn ariaReadOnly(self: Self, read_only: bool) Self {
+            requireId("ariaReadOnly");
+            aria(self).read_only = read_only;
+            return self;
+        }
+        /// String value (a text field's contents).
+        pub fn ariaValue(self: Self, value: []const u8) Self {
+            requireId("ariaValue");
+            aria(self).value = value;
+            return self;
+        }
+        /// Placeholder announced while a text field is empty.
+        pub fn ariaPlaceholder(self: Self, text: []const u8) Self {
+            requireId("ariaPlaceholder");
+            aria(self).placeholder = text;
+            return self;
+        }
+        pub fn ariaNumericValue(self: Self, v: f64) Self {
+            requireId("ariaNumericValue");
+            aria(self).numeric_value = v;
+            return self;
+        }
+        pub fn ariaNumericValueStep(self: Self, v: f64) Self {
+            requireId("ariaNumericValueStep");
+            aria(self).numeric_value_step = v;
+            return self;
+        }
+        pub fn ariaMinNumericValue(self: Self, v: f64) Self {
+            requireId("ariaMinNumericValue");
+            aria(self).min_numeric_value = v;
+            return self;
+        }
+        pub fn ariaMaxNumericValue(self: Self, v: f64) Self {
+            requireId("ariaMaxNumericValue");
+            aria(self).max_numeric_value = v;
+            return self;
+        }
+        pub fn ariaOrientation(self: Self, o: a11y.Orientation) Self {
+            requireId("ariaOrientation");
+            aria(self).orientation = o;
+            return self;
+        }
+        /// Heading / tree level.
+        pub fn ariaLevel(self: Self, level: usize) Self {
+            requireId("ariaLevel");
+            aria(self).level = @intCast(level);
+            return self;
+        }
+        pub fn ariaPositionInSet(self: Self, position: usize) Self {
+            requireId("ariaPositionInSet");
+            aria(self).position_in_set = @intCast(position);
+            return self;
+        }
+        pub fn ariaSizeOfSet(self: Self, size: usize) Self {
+            requireId("ariaSizeOfSet");
+            aria(self).size_of_set = @intCast(size);
+            return self;
+        }
+        pub fn ariaRowIndex(self: Self, index: usize) Self {
+            requireId("ariaRowIndex");
+            aria(self).row_index = @intCast(index);
+            return self;
+        }
+        pub fn ariaColumnIndex(self: Self, index: usize) Self {
+            requireId("ariaColumnIndex");
+            aria(self).column_index = @intCast(index);
+            return self;
+        }
+        pub fn ariaRowCount(self: Self, count: usize) Self {
+            requireId("ariaRowCount");
+            aria(self).row_count = @intCast(count);
+            return self;
+        }
+        pub fn ariaColumnCount(self: Self, count: usize) Self {
+            requireId("ariaColumnCount");
+            aria(self).column_count = @intCast(count);
+            return self;
+        }
+        /// Handle an assistive-technology request (`l` gets `*const a11y.ActionRequest`);
+        /// overrides the built-in behaviour for that action (zui `on_a11y_action`).
+        pub fn onA11yAction(self: Self, action: a11y.Action, l: anytype) Self {
+            requireId("onA11yAction");
+            append(&it(self).a11y_action_listeners, A11yActionEntry{ .action = action, .listener = Listener(a11y.ActionRequest).init(l) });
+            return self;
+        }
     };
 }
+
+const A11yActionEntry = struct { action: a11y.Action, listener: Listener(a11y.ActionRequest) };
 
 fn DivImpl(comptime stateful: bool) type {
     return struct {
@@ -514,6 +665,31 @@ fn DivImpl(comptime stateful: bool) type {
         pub const hoverableTooltip = IM.hoverableTooltip;
         pub const tooltipShowDelay = IM.tooltipShowDelay;
         pub const trackScroll = IM.trackScroll;
+        pub const role = IM.role;
+        pub const ariaLabel = IM.ariaLabel;
+        pub const ariaDescription = IM.ariaDescription;
+        pub const ariaKeyshortcuts = IM.ariaKeyshortcuts;
+        pub const ariaActiveDescendant = IM.ariaActiveDescendant;
+        pub const ariaSelected = IM.ariaSelected;
+        pub const ariaExpanded = IM.ariaExpanded;
+        pub const ariaToggled = IM.ariaToggled;
+        pub const ariaDisabled = IM.ariaDisabled;
+        pub const ariaReadOnly = IM.ariaReadOnly;
+        pub const ariaValue = IM.ariaValue;
+        pub const ariaPlaceholder = IM.ariaPlaceholder;
+        pub const ariaNumericValue = IM.ariaNumericValue;
+        pub const ariaNumericValueStep = IM.ariaNumericValueStep;
+        pub const ariaMinNumericValue = IM.ariaMinNumericValue;
+        pub const ariaMaxNumericValue = IM.ariaMaxNumericValue;
+        pub const ariaOrientation = IM.ariaOrientation;
+        pub const ariaLevel = IM.ariaLevel;
+        pub const ariaPositionInSet = IM.ariaPositionInSet;
+        pub const ariaSizeOfSet = IM.ariaSizeOfSet;
+        pub const ariaRowIndex = IM.ariaRowIndex;
+        pub const ariaColumnIndex = IM.ariaColumnIndex;
+        pub const ariaRowCount = IM.ariaRowCount;
+        pub const ariaColumnCount = IM.ariaColumnCount;
+        pub const onA11yAction = IM.onA11yAction;
 
         // Animation wrappers (src/elements/animation.zig, gpui `AnimationExt`).
         pub const withAnimation = @import("animation.zig").Ext(Self).withAnimation;
@@ -3047,6 +3223,13 @@ pub const Interactivity = struct {
     tab_index: ?isize = null,
     tab_group: bool = false,
     tab_stop: bool = false,
+    /// Accessibility: role (an element with an id and a role is a tree node), declared
+    /// properties (arena) and `onA11yAction` handlers.
+    a11y_role: ?a11y.Role = null,
+    aria: ?*a11y.Info = null,
+    a11y_action_listeners: std.ArrayList(A11yActionEntry) = .empty,
+    /// The computed style hid the element (`display: none`): no accessibility node.
+    a11y_hidden: bool = false,
 
     // Computed during the frame.
     /// Scroll offset storage (element state or tracked handle), set in request layout.
@@ -3057,6 +3240,28 @@ pub const Interactivity = struct {
     /// Pressed state after prepaint.
     active: ?bool = null,
     tooltip_id: ?u64 = null,
+
+    /// The accessibility node of an element with this interactivity (zui `a11y_role` +
+    /// `write_a11y_info`): declared role and aria properties, `click` when it has click
+    /// listeners, `focus` (via its focus handle) when focusable, custom actions.
+    pub fn a11yNode(self: *const Interactivity, gid: GlobalElementId, bounds: Bounds, window: *Window) ?a11y.NodeSpec {
+        const r = self.a11y_role orelse return null;
+        if (self.a11y_hidden) return null;
+        var info: a11y.Info = if (self.aria) |a| a.* else .{};
+        if (self.click_listeners.items.len > 0) info.actions.insert(.click);
+        const node_id = a11y.NodeId.fromGlobal(gid.toKey());
+        for (self.a11y_action_listeners.items) |e| {
+            info.actions.insert(e.action);
+            window.onA11yAction(node_id, e.action, e.listener);
+        }
+        return .{
+            .id = node_id,
+            .role = r,
+            .bounds = bounds,
+            .info = info,
+            .focus_id = if (self.tracked_focus_handle) |h| @intFromEnum(h.id) else null,
+        };
+    }
 
     fn wantsScroll(self: *const Interactivity) bool {
         return self.base_style.overflow.x == .scroll or self.base_style.overflow.y == .scroll;
@@ -3087,7 +3292,9 @@ pub const Interactivity = struct {
         } else if (self.wantsScroll()) if (st) |s| {
             self.scroll_offset = &s.scroll_offset;
         };
-        return self.computeStyle(null, st, window, cx);
+        const computed = self.computeStyle(null, st, window, cx);
+        self.a11y_hidden = computed.display == .none;
+        return computed;
     }
 
     /// gpui `compute_style_internal`.
@@ -3966,6 +4173,10 @@ pub const DivElement = struct {
 
     pub fn elementId(self: *DivElement) ?ElementId {
         return self.d.interactivity.element_id;
+    }
+
+    pub fn a11yNode(self: *DivElement, gid: GlobalElementId, bounds: Bounds, window: *Window) ?a11y.NodeSpec {
+        return self.d.interactivity.a11yNode(gid, bounds, window);
     }
 
     pub fn requestLayout(self: *DivElement, gid: ?GlobalElementId, state: *DivFrameState, window: *Window, cx: *App) LayoutId {

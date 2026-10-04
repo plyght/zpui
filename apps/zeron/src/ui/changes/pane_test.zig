@@ -207,3 +207,68 @@ test "commit pane: identity toolbar and tab title" {
     defer empty.release(h.app);
     try testing.expectEqualStrings("abcdef0", empty.read(h.app).tabTitle());
 }
+
+test "review comments: draft → card in the diff → folded into the prompt" {
+    var h = try Harness.init();
+    defer h.deinit();
+    h.redraw();
+    const store = h.state.read(h.app).review_comments;
+    const key = store.read(h.app).composerKey();
+    try testing.expectEqualStrings("75fdc758-a8d5-58bb-a89d-9d5ac5e98425", key);
+    const p0 = h.cp.read(h.app);
+    const file0 = p0.parsed.?.ps.files[0];
+    // The first line anchor of file 0 (a deletion cites the old side).
+    const line0 = for (file0.hunks[0].lines) |*l| {
+        if (changes.model.lineAnchor(l)) |a| break a;
+    } else return error.TestUnexpectedResult;
+    const rows_before = p0.flat.rows.items.len;
+
+    // Open a draft: one draft row appears right under the line.
+    h.cp.update(h.app, changes.ChangesPane.openDraft, .{ file0.path, line0.side, line0.line, @as(?*zpui.Window, null) });
+    h.redraw();
+    var p = h.cp.read(h.app);
+    try testing.expectEqual(rows_before + 1, p.flat.rows.items.len);
+    var draft_ix: ?usize = null;
+    for (p.flat.rows.items, 0..) |r, i| if (r == .comment_draft) {
+        draft_ix = i;
+    };
+    try testing.expect(draft_ix != null);
+
+    // Type and commit: the draft becomes a staged card under the same line.
+    p.draft.?.input.update(h.app, @import("zeron_input").TextInput.setText, .{"  why?\nsecond  "});
+    h.cp.update(h.app, changes.ChangesPane.commitDraft, .{});
+    h.redraw();
+    p = h.cp.read(h.app);
+    try testing.expect(p.draft == null);
+    const staged = store.read(h.app).comments(key);
+    try testing.expectEqual(@as(usize, 1), staged.len);
+    try testing.expectEqualStrings("why?\nsecond", staged[0].body);
+    try testing.expectEqual(line0, staged[0].diffAnchor().?);
+    try testing.expect(p.flat.rows.items[draft_ix.?] == .comment_card);
+    try testing.expectEqual(rows_before + 1, p.flat.rows.items.len);
+
+    // Edit keeps identity; the card is replaced by the draft meanwhile.
+    const id = try testing.allocator.dupe(u8, staged[0].id);
+    defer testing.allocator.free(id);
+    h.cp.update(h.app, changes.ChangesPane.editCommentIn, .{ id, @as(?*zpui.Window, null) });
+    h.redraw();
+    p = h.cp.read(h.app);
+    try testing.expect(p.flat.rows.items[draft_ix.?] == .comment_draft);
+    try testing.expectEqualStrings("why?\nsecond", p.draft.?.input.read(h.app).text());
+    p.draft.?.input.update(h.app, @import("zeron_input").TextInput.setText, .{"Revised"});
+    h.cp.update(h.app, changes.ChangesPane.commitDraft, .{});
+    try testing.expectEqualStrings(id, store.read(h.app).comments(key)[0].id);
+    try testing.expectEqualStrings("Revised", store.read(h.app).comments(key)[0].body);
+
+    // The composer's fold.
+    const prompt = try model.review_comments.foldPrompt(testing.allocator, store.read(h.app), key, "");
+    defer testing.allocator.free(prompt);
+    try testing.expect(std.mem.startsWith(u8, prompt, model.comments.comment_only_text));
+    try testing.expect(std.mem.indexOf(u8, prompt, ": Revised") != null);
+
+    // Remove: the card row goes away.
+    h.cp.update(h.app, changes.ChangesPane.removeComment, .{id});
+    h.redraw();
+    try testing.expectEqual(rows_before, h.cp.read(h.app).flat.rows.items.len);
+    try testing.expectEqual(@as(usize, 0), store.read(h.app).comments(key).len);
+}

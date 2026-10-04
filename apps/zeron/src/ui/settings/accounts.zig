@@ -388,8 +388,14 @@ pub fn load(v: *SettingsView, force_usage: bool, cx: *Context(SettingsView)) voi
     cx.notify();
 }
 
-fn adopt(v: *SettingsView, val: json.Value) bool {
+fn adopt(v: *SettingsView, val: json.Value, app: *App) bool {
     const parsed = json.parseFromValue(Snapshot, v.gpa, val, parse_opts) catch return false;
+    // Share the list with the composer's plan-usage ring (`AccountsSnapshotCache`).
+    _ = @import("zeron_composer").account_usage.publish(app, null, val);
+    return adoptParsed(v, parsed);
+}
+
+fn adoptParsed(v: *SettingsView, parsed: json.Parsed(Snapshot)) bool {
     if (v.accounts.snapshot) |*p| p.deinit();
     v.accounts.snapshot = parsed;
     v.accounts.phase = .ready;
@@ -400,7 +406,7 @@ fn onList(v: *SettingsView, result: model.engine_state.CallResult, cx: *Context(
     const st = &v.accounts;
     st.refreshing = false;
     switch (result) {
-        .ok => |val| if (!adopt(v, val)) {
+        .ok => |val| if (!adopt(v, val, cx.app)) {
             if (st.phase != .ready) st.phase = .failed;
             setOwned(v.gpa, if (st.phase == .ready) &st.err else &st.load_error, "malformed reply");
         },
@@ -466,7 +472,7 @@ fn onAction(v: *SettingsView, result: model.engine_state.CallResult, cx: *Contex
     setOwned(v.gpa, &st.busy_account, null);
     switch (result) {
         // The reply is the fresh list; an older engine's bare reply → refetch.
-        .ok => |val| if (!adopt(v, val)) load(v, forceUsageFor(.post_action), cx),
+        .ok => |val| if (!adopt(v, val, cx.app)) load(v, forceUsageFor(.post_action), cx),
         .err => |e| {
             restorePrevious(v);
             setOwned(v.gpa, &st.err, e.message);

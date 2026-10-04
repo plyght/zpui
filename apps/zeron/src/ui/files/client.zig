@@ -333,6 +333,28 @@ pub const WorkspaceFiles = struct {
         }
     }
 
+    /// One `ReadWorkspaceImage` chunk (engine workspaces; local ones read
+    /// the file directly — see `ui/files/image_preview.zig`).
+    pub fn readImageChunk(self: *const WorkspaceFiles, cx: anytype, path: []const u8, checkout_id: []const u8, offset: u64, content_hash: ?[]const u8, comptime f: anytype) void {
+        const T = CtxEntity(@TypeOf(cx));
+        switch (self.source) {
+            .local => {},
+            .engine => |e| {
+                const t = self.targetFields();
+                const p: proto.params.ReadImage = .{ .chatId = t[0], .spaceId = t[1], .checkoutPath = t[2], .path = path, .expectedCheckoutId = checkout_id, .offset = offset, .expectedContentHash = content_hash };
+                request(T, e.state, cx, .ReadWorkspaceImage, p, proto.ImageChunk, f);
+            },
+        }
+    }
+
+    /// The local root (null for engine workspaces).
+    pub fn localRoot(self: *const WorkspaceFiles) ?[]const u8 {
+        return switch (self.source) {
+            .local => |r| r,
+            .engine => null,
+        };
+    }
+
     pub fn writeFile(self: *const WorkspaceFiles, cx: anytype, req: WriteRequest, comptime f: anytype) void {
         const T = CtxEntity(@TypeOf(cx));
         switch (self.source) {

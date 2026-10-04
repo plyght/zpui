@@ -175,14 +175,28 @@ pub fn slideOffset(ix: usize, from: usize, over: usize) f32 {
 }
 
 /// The dragged chip (strip reorder); the title rides along for the ghost.
+/// File tabs also carry their workspace path (Rust `RightTabDrag.workspace_path`):
+/// dropped on the conversation, they attach a file reference.
 pub const TabDrag = struct {
     key_hash: u64,
     from: usize,
     title_buf: [48]u8 = undefined,
     title_len: u8 = 0,
+    path_buf: [1024]u8 = undefined,
+    path_len: u16 = 0,
 
     fn title(self: *const TabDrag) []const u8 {
         return self.title_buf[0..self.title_len];
+    }
+
+    /// A file tab's workspace path (null for other surfaces / overlong paths).
+    pub fn workspacePath(self: *const TabDrag) ?[]const u8 {
+        return if (self.path_len == 0) null else self.path_buf[0..self.path_len];
+    }
+
+    /// The drag started in chat `key`'s strip (a drag outliving a chat switch is dropped).
+    pub fn belongsTo(self: *const TabDrag, key: []const u8) bool {
+        return self.key_hash == RightPane.keyHash(key);
     }
 };
 
@@ -479,6 +493,9 @@ pub const RightPane = struct {
         t.explorer = e;
         t.explorer_sub = cx.subscribe(e, onExplorerOpenFile) catch null;
         if (cx.subscribe(e, onExplorerShowAll)) |sub| t.explorer_subs.add(self.gpa, sub) catch {} else |_| {}
+        // Rename/delete propagation to open editors (`shell/file_mutations.rs`).
+        if (cx.subscribe(e, onExplorerRenamed)) |sub| t.explorer_subs.add(self.gpa, sub) catch {} else |_| {}
+        if (cx.subscribe(e, onExplorerDeleted)) |sub| t.explorer_subs.add(self.gpa, sub) catch {} else |_| {}
         surfaces_glue.subscribeExplorer(self, t, e, cx);
         return e;
     }
@@ -509,6 +526,63 @@ pub const RightPane = struct {
         return t.explorer;
     }
 
+    /// Every chat's tab set sharing the emitting explorer's workspace
+    /// (`shares_workspace`): its own, plus any other chat on the same root.
+    fn sharesWorkspace(self: *RightPane, t: *const ChatTabs, src: *const ChatTabs, cx: *Context(RightPane)) bool {
+        if (t == src) return true;
+        const a = t.files orelse return false;
+        const b = src.files orelse return false;
+        if (a.id == b.id) return true;
+        const ra = a.read(cx).root_label;
+        const rb = b.read(cx).root_label;
+        _ = self;
+        return ra.len > 0 and std.mem.eql(u8, ra, rb);
+    }
+
+    fn sourceTabs(self: *RightPane, explorer_id: zpui.EntityId) ?*ChatTabs {
+        var it = self.chats.valueIterator();
+        while (it.next()) |t| if (t.explorer) |e| if (e.id == explorer_id) return t;
+        return null;
+    }
+
+    /// An entry moved: editors on it (or under a moved folder) follow the
+    /// new path and keep their buffers.
+    fn onExplorerRenamed(self: *RightPane, src_e: Entity(files.FilesPanel), ev: *const files.panel.EntryRenamed, cx: *Context(RightPane)) void {
+        const src = self.sourceTabs(src_e.id) orelse return;
+        var it = self.chats.valueIterator();
+        while (it.next()) |t| {
+            if (!self.sharesWorkspace(t, src, cx)) continue;
+            for (t.tabs.items) |tab| if (tab.surface == .file) {
+                const ed = tab.surface.file;
+                const p = ed.read(cx).filePath();
+                if (std.mem.eql(u8, p, ev.old_path)) {
+                    ed.update(cx, editor.FileEditor.setPath, .{ev.new_path});
+                } else if (files.model.isDescendant(p, ev.old_path)) {
+                    const np = std.fmt.allocPrint(self.gpa, "{s}{s}", .{ ev.new_path, p[ev.old_path.len..] }) catch continue;
+                    defer self.gpa.free(np);
+                    ed.update(cx, editor.FileEditor.setPath, .{np});
+                }
+            };
+        }
+        cx.notify();
+    }
+
+    /// An entry was deleted: editors on it keep their buffers for recovery
+    /// and show the deleted-on-disk banner.
+    fn onExplorerDeleted(self: *RightPane, src_e: Entity(files.FilesPanel), ev: *const files.panel.EntryDeleted, cx: *Context(RightPane)) void {
+        const src = self.sourceTabs(src_e.id) orelse return;
+        var it = self.chats.valueIterator();
+        while (it.next()) |t| {
+            if (!self.sharesWorkspace(t, src, cx)) continue;
+            for (t.tabs.items) |tab| if (tab.surface == .file) {
+                const ed = tab.surface.file;
+                const p = ed.read(cx).filePath();
+                if (std.mem.eql(u8, p, ev.path) or files.model.isDescendant(p, ev.path)) ed.update(cx, editor.FileEditor.markDeleted, .{});
+            };
+        }
+        cx.notify();
+    }
+
     fn onExplorerOpenFile(self: *RightPane, _: Entity(files.FilesPanel), ev: *const files.panel.OpenFile, cx: *Context(RightPane)) void {
         self.openFile(ev.path, cx);
     }
@@ -516,6 +590,10 @@ pub const RightPane = struct {
     fn onEditorReveal(self: *RightPane, _: Entity(editor.FileEditor), ev: *const editor.view.RevealFile, cx: *Context(RightPane)) void {
         const t = self.current(cx) orelse return;
         if (t.explorer) |e| e.update(cx, files.FilesPanel.revealFile, .{ev.path});
+    }
+
+    fn onEditorOpenPath(self: *RightPane, _: Entity(editor.FileEditor), ev: *const editor.view.OpenPath, cx: *Context(RightPane)) void {
+        self.openFile(ev.path, cx);
     }
 
     fn onEditorState(_: *RightPane, _: Entity(editor.FileEditor), _: *const editor.view.StateChanged, cx: *Context(RightPane)) void {
@@ -543,6 +621,11 @@ pub const RightPane = struct {
         if (cx.subscribe(ed, onEditorWrap)) |sub| {
             var s3 = sub;
             s3.detach();
+        } else |_| {}
+        // A Markdown preview link to another workspace document.
+        if (cx.subscribe(ed, onEditorOpenPath)) |sub| {
+            var s4 = sub;
+            s4.detach();
         } else |_| {}
         if (self.peek(cx)) |t| if (t.explorer) |e| e.update(cx, files.FilesPanel.revealFile, .{path});
     }
@@ -765,6 +848,13 @@ pub const RightPane = struct {
             const n: u8 = @intCast(@min(title.len, drag.title_buf.len));
             @memcpy(drag.title_buf[0..n], title[0..n]);
             drag.title_len = n;
+            if (tab.surface == .file) {
+                const fp = tab.surface.file.read(cx).filePath();
+                if (fp.len > 0 and fp.len <= drag.path_buf.len) {
+                    @memcpy(drag.path_buf[0..fp.len], fp);
+                    drag.path_len = @intCast(fp.len);
+                }
+            }
             var chip = div().id(.{ "right-surface-tab", ix }).group(group)
                 .h(px(24)).w(px(chip_w)).flexNone().px(px(4)).rounded(px(6))
                 .flex().flexRow().itemsCenter().gap(px(3)).cursorPointer()
@@ -896,6 +986,16 @@ fn surfaceCard(theme: *const Theme, id: []const u8, i: Icon, title: []const u8) 
         .hover(sb.bg(theme.ink(0.05)).borderColor(theme.border_strong))
         .child(ui.icon.of(i, 15, theme.text_muted))
         .child(div().textSize(ui.rems(13)).fontWeight(500).textColor(theme.text).child(title));
+}
+
+test "file tab drags carry their workspace path and chat (chat drop zone)" {
+    var d: TabDrag = .{ .key_hash = RightPane.keyHash("chat-a"), .from = 0 };
+    try std.testing.expect(d.workspacePath() == null);
+    @memcpy(d.path_buf[0..10], "src/lib.rs");
+    d.path_len = 10;
+    try std.testing.expectEqualStrings("src/lib.rs", d.workspacePath().?);
+    try std.testing.expect(d.belongsTo("chat-a"));
+    try std.testing.expect(!d.belongsTo("chat-b"));
 }
 
 test "drop index and slide offsets" {

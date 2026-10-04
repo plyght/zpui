@@ -1214,6 +1214,7 @@ pub const Window = struct {
     fn closeWindow(self: *Window) void {
         const client = self.client;
         client.removeWindow(self);
+        if (client.plat.atspi) |br| br.removeWindow(&self.common);
         if (self.frame_timer) |t| client.plat.loop.cancelTimer(t);
         if (self.presenter) |*p| p.deinit(client.gpa);
         _ = c.xcb_destroy_window(client.conn, self.xid);
@@ -1308,10 +1309,18 @@ pub const Window = struct {
         .spriteAtlas = spriteAtlas,
         .updateImePosition = updateImePosition,
         .close = close,
+        .a11yUpdate = a11yUpdate,
     };
 
     fn setCallbacks(ptr: *anyopaque, cbs: platform.WindowCallbacks) void {
-        cast(ptr).common.callbacks = cbs;
+        const self = cast(ptr);
+        self.common.callbacks = cbs;
+        // Accessibility: windows with core callbacks are exposed over AT-SPI (atspi.zig).
+        if (self.client.plat.atspi) |br| if (cbs.ctx != null) br.addWindow(&self.common, self.window()) else br.removeWindow(&self.common);
+    }
+    fn a11yUpdate(ptr: *anyopaque, update: platform.a11y.Update) void {
+        const self = cast(ptr);
+        if (self.client.plat.atspi) |br| br.update(&self.common, update);
     }
     fn bounds(ptr: *anyopaque) platform.Bounds {
         const self = cast(ptr);

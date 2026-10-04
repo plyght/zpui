@@ -25,6 +25,7 @@ pub const appearance = @import("appearance.zig");
 pub const dbus = @import("dbus.zig");
 pub const file_dialog = @import("file_dialog.zig");
 pub const notifications = @import("notifications.zig");
+pub const atspi = @import("atspi.zig");
 const text_mod = @import("../../text/text.zig");
 
 pub const BackendKind = enum { wayland, x11 };
@@ -58,6 +59,9 @@ pub const LinuxPlatform = struct {
     appearance_watcher: ?*appearance.Watcher = null,
     /// Desktop banners (notifications.zig), created on the first `postNotification`.
     notifier: ?*notifications.Notifier = null,
+    /// AT-SPI2 accessibility bridge (atspi.zig); null without a session bus or when
+    /// disabled (`ZPUI_NO_A11Y=1` / `NO_AT_BRIDGE=1`).
+    atspi: ?*atspi.Bridge = null,
 
     /// Ends `run` after the current loop iteration.
     pub fn requestQuit(self: *LinuxPlatform) void {
@@ -188,6 +192,8 @@ pub const LinuxPlatform = struct {
         const self = cast(ptr);
         if (self.appearance_watcher) |w| w.destroy();
         if (self.notifier) |n| n.destroy();
+        if (self.atspi) |a| a.destroy();
+        self.atspi = null;
         switch (self.backend) {
             inline else => |b| b.destroy(),
         }
@@ -252,6 +258,7 @@ pub fn create(gpa: Allocator, options: Options) !platform.Platform {
         self.appearance = started.appearance;
         self.appearance_watcher = started.watcher;
     }
+    self.atspi = atspi.Bridge.create(gpa, &self.loop, .fromProcess());
     return self.platformInterface();
 }
 

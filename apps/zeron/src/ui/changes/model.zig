@@ -7,10 +7,14 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const diff = @import("zeron_diff");
 const engine = @import("zeron_engine");
+const zmodel = @import("zeron_model");
+const comments = zmodel.comments;
 
 const protocol = engine.protocol;
 pub const FileDiff = diff.FileDiff;
 pub const DiffLine = diff.DiffLine;
+pub const ReviewComment = comments.ReviewComment;
+pub const DiffAnchor = comments.DiffAnchor;
 
 // ---------------------------------------------------------------------------
 // Layout numbers (analytic — they drive the fold tween)
@@ -187,6 +191,9 @@ pub const DiffRow = union(enum) {
     hunk_header: struct { file: u32, hunk: u32 },
     line: struct { file: u32, hunk: u32, line: u32 },
     split_line: struct { file: u32, hunk: u32, left: ?u32, right: ?u32 },
+    /// `card` indexes the file's own staged-comment slice, in staged order.
+    comment_card: struct { file: u32, card: u32 },
+    comment_draft: u32,
     /// Trailing pad closing an expanded body.
     body_pad: u32,
     /// A body mid-fold-tween: one height-animated clipped stand-in row.
@@ -194,17 +201,20 @@ pub const DiffRow = union(enum) {
 
     pub fn file(self: DiffRow) usize {
         return switch (self) {
-            .file_header, .body_pad, .folding_body => |f| f,
-            inline .notice, .hunk_header, .line, .split_line => |r| r.file,
+            .file_header, .body_pad, .folding_body, .comment_draft => |f| f,
+            inline .notice, .hunk_header, .line, .split_line, .comment_card => |r| r.file,
         };
     }
 
-    pub fn height(self: DiffRow) f32 {
+    /// `comments`: the file's own staged slice (sizes its cards).
+    pub fn height(self: DiffRow, file_comments: []const ReviewComment) f32 {
         return switch (self) {
             .file_header => file_header_height,
             .notice => notice_height,
             .hunk_header => hunk_header_height,
             .line, .split_line => line_height,
+            .comment_card => |c| if (c.card < file_comments.len) comments.cardHeight(file_comments[c.card].body) else 0,
+            .comment_draft => comments.draft_card_height,
             .body_pad => body_bottom_pad,
             .folding_body => 0,
         };
@@ -232,36 +242,93 @@ pub fn noticeCount(file: *const FileDiff) usize {
     return n;
 }
 
-/// The expanded body rows of one file (notices, hunks, lines/pairs, pad).
-pub fn bodyRows(a: Allocator, out: *std.ArrayList(DiffRow), file_ix: u32, file: *const FileDiff, mode: DiffMode) Allocator.Error!void {
+/// `line_anchor`: a deletion only exists in the pre-change file; everything
+/// else is cited against the post-change file, which is what the agent edits.
+pub fn lineAnchor(line: *const DiffLine) ?DiffAnchor {
+    return switch (line.kind) {
+        .meta => null,
+        .del => if (line.old_no) |n| .{ .side = .old, .line = n } else null,
+        else => if (line.new_no) |n| .{ .side = .new, .line = n } else null,
+    };
+}
+
+/// `pair_anchors`: a split row's anchors (a context row names the same
+/// anchor on both sides, so the duplicate is dropped).
+pub fn pairAnchors(lines: []const DiffLine, left: ?u32, right: ?u32) [2]?DiffAnchor {
+    const l: ?DiffAnchor = if (left) |ix| (if (ix < lines.len) lineAnchor(&lines[ix]) else null) else null;
+    const r: ?DiffAnchor = if (right) |ix| (if (ix < lines.len) lineAnchor(&lines[ix]) else null) else null;
+    const same = if (l != null and r != null) l.?.eql(r.?) else l == null and r == null;
+    return if (same) .{ l, null } else .{ l, r };
+}
+
+fn pushCards(a: Allocator, out: *std.ArrayList(DiffRow), file_ix: u32, file_comments: []const ReviewComment, draft: ?DiffAnchor, anchors: []const ?DiffAnchor) Allocator.Error!void {
+    for (anchors) |maybe| {
+        const anchor = maybe orelse continue;
+        for (file_comments, 0..) |*c, ix| {
+            const ca = c.diffAnchor() orelse continue;
+            if (ca.eql(anchor)) try out.append(a, .{ .comment_card = .{ .file = file_ix, .card = @intCast(ix) } });
+        }
+        if (draft) |d| if (d.eql(anchor)) try out.append(a, .{ .comment_draft = file_ix });
+    }
+}
+
+/// The expanded body rows of one file (notices, hunks, lines/pairs with
+/// their comment cards, pad). `file_comments` is this file's staged slice.
+pub fn bodyRowsWith(a: Allocator, out: *std.ArrayList(DiffRow), file_ix: u32, file: *const FileDiff, file_comments: []const ReviewComment, draft: ?DiffAnchor, mode: DiffMode) Allocator.Error!void {
     for (0..noticeCount(file)) |n| try out.append(a, .{ .notice = .{ .file = file_ix, .notice = @intCast(n) } });
     for (file.hunks, 0..) |hunk, hi| {
         const h: u32 = @intCast(hi);
         try out.append(a, .{ .hunk_header = .{ .file = file_ix, .hunk = h } });
         switch (mode) {
-            .unified => for (0..hunk.lines.len) |li| try out.append(a, .{ .line = .{ .file = file_ix, .hunk = h, .line = @intCast(li) } }),
+            .unified => for (hunk.lines, 0..) |*line, li| {
+                try out.append(a, .{ .line = .{ .file = file_ix, .hunk = h, .line = @intCast(li) } });
+                try pushCards(a, out, file_ix, file_comments, draft, &.{lineAnchor(line)});
+            },
             .split => {
                 // `splitPairs` leaks its scratch lists (arena-oriented): pair
                 // in a local arena.
                 var scratch: std.heap.ArenaAllocator = .init(a);
                 defer scratch.deinit();
                 const pairs = try diff.splitPairs(scratch.allocator(), hunk.lines);
-                for (pairs) |p| try out.append(a, .{ .split_line = .{ .file = file_ix, .hunk = h, .left = p.left, .right = p.right } });
+                for (pairs) |p| {
+                    try out.append(a, .{ .split_line = .{ .file = file_ix, .hunk = h, .left = p.left, .right = p.right } });
+                    const anchors = pairAnchors(hunk.lines, p.left, p.right);
+                    try pushCards(a, out, file_ix, file_comments, draft, &anchors);
+                }
             },
         }
     }
     try out.append(a, .{ .body_pad = file_ix });
 }
 
-/// Analytic expanded-body height (drives the fold tween).
-pub fn bodyHeight(a: Allocator, file: *const FileDiff, mode: DiffMode) f32 {
+pub fn bodyRows(a: Allocator, out: *std.ArrayList(DiffRow), file_ix: u32, file: *const FileDiff, mode: DiffMode) Allocator.Error!void {
+    return bodyRowsWith(a, out, file_ix, file, &.{}, null, mode);
+}
+
+/// Analytic expanded-body height (drives the fold tween), cards included.
+pub fn bodyHeightWith(a: Allocator, file: *const FileDiff, file_comments: []const ReviewComment, draft: ?DiffAnchor, mode: DiffMode) f32 {
     var rows: std.ArrayList(DiffRow) = .empty;
     defer rows.deinit(a);
-    bodyRows(a, &rows, 0, file, mode) catch return 0;
+    bodyRowsWith(a, &rows, 0, file, file_comments, draft, mode) catch return 0;
     var h: f32 = 0;
-    for (rows.items) |r| h += r.height();
+    for (rows.items) |r| h += r.height(file_comments);
     return h;
 }
+
+pub fn bodyHeight(a: Allocator, file: *const FileDiff, mode: DiffMode) f32 {
+    return bodyHeightWith(a, file, &.{}, null, mode);
+}
+
+/// The diff comments staged on `path` (file comments never render in a diff).
+pub fn commentsFor(a: Allocator, staged: []const ReviewComment, path: []const u8) Allocator.Error![]ReviewComment {
+    var out: std.ArrayList(ReviewComment) = .empty;
+    errdefer out.deinit(a);
+    for (staged) |c| if (!c.isFile() and std.mem.eql(u8, c.path, path)) try out.append(a, c);
+    return out.toOwnedSlice(a);
+}
+
+/// A draft anchored in one file (`(path, side, line)`).
+pub const DraftAnchor = struct { path: []const u8, anchor: DiffAnchor };
 
 pub const Flattened = struct {
     rows: std.ArrayList(DiffRow) = .empty,
@@ -274,18 +341,60 @@ pub const Flattened = struct {
 };
 
 /// Flatten all files into rows plus each file's row span (header at
-/// `range.start`). `collapsed[ix]` folds a file to just its header.
-pub fn flattenRows(a: Allocator, files: []const FileDiff, mode: DiffMode, collapsed: []const bool) Allocator.Error!Flattened {
+/// `range.start`). `collapsed[ix]` folds a file to just its header;
+/// `staged` is the whole staged comment set (each file takes its slice).
+pub fn flattenRowsWith(a: Allocator, files: []const FileDiff, staged: []const ReviewComment, draft: ?DraftAnchor, mode: DiffMode, collapsed: []const bool) Allocator.Error!Flattened {
     var out: Flattened = .{};
     errdefer out.deinit(a);
+    var scratch: std.heap.ArenaAllocator = .init(a);
+    defer scratch.deinit();
     for (files, 0..) |*f, ix| {
         const start = out.rows.items.len;
         try out.rows.append(a, .{ .file_header = @intCast(ix) });
         const shut = ix < collapsed.len and collapsed[ix];
-        if (!shut) try bodyRows(a, &out.rows, @intCast(ix), f, mode);
+        if (!shut) {
+            const fc = try commentsFor(scratch.allocator(), staged, f.path);
+            const fd: ?DiffAnchor = if (draft) |d| (if (std.mem.eql(u8, d.path, f.path)) d.anchor else null) else null;
+            try bodyRowsWith(a, &out.rows, @intCast(ix), f, fc, fd, mode);
+        }
         try out.ranges.append(a, .{ .start = start, .end = out.rows.items.len });
     }
     return out;
+}
+
+pub fn flattenRows(a: Allocator, files: []const FileDiff, mode: DiffMode, collapsed: []const bool) Allocator.Error!Flattened {
+    return flattenRowsWith(a, files, &.{}, null, mode, collapsed);
+}
+
+/// `comment_state_key`: changes whenever a staged comment's identity/body or
+/// the draft anchor does (cheap re-flatten gate).
+pub fn commentStateKey(staged: []const ReviewComment, draft: ?DraftAnchor) u64 {
+    var h = std.hash.Wyhash.init(0);
+    for (staged) |c| {
+        h.update(c.id);
+        h.update(&.{0});
+        h.update(c.body);
+        h.update(&.{0});
+    }
+    if (draft) |d| {
+        h.update("draft:");
+        h.update(d.path);
+        h.update(d.anchor.side.tag());
+        h.update(std.mem.asBytes(&d.anchor.line));
+    }
+    return h.final();
+}
+
+/// `comment_adder_left`: a unified row carries both gutters side by side, and
+/// a deletion numbers in the first.
+pub fn commentAdderLeft(side: comments.CommentSide, gutter_px: f32) f32 {
+    const column: f32 = if (side == .old) 0 else gutter_px;
+    return accent_bar_width + column + (gutter_px - comments.comment_adder_size) / 2;
+}
+
+/// `split_adder_left`: a split row's `+` only appears in the right column.
+pub fn splitAdderLeft(gutter_px: f32) f32 {
+    return accent_bar_width + (gutter_px - comments.comment_adder_size) / 2;
 }
 
 /// Replace one file's body rows (everything after its header) with `new_body`,
@@ -509,4 +618,134 @@ test "resolve diff" {
     try testing.expectEqual(DiffPhase.clean, diffPhase(&d1));
     try testing.expectEqual(DiffPhase.list, diffPhase(&d2));
     try testing.expectEqual(DiffPhase.preparing, diffPhase(null));
+}
+
+const rust_patch =
+    \\diff --git a/src/main.rs b/src/main.rs
+    \\index 111..222 100644
+    \\--- a/src/main.rs
+    \\+++ b/src/main.rs
+    \\@@ -1,4 +1,5 @@ fn main
+    \\ fn main() {
+    \\-    println!("old");
+    \\+    println!("new");
+    \\+    let x = 1;
+    \\ }
+    \\@@ -10,2 +11,2 @@
+    \\ // tail
+    \\-old_line
+    \\+new_line
+    \\
+;
+
+fn diffComment(path: []const u8, side: comments.CommentSide, line: u32, body: []const u8) ReviewComment {
+    return .{ .id = body, .path = path, .line = line, .body = body, .source = .{ .diff = .{ .side = side } } };
+}
+
+test "comments: a split row offers each column its own anchor" {
+    var ps = try diff.parsePatch(testing.allocator, rust_patch);
+    defer ps.deinit();
+    const lines = ps.files[0].hunks[0].lines;
+    const edit = pairAnchors(lines, 1, 2);
+    try testing.expectEqual(DiffAnchor{ .side = .old, .line = 2 }, edit[0].?);
+    try testing.expectEqual(DiffAnchor{ .side = .new, .line = 2 }, edit[1].?);
+    const ctx = pairAnchors(lines, 0, 0);
+    try testing.expectEqual(DiffAnchor{ .side = .new, .line = 1 }, ctx[0].?);
+    try testing.expect(ctx[1] == null);
+    const stranded = pairAnchors(lines, null, 3);
+    try testing.expect(stranded[0] == null);
+    try testing.expectEqual(DiffAnchor{ .side = .new, .line = 3 }, stranded[1].?);
+}
+
+test "comments: split rows carry the comments of both columns" {
+    var ps = try diff.parsePatch(testing.allocator, rust_patch);
+    defer ps.deinit();
+    const a = testing.allocator;
+    var rows: std.ArrayList(DiffRow) = .empty;
+    defer rows.deinit(a);
+    try bodyRowsWith(a, &rows, 0, &ps.files[0], &.{diffComment("src/main.rs", .new, 1, "why")}, null, .split);
+    var cards: usize = 0;
+    for (rows.items) |r| if (r == .comment_card) {
+        cards += 1;
+    };
+    try testing.expectEqual(@as(usize, 1), cards);
+
+    rows.clearRetainingCapacity();
+    const staged = [_]ReviewComment{ diffComment("src/main.rs", .old, 2, "left"), diffComment("src/main.rs", .new, 2, "right") };
+    try bodyRowsWith(a, &rows, 0, &ps.files[0], &staged, null, .split);
+    const edit = for (rows.items, 0..) |r, i| {
+        if (r == .split_line and r.split_line.left == 1) break i;
+    } else return error.TestUnexpectedResult;
+    try testing.expect(rows.items[edit + 1].eql(.{ .comment_card = .{ .file = 0, .card = 0 } }));
+    try testing.expect(rows.items[edit + 2].eql(.{ .comment_card = .{ .file = 0, .card = 1 } }));
+}
+
+test "comments: cards anchor to (side, line) through diff edits" {
+    const a = testing.allocator;
+    const staged = [_]ReviewComment{
+        diffComment("src/main.rs", .old, 2, "why dropped?"),
+        diffComment("src/main.rs", .new, 3, "nit"),
+        diffComment("other.rs", .new, 1, "elsewhere"),
+        .{ .id = "f", .path = "src/main.rs", .line = 1, .body = "file", .source = .file },
+    };
+    var ps = try diff.parsePatch(a, rust_patch);
+    defer ps.deinit();
+    var flat = try flattenRowsWith(a, ps.files, &staged, .{ .path = "src/main.rs", .anchor = .{ .side = .new, .line = 12 } }, .unified, &.{});
+    defer flat.deinit(a);
+    // Unified: the deletion `-old("old")` (L2) and `+let x` (R3) each take their card,
+    // right after their own line; the draft hangs under `+new_line` (R12).
+    var seen: [3]?usize = .{ null, null, null };
+    for (flat.rows.items, 0..) |r, i| switch (r) {
+        .comment_card => |c| seen[c.card] = i,
+        .comment_draft => seen[2] = i,
+        else => {},
+    };
+    const del_row = flat.rows.items[seen[0].? - 1].line;
+    try testing.expectEqual(diff.LineKind.del, ps.files[0].hunks[del_row.hunk].lines[del_row.line].kind);
+    const add_row = flat.rows.items[seen[1].? - 1].line;
+    try testing.expectEqual(@as(?u32, 3), ps.files[0].hunks[add_row.hunk].lines[add_row.line].new_no);
+    const draft_row = flat.rows.items[seen[2].? - 1].line;
+    try testing.expectEqual(@as(?u32, 12), ps.files[0].hunks[draft_row.hunk].lines[draft_row.line].new_no);
+
+    // The patch changes under the staged set: a line inserted above shifts the
+    // new side; R3 is now a context line and the card follows the number, and
+    // the old-side L2 no longer exists in the diff, so its card is not drawn.
+    const edited =
+        \\diff --git a/src/main.rs b/src/main.rs
+        \\--- a/src/main.rs
+        \\+++ b/src/main.rs
+        \\@@ -1,3 +1,4 @@
+        \\+// header
+        \\ fn main() {
+        \\     println!("new");
+        \\     let x = 1;
+        \\
+    ;
+    var ps2 = try diff.parsePatch(a, edited);
+    defer ps2.deinit();
+    var flat2 = try flattenRowsWith(a, ps2.files, &staged, null, .unified, &.{});
+    defer flat2.deinit(a);
+    var cards: usize = 0;
+    for (flat2.rows.items, 0..) |r, i| if (r == .comment_card) {
+        cards += 1;
+        try testing.expectEqual(@as(u32, 1), r.comment_card.card);
+        const l = flat2.rows.items[i - 1].line;
+        try testing.expectEqual(@as(?u32, 3), ps2.files[0].hunks[l.hunk].lines[l.line].new_no);
+    };
+    try testing.expectEqual(@as(usize, 1), cards);
+    // Folded bodies carry their cards' analytic heights.
+    const fc = try commentsFor(a, &staged, "src/main.rs");
+    defer a.free(fc);
+    try testing.expectEqual(bodyHeight(a, &ps.files[0], .unified) + comments.cardHeight("why dropped?") + comments.cardHeight("nit") + comments.draft_card_height,
+        bodyHeightWith(a, &ps.files[0], fc, .{ .side = .new, .line = 12 }, .unified));
+    // The state key moves with bodies and the draft, not with unrelated fields.
+    const k0 = commentStateKey(&staged, null);
+    var edited_staged = staged;
+    edited_staged[1].body = "nit!";
+    try testing.expect(k0 != commentStateKey(&edited_staged, null));
+    edited_staged[1].line = 99;
+    try testing.expectEqual(commentStateKey(&edited_staged, null), commentStateKey(&edited_staged, null));
+    try testing.expect(k0 != commentStateKey(&staged, .{ .path = "a", .anchor = .{ .side = .old, .line = 1 } }));
+    try testing.expectEqual(@as(f32, 3 + 36 + (36 - 16) / 2), commentAdderLeft(.new, 36));
+    try testing.expectEqual(@as(f32, 3 + (36 - 16) / 2), splitAdderLeft(36));
 }

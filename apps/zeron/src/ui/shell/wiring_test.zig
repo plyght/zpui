@@ -437,6 +437,42 @@ test "sign-in URLs open in the browser; Enable sync shows its dialog" {
     try expectCall(.SignIn, &.{"{}"});
 }
 
+test "chat drop zone: files dragged in from another app stage in the composer (non-images skipped)" {
+    var h = try Harness.init();
+    defer h.deinit();
+    h.settle();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    // A valid 1x1 PNG.
+    const b64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+    var png: [128]u8 = undefined;
+    const n = try std.base64.standard.Decoder.calcSizeForSlice(b64);
+    try std.base64.standard.Decoder.decode(png[0..n], b64);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "drop.png", .data = png[0..n] });
+    const path = try std.fmt.allocPrint(testing.allocator, ".zig-cache/tmp/{s}/drop.png", .{&tmp.sub_path});
+    defer testing.allocator.free(path);
+    // Over the conversation (the transcript, not the composer itself).
+    const pill = h.composer().read(h.app).surface_bounds.?;
+    const at: zpui.Point(f32) = .{ .x = pill.origin.x + pill.size.width / 2, .y = pill.origin.y - 200 };
+    const paths = [_][]const u8{ path, "/tmp/readme.md" };
+    _ = h.tw().simulateInput(.{ .file_drop = .{ .entered = .{ .position = at, .paths = &paths } } });
+    _ = h.tw().simulateInput(.{ .file_drop = .{ .pending = .{ .position = at } } });
+    h.tw().frame(true);
+    try testing.expect(h.app.activeDrag(zpui.ExternalPaths) != null);
+    _ = h.tw().simulateInput(.{ .file_drop = .{ .submit = .{ .position = at } } });
+    _ = h.tw().simulateInput(.{ .file_drop = .exited });
+    h.settle();
+    try testing.expect(!h.app.hasActiveDrag());
+    const staged = h.composer().read(h.app).staged();
+    try testing.expectEqual(@as(usize, 1), staged.len);
+    try testing.expectEqualStrings("drop.png", staged[0].name);
+    // A drag that leaves without dropping stages nothing.
+    _ = h.tw().simulateInput(.{ .file_drop = .{ .entered = .{ .position = at, .paths = &paths } } });
+    _ = h.tw().simulateInput(.{ .file_drop = .exited });
+    h.settle();
+    try testing.expectEqual(@as(usize, 1), h.composer().read(h.app).staged().len);
+}
+
 test {
     _ = @import("../sidebar/chat_menu.zig");
     _ = wiring;
@@ -486,4 +522,59 @@ test "spaces menu: right-clicking a project row opens Rename… / Remove…" {
     _ = h.tw().simulateInput(.{ .mouse_up = .{ .button = .right, .position = .{ .x = 110, .y = 131 } } });
     h.settle();
     try testing.expect(h.shell().sidebar.read(h.app).space_ctx != null);
+}
+
+test "explorer rename/delete propagate to open editors (file_mutations.rs)" {
+    var h = try Harness.init();
+    defer h.deinit();
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDirPath(io, "docs");
+    try tmp.dir.writeFile(io, .{ .sub_path = "docs/a.md", .data = "# A\n" });
+    try tmp.dir.writeFile(io, .{ .sub_path = "b.txt", .data = "b\n" });
+    var buf: [4096]u8 = undefined;
+    const n = try tmp.dir.realPath(io, &buf);
+    const root = buf[0..n];
+    const rp = h.shell().right_pane;
+    var explorer: Entity(files.FilesPanel) = undefined;
+    {
+        var l = rp.lease(h.app);
+        defer l.end();
+        const t = l.value.current(&l.cx).?;
+        t.files = try l.cx.newWith(files.WorkspaceFiles, files.WorkspaceFiles.init, .{ io, files.client.Source{ .local = root } });
+        explorer = l.value.explorer(&l.cx).?;
+        l.value.openFile("docs/a.md", &l.cx);
+        l.value.openFile("b.txt", &l.cx);
+    }
+    h.settle();
+    const Emit = struct {
+        fn renamed(_: *files.FilesPanel, cx: *zpui.Context(files.FilesPanel)) void {
+            cx.emit(files.panel.EntryRenamed{ .old_path = "docs", .new_path = "notes" });
+        }
+        fn deleted(_: *files.FilesPanel, cx: *zpui.Context(files.FilesPanel)) void {
+            cx.emit(files.panel.EntryDeleted{ .path = "b.txt" });
+        }
+    };
+    explorer.update(h.app, Emit.renamed, .{});
+    explorer.update(h.app, Emit.deleted, .{});
+    h.settle();
+    var seen: usize = 0;
+    {
+        const t = rp.read(h.app).peek(h.app).?;
+        for (t.tabs.items) |tab| if (tab.surface == .file) {
+            const ed = tab.surface.file.read(h.app);
+            if (std.mem.endsWith(u8, ed.filePath(), "a.md")) {
+                try testing.expectEqualStrings("notes/a.md", ed.filePath());
+                // Markdown documents open rendered.
+                try testing.expect(ed.show_markdown);
+                seen += 1;
+            } else {
+                try testing.expectEqualStrings("b.txt", ed.filePath());
+                try testing.expectEqual(editor.view.Phase.deleted_on_disk, ed.phase);
+                seen += 1;
+            }
+        };
+    }
+    try testing.expectEqual(@as(usize, 2), seen);
 }

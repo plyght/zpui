@@ -92,6 +92,30 @@ pub const Toggle = enum(u8) {
     appshot_sound,
 };
 
+/// The switch's accessible name (zeron's `aria_label` for each settings switch).
+pub fn toggleLabel(t: Toggle) []const u8 {
+    return switch (t) {
+        .compact_mode => "Compact mode",
+        .compact_model_picker => "Compact model picker",
+        .escape_stops => "Stop active agent with Escape",
+        .match_wallpaper => "Match wallpaper colors",
+        .pause_animations => "Pause animations in background",
+        .desktop_notifications => "Desktop notifications",
+        .agent_updates => "Agent update notifications",
+        .background_only => "Only notify when Zeron is in the background",
+        .sound => "Session sounds",
+        .sound_completion => "Task completed sound",
+        .sound_input => "Input required sound",
+        .sound_attention => "Errors and disconnections sound",
+        .dictation => "Dictation",
+        .files_autosave => "Autosave",
+        .files_word_wrap => "Word wrap",
+        .files_show_all => "Show hidden and ignored files",
+        .appshots_enabled => "Capture Appshots",
+        .appshot_sound => "Capture sound",
+    };
+}
+
 pub fn hoverKey(id: SelectId) []const u8 {
     return switch (id) {
         inline else => |t| "settings-select-" ++ @tagName(t),

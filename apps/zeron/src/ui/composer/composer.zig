@@ -50,6 +50,7 @@ const slash = @import("slash.zig");
 const picker_mod = @import("model_picker.zig");
 const mentions = @import("mentions.zig"); // [wiring]
 const extras = @import("extras.zig"); // [wiring] wizard, todo tray, queue drag/lease, @ mentions, provider commands
+const review_chip = @import("review_chip.zig"); // [review-comments]
 const media = @import("zeron_media");
 const att = model.attachments;
 
@@ -234,6 +235,7 @@ pub const ComposerView = struct {
         try self.subs.add(cx.gpa(), try cx.observe(st.workspace, ComposerView.onObserved(model.WorkspaceStore)));
         try self.subs.add(cx.gpa(), try cx.observe(st.catalog, ComposerView.onObserved(model.CatalogStore)));
         try self.subs.add(cx.gpa(), try cx.observe(st.engine, ComposerView.onObserved(model.EngineState)));
+        try self.subs.add(cx.gpa(), try cx.observe(st.review_comments, ComposerView.onObserved(model.ReviewCommentStore))); // [review-comments]
         self.syncKey(cx);
         extras.onStoresChanged(&self, cx); // [wiring] the selected chat's transcript (question wizard)
         return self;
@@ -498,6 +500,7 @@ pub const ComposerView = struct {
 
     /// Forget a deleted chat's draft (`purge_chat`).
     pub fn purgeChat(self: *ComposerView, chat_id: []const u8, cx: *Context(ComposerView)) void {
+        self.state.read(cx).review_comments.update(cx, model.ReviewCommentStore.purge, .{chat_id}); // [review-comments]
         if (self.drafts.fetchRemove(chat_id)) |kv| {
             self.gpa.free(kv.key);
             self.gpa.free(kv.value);
@@ -571,7 +574,7 @@ pub const ComposerView = struct {
     }
 
     fn hasContent(self: *const ComposerView, cx: anytype) bool {
-        return m.composerHasContent(self.input.read(cx).text(), self.staged().len, 0);
+        return m.composerHasContent(self.input.read(cx).text(), self.staged().len, review_chip.count(self.state, self.current_key.items, cx));
     }
 
     pub fn buttonMode(self: *const ComposerView, cx: anytype) m.SendButtonMode {
@@ -580,6 +583,8 @@ pub const ComposerView = struct {
 
     /// New-chat canvas with nothing runnable blocks sends.
     fn sendBlocked(self: *const ComposerView, cx: anytype) bool {
+        // [review-comments] editor comments citing an unsaved buffer wait for the write.
+        if (self.state.read(cx).review_comments.read(cx).flushPending(self.current_key.items)) return true;
         if (self.selectedChat(cx) != null) return false;
         const catalog = self.state.read(cx).catalog.read(cx);
         if (catalog.harnesses == null) return false;
@@ -758,7 +763,8 @@ pub const ComposerView = struct {
         if (self.upload != null) return;
         if (self.staged().len > 0) return self.sendWithAttachments(queue, cx);
         const typed = self.input.read(cx).text();
-        const prompt = self.gpa.dupe(u8, typed) catch @panic("OOM");
+        // [review-comments] staged comments fold into the prompt (`with_comments`).
+        const prompt = model.review_comments.foldPrompt(self.gpa, self.state.read(cx).review_comments.read(cx), self.current_key.items, typed) catch @panic("OOM");
         defer self.gpa.free(prompt);
         const selected = self.selectedChat(cx);
         const is_new = selected == null;
@@ -991,7 +997,7 @@ pub const ComposerView = struct {
 
     fn onUploaded(self: *ComposerView, result: att.UploadResult, cx: *Context(ComposerView)) void {
         defer att.freeUploadResult(self.gpa, result);
-        self.upload_task = .none;
+        self.upload_task.detach(); // releases the handle (assigning .none leaked the task)
         var u = self.upload orelse return;
         self.upload = null;
         defer self.freeUpload(&u, cx.app);
@@ -1024,7 +1030,10 @@ pub const ComposerView = struct {
                 if (!std.mem.eql(u8, seed_device, u.device_id)) cache.seed(cx.app, u.device_id, paths[i], a.name, img);
             }
         }
-        const content = att.withAttachments(gpa, u.typed, refs) catch @panic("OOM");
+        // [review-comments] comments fold before the attachment trailer; cleared once sent.
+        const folded = model.review_comments.foldPrompt(gpa, st.review_comments.read(cx), u.key, u.typed) catch @panic("OOM");
+        defer gpa.free(folded);
+        const content = att.withAttachments(gpa, folded, refs) catch @panic("OOM");
         defer gpa.free(content);
         const resolved = self.picker.read(cx).resolved(cx);
 
@@ -1037,10 +1046,12 @@ pub const ComposerView = struct {
             q.update(cx, model.QueueStore.queueMessage, .{ queue_text, refs, true }) catch {
                 return self.restoreFailedSend(&u, "Send failed", cx);
             };
+            st.review_comments.update(cx, model.ReviewCommentStore.purge, .{u.key}); // [review-comments] sent
             cx.emit(ComposerEvent{ .queued = {} });
             return cx.notify();
         }
         if (u.is_new) {
+            st.review_comments.update(cx, model.ReviewCommentStore.purge, .{u.key}); // [review-comments] sent
             self.startNewChat(u.chat_id, u.message_id, content, refs, transfers.items, resolved, cx);
             return cx.notify();
         }
@@ -1054,6 +1065,7 @@ pub const ComposerView = struct {
         const chat = st.workspace.read(cx).selectedChatRow();
         const cwd = rc.sendCwd(false, null, if (chat) |c| c.cwd else null);
         self.queueRunIn(t, &u.message_id, content, cwd, null, resolved, refs, transfers.items, false, cx);
+        st.review_comments.update(cx, model.ReviewCommentStore.purge, .{u.key}); // [review-comments] sent
         cx.notify();
     }
 
@@ -1151,6 +1163,7 @@ pub const ComposerView = struct {
     }
 
     fn clearAfterSend(self: *ComposerView, cx: *Context(ComposerView)) void {
+        self.state.read(cx).review_comments.update(cx, model.ReviewCommentStore.purge, .{self.current_key.items}); // [review-comments] sent
         self.input.update(cx, TextInput.setText, .{""});
         self.failure.clearRetainingCapacity();
         if (self.drafts.fetchRemove(self.current_key.items)) |kv| {
@@ -1338,7 +1351,8 @@ pub const ComposerView = struct {
 
         // Heights.
         const strip_width_hint = (self.available_width orelse m.composer_max_width) - 2.0 * zt.layout.space_lg - 2.0;
-        const strip_h = m.attachmentStripHeight(self.staged().len, strip_width_hint);
+        const comment_count = review_chip.count(self.state, self.current_key.items, cx); // [review-comments]
+        const strip_h = m.attachmentStripHeight(self.staged().len, strip_width_hint) + model.review_comments.stripHeight(comment_count);
         const base_height = if (expanded) m.composerTotalHeight(content_height) else m.compact_total_height;
         const target_height = base_height + strip_h;
         self.height_morph = m.flipMorphStep(self.height_morph, @abs(target_height - self.last_target_height) > 0.5, self.last_rendered_height, now_ms, reduced, false);
@@ -1374,6 +1388,7 @@ pub const ComposerView = struct {
         const model_action_gap: f32 = if (mic != null) m.action_primary_gap - 6 else m.action_primary_gap;
         const model_picker = div().minW0().maxW(px(surface_width * 0.45)).relative().child(self.picker);
         const strip = self.renderAttachmentStrip(cx);
+        const comments_chip = review_chip.render(comment_count, theme); // [review-comments]
 
         var pill = div()
             .onMouseDown(.left, cx.listener(ComposerView.onPillMouseDown))
@@ -1383,6 +1398,7 @@ pub const ComposerView = struct {
 
         const body = if (expanded)
             pill.h(px(pill_height)).overflowHidden().relative().flex().flexCol()
+                .child(comments_chip)
                 .child(strip)
                 .child(div().h(px(textarea_height)).flexNone().overflowHidden().px(px(16)).pt(px(text_pt)).pb(px(4)).child(self.input))
                 .child(div().absolute().left0().right0().bottom(px(-cluster_dy)).h(px(m.actions_row_height))
@@ -1393,6 +1409,7 @@ pub const ComposerView = struct {
         else blk: {
             const glide: f32 = if (self.flip_morph) |fm| (if (morphing) m.collapseTextGlide(fm.from, morph_t) else 0) else 0;
             break :blk pill.h(px(pill_height)).overflowHidden().flex().flexCol().justifyEnd()
+                .child(comments_chip)
                 .child(strip)
                 .child(div().h(px(m.compact_total_height - m.pill_border_v)).relative().flex().flexRow().itemsCenter()
                     .child(div().flexNone().pl(px(action_inset)).relative().top(px(-cluster_dy)).flex().itemsCenter().gap(px(m.action_utility_gap)).child(attach))
@@ -1636,6 +1653,9 @@ pub const ComposerView = struct {
             };
         }
         row = row.child(left);
+        // The plan-usage ring (account_usage.zig) leads the ring cluster.
+        if (@import("account_usage.zig").ring(cx.app, self.state, self.picker.read(cx).resolved(cx).harness, if (chat) |c| (if (ws.local_device_id) |l| (if (std.mem.eql(u8, l, c.deviceId)) null else c.deviceId) else c.deviceId) else null, theme)) |v|
+            row = row.child(div().flexNone().pl(px(4)).child(v));
         const usage: ?protocol.ContextUsage = if (st.transcript) |t| t.read(cx).context_usage else null;
         if (usage) |u| if (u.window != null and u.window.? > 0) {
             const fraction = u.fraction();

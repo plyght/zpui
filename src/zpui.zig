@@ -77,6 +77,8 @@ pub const WindowHandle = core.app.WindowHandle;
 pub const lifecycle = core.lifecycle;
 pub const Menu = lifecycle.Menu;
 pub const MenuItem = lifecycle.MenuItem;
+/// What an `app.onQuitAsync` listener returns (gpui `on_app_quit` future).
+pub const QuitTeardown = lifecycle.QuitTeardown;
 
 /// Windows, the element protocol, views, focus, paint API (docs/elements.md).
 pub const window = @import("window/window.zig");
@@ -116,6 +118,9 @@ pub const fmt = window.arena_mod.fmt;
 
 /// Built-in elements: div, text, canvas, deferred, anchored, img, svg.
 pub const elements = @import("elements/mod.zig");
+/// Accessibility tree (`div().id(..).role(.button).ariaLabel("Save")`, src/a11y.zig).
+pub const a11y = @import("a11y.zig");
+pub const Role = a11y.Role;
 pub const div = elements.div;
 pub const Div = elements.Div;
 pub const StatefulDiv = elements.StatefulDiv;
@@ -125,6 +130,9 @@ pub const InteractiveText = elements.InteractiveText;
 pub const Highlight = elements.Highlight;
 pub const styledText = elements.styledText;
 pub const canvas = elements.canvas;
+/// Render children from the element's laid-out size (gpui `container_query`).
+pub const containerQuery = elements.containerQuery;
+pub const ContainerQuery = elements.ContainerQuery;
 /// Host a native child view at an element's bounds (`platform.NativeViewId`).
 pub const nativeView = elements.nativeView;
 pub const nativeViewWith = elements.nativeViewWith;
@@ -184,4 +192,6 @@ test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("window/tests.zig");
     _ = @import("window/external_paths.zig");
+    _ = @import("a11y.zig");
+    _ = @import("window/a11y_tests.zig");
 }

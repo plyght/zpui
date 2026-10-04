@@ -38,6 +38,8 @@ pub const Prefs = struct {
     pull_requests: std.StringHashMapUnmanaged(u64) = .empty,
     /// Fixture override for the update strip label (e.g. "Update ready — restart to apply").
     update_label: ?[]const u8 = null,
+    /// Fixture mode: hide the "Star on GitHub" banner (sidebar).
+    star_banner_hidden: bool = false,
     /// Frozen clock for reproducible screenshots.
     now_override: ?model.time.Timestamp = null,
     /// [lifecycle] A write-back to the settings store is queued (`mut`).

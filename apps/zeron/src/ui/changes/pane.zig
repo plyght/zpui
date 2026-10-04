@@ -38,6 +38,7 @@ const m = @import("model.zig");
 const rows = @import("rows.zig");
 const hl = @import("highlight.zig");
 const store_mod = @import("store.zig");
+const comment_ui = @import("comment_ui.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -54,6 +55,8 @@ const protocol = engine_mod.protocol;
 const es = model.engine_state;
 const ChangesStore = store_mod.ChangesStore;
 const Icon = ui.icon.Icon;
+const cm = model.comments;
+const ReviewCommentStore = model.ReviewCommentStore;
 
 const log = std.log.scoped(.zeron_changes);
 
@@ -116,6 +119,28 @@ const DiscardFlow = union(enum) {
 
 const PendingText = struct { file_ix: usize, key: []u8 };
 
+/// The line the pointer is on (`HoverRow`): only one element per anchor ever
+/// takes the hover — the unified row, or a split row's right column.
+const HoverRow = struct { file: u32, side: cm.CommentSide, line: u32 };
+
+/// An open comment composer (`CommentDraft`).
+const CommentDraft = struct {
+    editing_id: ?[]u8 = null,
+    /// The composer key the note stages onto, captured when the card opened.
+    key: []u8,
+    path: []u8,
+    /// The file's pre-rename path, carried onto an old-side citation.
+    old_path: ?[]u8 = null,
+    side: cm.CommentSide,
+    line: u32,
+    input: Entity(input.TextInput),
+    sub: zpui.Subscription,
+
+    fn citePath(self: *const CommentDraft) []const u8 {
+        return if (self.side == .old) (self.old_path orelse self.path) else self.path;
+    }
+};
+
 fn setDiffSplit(v: bool, s: *model.UiSettings, _: Allocator) void {
     s.diffSplit = v;
 }
@@ -171,6 +196,11 @@ pub const ChangesPane = struct {
     /// In-flight `GetCheckoutFileDiffText` calls (FIFO with their replies).
     pending_text: std.ArrayList(PendingText) = .empty,
 
+    // Review comments (`comments.rs` / `comment_ui.rs`).
+    draft: ?CommentDraft = null,
+    hover: ?HoverRow = null,
+    comment_key: u64 = 0,
+
     pub const Events = .{ OpenFile, DiscardRequested };
 
     pub fn init(state: Entity(model.AppState), cx: *Context(ChangesPane)) !ChangesPane {
@@ -190,6 +220,7 @@ pub const ChangesPane = struct {
         try self.subs.add(cx.gpa(), try cx.observe(state, onStateChanged));
         try self.subs.add(cx.gpa(), try cx.observe(s.workspace, onWorkspaceChanged));
         try self.subs.add(cx.gpa(), try cx.subscribe(store, onDiffs));
+        try self.subs.add(cx.gpa(), try cx.observe(s.review_comments, onCommentsChanged));
         return self;
     }
 
@@ -222,6 +253,7 @@ pub const ChangesPane = struct {
             self.gpa.free(c.subject);
         }
         self.clearDiscard();
+        self.dropDraft(app);
         for (self.pending_text.items) |p| self.gpa.free(p.key);
         self.pending_text.deinit(self.gpa);
         self.focus.release(app);
@@ -342,7 +374,10 @@ pub const ChangesPane = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const key = self.parseKey(arena.allocator(), d);
-        if (self.parsed) |p| if (std.mem.eql(u8, p.key, key)) return;
+        if (self.parsed) |p| if (std.mem.eql(u8, p.key, key)) {
+            self.syncCommentRows(cx);
+            return;
+        };
         self.reparse(d, key, cx) catch |err| log.warn("cannot parse diff: {t}", .{err});
         cx.notify();
     }
@@ -372,10 +407,15 @@ pub const ChangesPane = struct {
             .max_text = max_text,
             .scroll = scroll,
         };
+        self.hover = null;
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const staged = self.stagedComments(arena.allocator(), cx);
+        const draft = self.draftAnchor();
         self.flat.deinit(self.gpa);
-        self.flat = try m.flattenRows(self.gpa, ps.files, self.mode, &.{});
+        self.flat = try m.flattenRowsWith(self.gpa, ps.files, staged, draft, self.mode, &.{});
+        self.comment_key = m.commentStateKey(staged, draft);
         self.list.resetWithUniformHeight(self.flat.rows.items.len, px(m.line_height));
-        _ = cx;
     }
 
     fn clearParsed(self: *ChangesPane) void {
@@ -640,9 +680,11 @@ pub const ChangesPane = struct {
 
     // ---- folds ----------------------------------------------------------------------
 
-    fn bodyFor(self: *ChangesPane, a: Allocator, file_ix: usize) []const m.DiffRow {
+    fn bodyFor(self: *ChangesPane, a: Allocator, file_ix: usize, cx: anytype) []const m.DiffRow {
         var out: std.ArrayList(m.DiffRow) = .empty;
-        m.bodyRows(a, &out, @intCast(file_ix), &self.files()[file_ix], self.mode) catch return &.{};
+        const file = &self.files()[file_ix];
+        const fc = self.fileComments(a, cx, file.path);
+        m.bodyRowsWith(a, &out, @intCast(file_ix), file, fc, self.draftAnchorIn(file.path), self.mode) catch return &.{};
         return out.items;
     }
 
@@ -660,11 +702,12 @@ pub const ChangesPane = struct {
         if (self.wrap_lines) {
             fold.collapsed = !fold.collapsed;
             fold.toggled_at_ns = null;
-            self.replaceBody(file_ix, if (fold.collapsed) &.{} else self.bodyFor(a, file_ix));
+            self.replaceBody(file_ix, if (fold.collapsed) &.{} else self.bodyFor(a, file_ix, cx));
             cx.notify();
             return;
         }
-        const expanded = m.bodyHeight(a, &self.files()[file_ix], self.mode);
+        const path = self.files()[file_ix].path;
+        const expanded = m.bodyHeightWith(a, &self.files()[file_ix], self.fileComments(a, cx, path), self.draftAnchorIn(path), self.mode);
         const was = fold.collapsed;
         fold.from = if (was) 0 else expanded;
         fold.to = if (was) expanded else 0;
@@ -704,7 +747,7 @@ pub const ChangesPane = struct {
                 pending = true;
                 continue;
             }
-            self.replaceBody(ix, if (fold.collapsed) &.{} else self.bodyFor(arena.allocator(), ix));
+            self.replaceBody(ix, if (fold.collapsed) &.{} else self.bodyFor(arena.allocator(), ix, cx));
         }
         cx.notify();
         return pending;
@@ -760,12 +803,234 @@ pub const ChangesPane = struct {
         for (self.flat.ranges.items, 0..) |r, i| if (r.contains(top)) {
             anchor = i;
         };
-        const next = m.flattenRows(self.gpa, self.files(), self.mode, self.collapsedMask(arena.allocator())) catch return;
+        const staged = self.stagedComments(arena.allocator(), cx);
+        const draft = self.draftAnchor();
+        const next = m.flattenRowsWith(self.gpa, self.files(), staged, draft, self.mode, self.collapsedMask(arena.allocator())) catch return;
         self.flat.deinit(self.gpa);
         self.flat = next;
+        self.comment_key = m.commentStateKey(staged, draft);
         self.list.resetWithUniformHeight(self.flat.rows.items.len, px(m.line_height));
         if (keep_anchor) if (anchor) |a| if (a < self.flat.ranges.items.len) self.list.scrollToRevealItem(self.flat.ranges.items[a].start);
         cx.notify();
+    }
+
+    // ---- review comments ------------------------------------------------------------
+
+    fn comments(self: *const ChangesPane, cx: anytype) Entity(ReviewCommentStore) {
+        return self.state.read(cx).review_comments;
+    }
+
+    fn composerKey(self: *const ChangesPane, cx: anytype) []const u8 {
+        return self.comments(cx).read(cx).composerKey();
+    }
+
+    /// The selected chat's staged set, minus the comment being edited (its
+    /// draft stands in for it). Shallow copies in `a`.
+    fn stagedComments(self: *const ChangesPane, a: Allocator, cx: anytype) []cm.ReviewComment {
+        const store = self.comments(cx).read(cx);
+        var out: std.ArrayList(cm.ReviewComment) = .empty;
+        const editing: ?[]const u8 = if (self.draft) |d| d.editing_id else null;
+        for (store.comments(store.composerKey())) |c| {
+            if (editing) |id| if (std.mem.eql(u8, id, c.id)) continue;
+            out.append(a, c) catch break;
+        }
+        return out.items;
+    }
+
+    /// `comments_for(path)`: this file's diff comments, in staged order.
+    fn fileComments(self: *const ChangesPane, a: Allocator, cx: anytype, path: []const u8) []cm.ReviewComment {
+        return m.commentsFor(a, self.stagedComments(a, cx), path) catch &.{};
+    }
+
+    fn draftAnchor(self: *const ChangesPane) ?m.DraftAnchor {
+        const d = self.draft orelse return null;
+        return .{ .path = d.path, .anchor = .{ .side = d.side, .line = d.line } };
+    }
+
+    fn draftAnchorIn(self: *const ChangesPane, path: []const u8) ?cm.DiffAnchor {
+        const d = self.draft orelse return null;
+        if (!std.mem.eql(u8, d.path, path)) return null;
+        return .{ .side = d.side, .line = d.line };
+    }
+
+    fn onCommentsChanged(self: *ChangesPane, _: Entity(ReviewCommentStore), cx: *Context(ChangesPane)) void {
+        self.discardStaleDraft(cx);
+        self.syncCommentRows(cx);
+    }
+
+    /// A draft belongs to the checkout it was opened over: chat navigation
+    /// drops it rather than letting it follow the user across.
+    fn discardStaleDraft(self: *ChangesPane, cx: *Context(ChangesPane)) void {
+        const d = self.draft orelse return;
+        if (std.mem.eql(u8, d.key, self.composerKey(cx))) return;
+        self.dropDraft(cx.app);
+        cx.notify();
+    }
+
+    fn dropDraft(self: *ChangesPane, app: *App) void {
+        var d = self.draft orelse return;
+        self.draft = null;
+        d.sub.deinit();
+        d.input.release(app);
+        if (d.editing_id) |id| self.gpa.free(id);
+        if (d.old_path) |o| self.gpa.free(o);
+        self.gpa.free(d.key);
+        self.gpa.free(d.path);
+    }
+
+    /// `sync_comment_rows`: re-splice every steady file body whose cards changed.
+    pub fn syncCommentRows(self: *ChangesPane, cx: *Context(ChangesPane)) void {
+        if (self.parsed == null) return;
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const staged = self.stagedComments(a, cx);
+        const key = m.commentStateKey(staged, self.draftAnchor());
+        if (key == self.comment_key) return;
+        self.comment_key = key;
+        const fs = self.files();
+        var ix = @min(self.flat.ranges.items.len, fs.len);
+        while (ix > 0) {
+            ix -= 1;
+            // A mid-tween stand-in is the settle sweep's to replace.
+            if (self.foldOf(ix).collapsed) continue;
+            const r = self.flat.ranges.items[ix];
+            if (r.start + 1 < self.flat.rows.items.len and r.start + 1 < r.end and self.flat.rows.items[r.start + 1] == .folding_body) continue;
+            self.replaceBody(ix, self.bodyFor(a, ix, cx));
+        }
+        cx.notify();
+    }
+
+    fn setHover(self: *ChangesPane, h: ?HoverRow, cx: *Context(ChangesPane)) void {
+        if (std.meta.eql(h, self.hover)) return;
+        self.hover = h;
+        cx.notify();
+    }
+
+    fn hovering(self: *const ChangesPane, h: HoverRow) bool {
+        return if (self.hover) |cur| std.meta.eql(cur, h) else false;
+    }
+
+    fn onLineMove(self: *ChangesPane, h: HoverRow, _: *const zpui.input.MouseMoveEvent, _: *Window, cx: *Context(ChangesPane)) void {
+        self.setHover(h, cx);
+    }
+
+    fn onLineHover(self: *ChangesPane, h: HoverRow, hovered: *const bool, _: *Window, cx: *Context(ChangesPane)) void {
+        if (!hovered.* and self.hovering(h)) {
+            self.hover = null;
+            cx.notify();
+        }
+    }
+
+    fn onAdderClick(self: *ChangesPane, h: HoverRow, window: *Window, cx: *Context(ChangesPane)) void {
+        const fs = self.files();
+        if (h.file >= fs.len) return;
+        self.openDraft(fs[h.file].path, h.side, h.line, window, cx);
+    }
+
+    /// `open_draft`: a fresh composer card under the line.
+    pub fn openDraft(self: *ChangesPane, path: []const u8, side: cm.CommentSide, line: u32, window: ?*Window, cx: *Context(ChangesPane)) void {
+        const theme = ui.theme.get(cx);
+        const text_input = cx.newWith(input.TextInput, input.TextInput.init, .{input.Options{
+            .placeholder = "Request a change\u{2026}",
+            .colors = .{ .text = theme.text, .placeholder = theme.text_faint, .caret = theme.caret, .selection = theme.selection, .ghost = theme.text_faint },
+        }}) catch return;
+        const sub = cx.subscribe(text_input, onDraftInput) catch {
+            text_input.release(cx);
+            return;
+        };
+        var old_path: ?[]u8 = null;
+        for (self.files()) |f| if (std.mem.eql(u8, f.path, path)) {
+            if (f.old_path) |o| old_path = self.gpa.dupe(u8, o) catch null;
+            break;
+        };
+        const key = self.gpa.dupe(u8, self.composerKey(cx)) catch return;
+        const owned_path = self.gpa.dupe(u8, path) catch {
+            self.gpa.free(key);
+            return;
+        };
+        self.dropDraft(cx.app);
+        self.draft = .{ .key = key, .path = owned_path, .old_path = old_path, .side = side, .line = line, .input = text_input, .sub = sub };
+        if (window) |w| w.focus(text_input.read(cx).focusHandle());
+        self.syncCommentRows(cx);
+        cx.notify();
+    }
+
+    /// `edit_comment`: reopen a staged diff comment's card with its body.
+    pub fn editComment(self: *ChangesPane, id: []const u8, window: *Window, cx: *Context(ChangesPane)) void {
+        self.editCommentIn(id, window, cx);
+    }
+
+    pub fn editCommentIn(self: *ChangesPane, id: []const u8, window: ?*Window, cx: *Context(ChangesPane)) void {
+        const store = self.comments(cx).read(cx);
+        const c = store.find(store.composerKey(), id) orelse return;
+        if (c.isFile()) return;
+        const anchor = c.diffAnchor() orelse return;
+        const path = self.gpa.dupe(u8, c.path) catch return;
+        defer self.gpa.free(path);
+        const body = self.gpa.dupe(u8, c.body) catch return;
+        defer self.gpa.free(body);
+        const old_path: ?[]u8 = if (c.source.diff.old_path) |o| self.gpa.dupe(u8, o) catch null else null;
+        const owned_id = self.gpa.dupe(u8, c.id) catch return;
+        self.openDraft(path, anchor.side, anchor.line, window, cx);
+        const d = if (self.draft) |*dd| dd else {
+            self.gpa.free(owned_id);
+            if (old_path) |o| self.gpa.free(o);
+            return;
+        };
+        d.editing_id = owned_id;
+        if (d.old_path) |o| self.gpa.free(o);
+        d.old_path = old_path;
+        d.input.update(cx, input.TextInput.setText, .{body});
+        self.syncCommentRows(cx);
+        cx.notify();
+    }
+
+    pub fn cancelDraft(self: *ChangesPane, cx: *Context(ChangesPane)) void {
+        self.dropDraft(cx.app);
+        self.syncCommentRows(cx);
+        cx.notify();
+    }
+
+    /// `commit_draft`: stage (or update) the note onto the composer it was
+    /// written against, even if the selection moved under it.
+    pub fn commitDraft(self: *ChangesPane, cx: *Context(ChangesPane)) void {
+        const d = self.draft orelse return;
+        const body = cm.trimUnicode(d.input.read(cx).text());
+        if (body.len > 0) {
+            const store = self.comments(cx);
+            if (d.editing_id) |id| {
+                store.update(cx, ReviewCommentStore.updateBody, .{ d.key, id, body });
+            } else {
+                _ = store.update(cx, ReviewCommentStore.add, .{ d.key, model.review_comments.NewComment{
+                    .path = d.path,
+                    .line = d.line,
+                    .body = body,
+                    .source = .{ .diff = .{ .side = d.side, .old_path = d.old_path } },
+                } }) catch {};
+            }
+        }
+        self.dropDraft(cx.app);
+        self.syncCommentRows(cx);
+        cx.notify();
+    }
+
+    pub fn removeComment(self: *ChangesPane, id: []const u8, cx: *Context(ChangesPane)) void {
+        const store = self.comments(cx);
+        const key = self.gpa.dupe(u8, store.read(cx).composerKey()) catch return;
+        defer self.gpa.free(key);
+        store.update(cx, ReviewCommentStore.remove, .{ key, id });
+        self.syncCommentRows(cx);
+        cx.notify();
+    }
+
+    fn onDraftInput(self: *ChangesPane, _: Entity(input.TextInput), ev: *const input.TextInputEvent, cx: *Context(ChangesPane)) void {
+        switch (ev.*) {
+            .submitted => self.commitDraft(cx),
+            .escape => self.cancelDraft(cx),
+            .edited => cx.notify(),
+            else => {},
+        }
     }
 
     // ---- discard --------------------------------------------------------------------
@@ -1274,11 +1539,27 @@ pub const ChangesPane = struct {
             .line => |l| blk: {
                 const hlx = self.highlightFor(fi, cx);
                 const line = &file.hunks[l.hunk].lines[l.line];
-                break :blk zpui.intoAnyElement(rows.diffLineRow(line, hl.spansFor(hlx, line), theme, m.gutterWidth(file), self.codeWidth(fi, false), .{ .handle = scroll, .id = zpui.fmt("changes-code-row-{d}", .{ix}) }));
+                const gutter = m.gutterWidth(file);
+                const row_el = rows.diffLineRow(line, hl.spansFor(hlx, line), theme, gutter, self.codeWidth(fi, false), .{ .handle = scroll, .id = zpui.fmt("changes-code-row-{d}", .{ix}) });
+                const anchor = m.lineAnchor(line) orelse break :blk zpui.intoAnyElement(row_el);
+                const h: HoverRow = .{ .file = @intCast(fi), .side = anchor.side, .line = anchor.line };
+                var wrapped = div().id(.{ "diff-line", ix }).wFull().relative().child(row_el)
+                    .onMouseMove(cx.listenerWith(h, onLineMove))
+                    .onHover(cx.listenerWith(h, onLineHover));
+                if (self.hovering(h)) wrapped = wrapped.child(comment_ui.positioned(m.commentAdderLeft(anchor.side, gutter), self.adderFor(file.path, h, theme, cx)));
+                break :blk zpui.intoAnyElement(wrapped);
             },
-            .split_line => |s| blk: {
-                const hlx = self.highlightFor(fi, cx);
-                break :blk zpui.intoAnyElement(rows.splitPairRow(&file.hunks[s.hunk], s.left, s.right, hlx, theme, m.gutterWidth(file), self.codeWidth(fi, true), .{ .handle = scroll, .id = zpui.fmt("changes-code-row-{d}-old", .{ix}) }, .{ .handle = scroll, .id = zpui.fmt("changes-code-row-{d}-new", .{ix}) }));
+            .split_line => |s| self.splitRowWithAdder(ix, fi, s.hunk, s.left, s.right, theme, cx),
+            .comment_card => |c| blk: {
+                const fc = self.fileComments(frame(), cx, file.path);
+                if (c.card >= fc.len) break :blk zpui.empty();
+                break :blk zpui.intoAnyElement(comment_ui.card(ChangesPane, &fc[c.card], theme, cx, editComment, removeComment, null));
+            },
+            .comment_draft => blk: {
+                const d = if (self.draft) |*dd| dd else break :blk zpui.empty();
+                if (!std.mem.eql(u8, d.path, file.path)) break :blk zpui.empty();
+                // The header cites the same path the staged card and the prompt bullet will.
+                break :blk zpui.intoAnyElement(comment_ui.draft(ChangesPane, d.citePath(), d.line, d.input, d.editing_id != null, theme, cx, cancelDraft, commitDraft, null));
             },
             .body_pad => zpui.intoAnyElement(div().wFull().h(px(m.body_bottom_pad))),
             .folding_body => blk: {
@@ -1293,6 +1574,39 @@ pub const ChangesPane = struct {
                 break :blk zpui.intoAnyElement(clipped.h(px(fold.to)));
             },
         };
+    }
+
+    fn adderFor(_: *ChangesPane, path: []const u8, h: HoverRow, theme: *const Theme, cx: *Context(ChangesPane)) zpui.StatefulDiv {
+        return comment_ui.adder(ChangesPane, zpui.fmt("cmt-add-{s}-{s}-{d}", .{ path, h.side.tag(), h.line }), theme, cx, h, onAdderClick);
+    }
+
+    /// A split row. The left column is inert (it shows the pre-change file);
+    /// only the right column takes a `+`. Cards for old-side notes still
+    /// render (they are pushed by the row), so switching layouts never hides one.
+    fn splitRowWithAdder(self: *ChangesPane, ix: usize, fi: usize, hunk_ix: u32, left_ix: ?u32, right_ix: ?u32, theme: *const Theme, cx: *Context(ChangesPane)) AnyElement {
+        const file = &self.files()[fi];
+        const hunk = &file.hunks[hunk_ix];
+        const hlx = self.highlightFor(fi, cx);
+        const gutter = m.gutterWidth(file);
+        const width = self.codeWidth(fi, true);
+        const scroll = self.parsed.?.scroll[fi];
+        const sl: rows.CodeScroll = .{ .handle = scroll, .id = zpui.fmt("changes-code-row-{d}-old", .{ix}) };
+        const sr: rows.CodeScroll = .{ .handle = scroll, .id = zpui.fmt("changes-code-row-{d}-new", .{ix}) };
+        const right: ?*const diff.DiffLine = if (right_ix) |i| &hunk.lines[i] else null;
+        const anchor = if (right) |r| m.lineAnchor(r) else null;
+        if (anchor == null or (if (left_ix) |i| hunk.lines[i].kind == .meta else false) or right.?.kind == .meta)
+            return zpui.intoAnyElement(rows.splitPairRow(hunk, left_ix, right_ix, hlx, theme, gutter, width, sl, sr));
+        const r = right.?;
+        const lcell: AnyElement = if (left_ix) |i|
+            zpui.intoAnyElement(rows.splitLineCell(&hunk.lines[i], hunk.lines[i].old_no, hl.spansFor(hlx, &hunk.lines[i]), theme, gutter, width, sl))
+        else
+            zpui.intoAnyElement(rows.splitFiller(theme));
+        const h: HoverRow = .{ .file = @intCast(fi), .side = anchor.?.side, .line = anchor.?.line };
+        var rcell = rows.splitLineCell(r, r.new_no, hl.spansFor(hlx, r), theme, gutter, width, sr).id(.{ "split-new", ix })
+            .onMouseMove(cx.listenerWith(h, onLineMove))
+            .onHover(cx.listenerWith(h, onLineHover));
+        if (self.hovering(h)) rcell = rcell.relative().child(comment_ui.positioned(m.splitAdderLeft(gutter), self.adderFor(file.path, h, theme, cx)));
+        return zpui.intoAnyElement(rows.splitRow(lcell, zpui.intoAnyElement(rcell), width == .wrapped, theme));
     }
 
     fn stickyHeader(self: *ChangesPane, theme: *const Theme, cx: *Context(ChangesPane)) ?zpui.Div {

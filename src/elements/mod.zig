@@ -3,6 +3,7 @@
 pub const div_mod = @import("div.zig");
 pub const text = @import("text.zig");
 pub const canvas_mod = @import("canvas.zig");
+pub const container_query_mod = @import("container_query.zig");
 pub const deferred_mod = @import("deferred.zig");
 pub const anchored_mod = @import("anchored.zig");
 pub const img_mod = @import("img.zig");
@@ -37,6 +38,8 @@ pub const styledText = text.styledText;
 
 pub const canvas = canvas_mod.canvas;
 pub const Canvas = canvas_mod.Canvas;
+pub const containerQuery = container_query_mod.containerQuery;
+pub const ContainerQuery = container_query_mod.ContainerQuery;
 pub const deferred = deferred_mod.deferred;
 pub const Deferred = deferred_mod.Deferred;
 pub const anchored = anchored_mod.anchored;
@@ -87,6 +90,7 @@ test {
     _ = div_mod;
     _ = text;
     _ = canvas_mod;
+    _ = container_query_mod;
     _ = deferred_mod;
     _ = anchored_mod;
     _ = img_mod;

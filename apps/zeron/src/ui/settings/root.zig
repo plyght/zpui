@@ -34,6 +34,7 @@ pub const Section = view.Section;
 test {
     _ = @import("tests.zig");
     _ = @import("runtime_tests.zig");
+    _ = @import("a11y_tests.zig");
     _ = background_adjust;
     _ = file_prompts;
     _ = motion;

@@ -11,6 +11,9 @@
 //! ```
 //! Window-control buttons `occlude()` and `preventDefault` on mouse down so
 //! they never feed the titlebar drag strip underneath.
+//!
+//! Every button is an accessibility `button` node (zeron `.role(Role::Button)`):
+//! icon buttons are named by their tooltip label, text buttons by their text.
 
 const zpui = @import("zpui");
 const theme_mod = @import("theme.zig");
@@ -28,7 +31,7 @@ fn preventDefault(_: *const zpui.input.MouseDownEvent, window: *zpui.Window, _: 
 
 /// 24px titlebar control: rounded 6, glass-hover wash, 16px muted icon.
 pub fn windowControl(id: anytype, i: icon.Icon, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
-    return div().id(id)
+    return div().id(id).role(.button).ariaLabel(label)
         .size(px(24)).flexNone().flex().itemsCenter().justifyCenter()
         .rounded(px(6)).cursorPointer()
         .hover(sb.bg(theme.glassHover()))
@@ -46,7 +49,7 @@ pub fn disabledControl(i: icon.Icon, theme: *const Theme) zpui.Div {
 
 /// 28px main-panel header button (`size-7 rounded-md`), wash 0.11 on hover.
 pub fn headerIcon(id: anytype, i: icon.Icon, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
-    return div().id(id)
+    return div().id(id).role(.button).ariaLabel(label)
         .size(px(28)).flexNone().flex().itemsCenter().justifyCenter()
         .rounded(px(6)).cursorPointer()
         .hover(sb.bg(theme.wash(0.11)))
@@ -58,7 +61,7 @@ pub fn headerIcon(id: anytype, i: icon.Icon, label: []const u8, theme: *const Th
 
 /// Primary solid button: `bg text`, label `on_solid`, 36px, radius 6, 14px medium.
 pub fn solid(id: anytype, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
-    return div().id(id)
+    return div().id(id).role(.button)
         .h(px(36)).px(px(16)).flex().itemsCenter().justifyCenter()
         .rounded(px(6)).bg(theme.text)
         .textSize(theme_mod.rems(14)).fontWeight(500).textColor(theme.on_solid)
@@ -68,7 +71,7 @@ pub fn solid(id: anytype, label: []const u8, theme: *const Theme) zpui.StatefulD
 
 /// Quiet bordered button (gate "Retry"): px 12, py 6, radius 8, 13px.
 pub fn outline(id: anytype, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
-    return div().id(id)
+    return div().id(id).role(.button)
         .px(px(12)).py(px(6)).rounded(px(8))
         .border1().borderColor(theme.border)
         .textSize(theme_mod.rems(13)).textColor(theme.text)
@@ -78,7 +81,7 @@ pub fn outline(id: anytype, label: []const u8, theme: *const Theme) zpui.Statefu
 
 /// Ghost text button with an optional leading icon (menus / banners).
 pub fn ghost(id: anytype, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
-    return div().id(id)
+    return div().id(id).role(.button)
         .h(px(28)).px(px(8)).flex().itemsCenter().gap(px(6))
         .rounded(px(8)).textSize(theme_mod.rems(13)).textColor(theme.text.opacity(0.8))
         .cursorPointer().hover(sb.bg(theme.glassHover()).textColor(theme.text))

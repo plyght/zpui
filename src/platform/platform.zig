@@ -13,6 +13,8 @@ const geometry = @import("../geometry.zig");
 const input = @import("../input.zig");
 const scene_mod = @import("../scene.zig");
 const atlas_mod = @import("../atlas.zig");
+/// The accessibility tree handed to window backends (`Window.VTable.a11yUpdate`).
+pub const a11y = @import("../a11y.zig");
 
 pub const Pixels = geometry.Pixels;
 pub const DevicePixels = geometry.DevicePixels;
@@ -182,6 +184,11 @@ pub const WindowCallbacks = struct {
     should_close: ?*const fn (ctx: ?*anyopaque) bool = null,
     close: ?*const fn (ctx: ?*anyopaque) void = null,
     appearance_changed: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// Assistive technology asks for an action on a node (`a11y.ActionRequest`).
+    a11y_action: ?*const fn (ctx: ?*anyopaque, request: a11y.ActionRequest) void = null,
+    /// Assistive technology started (true) or stopped (false) using this window: the
+    /// core builds the tree only while active and redraws on activation.
+    a11y_activation: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
 };
 
 /// gpui `PlatformWindow`. Owned by the platform; destroyed via `close` + the `close` callback.
@@ -262,6 +269,12 @@ pub const Window = struct {
         /// native glass above a transparent (alpha 0) region samples the desktop itself
         /// rather than the app's blurred backdrop. null = no hole.
         setBackdropHole: ?*const fn (ptr: *anyopaque, hole: ?BackdropHole) void = null,
+
+        // -- accessibility (optional; see `a11y.zig`) ----------------------------------------
+        /// A frame's finalized accessibility tree and what changed since the last one. The
+        /// tree stays valid (the backend may keep the pointer and answer queries from it)
+        /// until the next call or until the window closes.
+        a11yUpdate: ?*const fn (ptr: *anyopaque, update: a11y.Update) void = null,
     };
 
     /// Whether this backend can host native child views (`attachNativeView`).
@@ -294,6 +307,12 @@ pub const Window = struct {
     }
     pub fn setBackdropHole(w: Window, hole: ?BackdropHole) void {
         if (w.vtable.setBackdropHole) |f| f(w.ptr, hole);
+    }
+    pub fn supportsA11y(w: Window) bool {
+        return w.vtable.a11yUpdate != null;
+    }
+    pub fn a11yUpdate(w: Window, update: a11y.Update) void {
+        if (w.vtable.a11yUpdate) |f| f(w.ptr, update);
     }
 
     pub fn setCallbacks(w: Window, cbs: WindowCallbacks) void {

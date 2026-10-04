@@ -182,6 +182,14 @@ fn SvgImpl(comptime stateful: bool) type {
         pub const tooltipWith = IM.tooltipWith;
         pub const hoverableTooltip = IM.hoverableTooltip;
         pub const tooltipShowDelay = IM.tooltipShowDelay;
+        pub const role = IM.role;
+        pub const ariaLabel = IM.ariaLabel;
+        pub const ariaDescription = IM.ariaDescription;
+        pub const ariaSelected = IM.ariaSelected;
+        pub const ariaExpanded = IM.ariaExpanded;
+        pub const ariaToggled = IM.ariaToggled;
+        pub const ariaDisabled = IM.ariaDisabled;
+        pub const onA11yAction = IM.onA11yAction;
 
         pub const withAnimation = @import("animation.zig").Ext(Self).withAnimation;
         pub const withAnimationCtx = @import("animation.zig").Ext(Self).withAnimationCtx;
@@ -2547,6 +2555,10 @@ pub const SvgElement = struct {
 
     pub fn elementId(self: *SvgElement) ?element.ElementId {
         return self.d.interactivity.element_id;
+    }
+
+    pub fn a11yNode(self: *SvgElement, gid: element.GlobalElementId, bounds: Bounds, window: *Window) ?@import("../a11y.zig").NodeSpec {
+        return self.d.interactivity.a11yNode(gid, bounds, window);
     }
 
     pub fn requestLayout(self: *SvgElement, gid: ?element.GlobalElementId, _: *void, window: *Window, cx: *App) element.LayoutId {

@@ -165,7 +165,32 @@ pub const MutationOutcome = union(enum) {
 };
 
 /// Request params (`WorkspaceTarget` is flattened into each).
+/// `MAX_WORKSPACE_IMAGE_BYTES` / `WORKSPACE_IMAGE_CHUNK_BYTES`.
+pub const max_workspace_image_bytes: usize = 8 * 1024 * 1024;
+pub const workspace_image_chunk_bytes: usize = 384 * 1024;
+
+/// `WorkspaceImageChunk`: base64 `data` from the request offset to `nextOffset`.
+pub const ImageChunk = struct {
+    checkoutId: []const u8,
+    contentHash: []const u8,
+    mimeType: []const u8,
+    data: []const u8,
+    nextOffset: u64,
+    size: u64,
+    done: bool,
+};
+
 pub const params = struct {
+    /// `ReadWorkspaceImageRequest`.
+    pub const ReadImage = struct {
+        chatId: ?[]const u8 = null,
+        spaceId: ?[]const u8 = null,
+        checkoutPath: ?[]const u8 = null,
+        path: []const u8,
+        expectedCheckoutId: []const u8,
+        offset: u64 = 0,
+        expectedContentHash: ?[]const u8 = null,
+    };
     pub const ListDirectory = struct {
         chatId: ?[]const u8 = null,
         spaceId: ?[]const u8 = null,

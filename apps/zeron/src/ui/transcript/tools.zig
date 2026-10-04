@@ -111,9 +111,25 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
     const now = cx.app.executor.now();
     const reduced = window.prefersReducedMotion();
     const fold = self.folds.get(row.key) orelse Fold{};
-    const collapses = g.collapses;
+    const compact = self.compact_mode;
+    // Compact mode: EVERYTHING sits under the one work accordion, spawn chips included.
+    const collapses = compact or g.collapses;
     const open = !collapses or (fold.open orelse g.auto_open);
-    const active = collapses and g.auto_open;
+    // The title shimmer reads "working" even under the collapsed compact fold.
+    var any_unresolved = false;
+    for (g.tools) |t| if (!t.resolved) {
+        any_unresolved = true;
+    };
+    const active = collapses and (g.auto_open or (compact and any_unresolved));
+    if (compact and active) self.compact_live.put(self.gpa, row.key, {}) catch {};
+    const worked_secs: ?i64 = if (compact) g.worked_secs else null;
+    if (worked_secs != null and self.compact_live.remove(row.key)) self.compact_worked_fade_at.put(self.gpa, row.key, now) catch {};
+    const fade_ns = motion.fade_in.totalNs(1.0);
+    const animate_worked = if (self.compact_worked_fade_at.get(row.key)) |at| now -| at < fade_ns else false;
+    const worked_fade_t: f32 = if (worked_secs == null) 0 else if (animate_worked and !reduced)
+        motion.fade_in.progress(@as(f32, @floatFromInt(now -| self.compact_worked_fade_at.get(row.key).?)) / @as(f32, @floatFromInt(fade_ns)))
+    else
+        1;
 
     // Per-chip detail state.
     const base_row_height: f32 = if (collapses) tool_tree_row_height else chip_height;
@@ -124,7 +140,8 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
     for (g.tools, 0..) |t, ix| {
         const expandable = !t.isSpawnLink() and (t.body != null or t.invocation != null);
         const df = self.details.get(detailKey(row.key, ix)) orelse Fold{};
-        const default_open = t.kind == .thought and !t.resolved;
+        // Compact mode overrides it all: nothing inside the fold opens itself.
+        const default_open = t.kind == .thought and !t.resolved and !compact;
         opens[ix] = expandable and (df.open orelse default_open);
         var target = base_row_height;
         if (opens[ix]) {
@@ -145,7 +162,7 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
     if (fp < 1) animating = true;
     const body_h = if (fold.toggled_at != null and fp < 1) lerp(fold.from, target_h, fp) else target_h;
     const disclosure: f32 = if (fold.toggled_at != null and fp < 1) (if (open) fp else 1 - fp) else if (open) 1 else 0;
-    if (animating or active) window.requestAnimationFrame();
+    if (animating or active or animate_worked) window.requestAnimationFrame();
 
     var group = div().relative().flex().flexCol().fontFamily(theme.font_sans_fixed);
     if (collapses) {
@@ -153,15 +170,17 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
         const header = div().id(.{ "tg-hdr", row.key }).relative().flex().flexRow().itemsCenter().gap(px(6)).pr(px(4))
             .h(px(tool_group_header_height)).cursorPointer().textSize(px(tool_text_size)).lineHeight(px(tool_label_line_height))
             .textColor(theme.text_muted).hover(sb.textColor(theme.text)).group("tg-hdr")
-            .onClick(cx.listenerWith(GroupToggle{ .key = row.key, .height = body_h, .auto_open = g.auto_open }, TranscriptView.onToggleGroup))
+            .onClick(cx.listenerWith(GroupToggle{ .key = row.key, .height = body_h, .auto_open = g.auto_open, .compact_shell = g.compact_shell }, TranscriptView.onToggleGroup))
             .child(div().w(px(22)).h(px(18)).flexNone().relative().child(
                 rotatedIcon(.alt_arrow_down, 14, -std.math.pi / 2.0 * (1 - disclosure), theme.text_muted)
                     .absolute().left(px(activity_trunk_x - 7)).top(px(2)),
             ))
             .child(div().minW0().h(px(tool_label_line_height)).flex().itemsCenter().overflowHidden()
-                .child(groupTitle(g.summary, shimmer, theme)));
+                .child(if (worked_secs) |secs| compactWorkTitle(g.summary, workedForLabel(secs), worked_fade_t, shimmer, theme) else groupTitle(g.summary, shimmer, theme)));
         group = group.child(header);
     }
+    // A compact shell's expanded content is its sibling body rows.
+    if (g.compact_shell) return zpui.intoAnyElement(group);
     if (open or body_h > 0) {
         var chips = div().pt(px(chips_top_pad)).flex().flexCol();
         for (g.tools, 0..) |t, ix| chips = chips.child(chipRow(self, row, t, ix, g.tools.len, collapses, opens[ix], heights[ix], theme, cx));
@@ -170,7 +189,25 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
     return zpui.intoAnyElement(group);
 }
 
-pub const GroupToggle = struct { key: u64, height: f32, auto_open: bool };
+pub const GroupToggle = struct { key: u64, height: f32, auto_open: bool, compact_shell: bool = false };
+
+/// `worked_for_label`: "Worked for 5m 10s" (frame arena).
+pub fn workedForLabel(secs: i64) []const u8 {
+    var buf: [32]u8 = undefined;
+    return zpui.fmt("Worked for {s}", .{rows.formatElapsed(&buf, secs)});
+}
+
+/// `compact_work_title`: the live tool summary crossfades into "Worked for"
+/// (`t` 0 = summary, 1 = duration; the duration rises 4px as it fades in).
+fn compactWorkTitle(summary: []const u8, worked: []const u8, t: f32, shimmer: ?f32, theme: *const Theme) AnyElement {
+    if (t >= 1) return groupTitle(worked, null, theme);
+    if (t <= 0) return groupTitle(summary, shimmer, theme);
+    return zpui.intoAnyElement(div().relative().minW0().wFull().h(px(tool_label_line_height))
+        .child(div().absolute().left0().right0().top0().h(px(tool_label_line_height)).flex().itemsCenter().overflowHidden()
+            .opacity(1 - t).child(groupTitle(summary, null, theme)))
+        .child(div().relative().top(px(4 * (1 - t))).h(px(tool_label_line_height)).flex().itemsCenter().overflowHidden()
+            .opacity(t).child(groupTitle(worked, null, theme))));
+}
 pub const DetailToggle = struct { key: u64, height: f32, open: bool };
 
 /// The summary title; while the group is live a soft highlight sweeps across

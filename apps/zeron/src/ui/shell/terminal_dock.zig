@@ -14,6 +14,8 @@ const zpui = @import("zpui");
 const zt = @import("zeron_theme");
 const term = @import("zeron_terminal");
 const ui = @import("../components/root.zig");
+const model = @import("zeron_model");
+const engine = @import("zeron_engine");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -51,6 +53,70 @@ pub const TerminalDock = struct {
     title_len: usize = 0,
     /// Draw the dock chrome (tab bar + top border); off for right-pane surfaces.
     chrome: bool = true,
+    /// [project-actions] An engine-owned PTY (`RunProjectAction`'s terminal):
+    /// streamed with `SubscribeTerminal`, typed into with `WriteTerminal`.
+    remote: ?*Remote = null,
+
+    pub const Remote = struct {
+        engine: zpui.Entity(model.EngineState),
+        terminal_id: []u8,
+        target: ?[]u8,
+        watch: model.engine_state.Watch = .{},
+        stream: term.DataStream = .{},
+    };
+
+    const WriteParams = struct { terminalId: []const u8, data: []const u8, targetDeviceId: ?[]const u8 = null };
+    const ResizeParams = struct { terminalId: []const u8, cols: u16, rows: u16, targetDeviceId: ?[]const u8 = null };
+    const SubscribeParams = struct { terminalId: []const u8, afterSeq: ?u64 = null, targetDeviceId: ?[]const u8 = null };
+
+    /// [project-actions] A tab attached to an engine terminal session (no local
+    /// PTY); `title` names the tab (the action's name).
+    pub fn initEngine(io: std.Io, es: zpui.Entity(model.EngineState), session: engine.protocol.TerminalSession, target: ?[]const u8, title: []const u8, window: *Window, cx: *Context(TerminalDock)) !TerminalDock {
+        const gpa = cx.gpa();
+        const emu = try term.Emulator.create(gpa, .{ .cols = 80, .rows = 24, .io = io });
+        errdefer emu.destroy();
+        var self: TerminalDock = .{ .gpa = gpa, .io = io, .emu = emu, .focus = cx.focusHandle(), .cols = 80, .rows = 24 };
+        self.applyPalette(cx);
+        const n = @min(title.len, self.title_buf.len);
+        @memcpy(self.title_buf[0..n], title[0..n]);
+        self.title_len = n;
+        const r = try gpa.create(Remote);
+        errdefer gpa.destroy(r);
+        r.* = .{ .engine = es.retain(cx), .terminal_id = try gpa.dupe(u8, session.id), .target = if (target) |t| try gpa.dupe(u8, t) else null };
+        self.remote = r;
+        self.subscribeRemote(cx);
+        self.poll_task = try cx.timer(16 * std.time.ns_per_ms, onPoll);
+        window.focus(self.focus);
+        return self;
+    }
+
+    fn subscribeRemote(self: *TerminalDock, cx: anytype) void {
+        const r = self.remote orelse return;
+        const conn = r.engine.read(cx).conn orelse return;
+        r.watch.open(conn, .SubscribeTerminal, SubscribeParams{ .terminalId = r.terminal_id, .afterSeq = r.stream.afterSeq(), .targetDeviceId = r.target }) catch {};
+    }
+
+    fn sendRemote(self: *TerminalDock, cx: anytype, bytes: []const u8) void {
+        const r = self.remote orelse return;
+        const b64 = term.session.encodeBase64(self.gpa, bytes) catch return;
+        defer self.gpa.free(b64);
+        model.EngineState.send(r.engine, cx, .WriteTerminal, WriteParams{ .terminalId = r.terminal_id, .data = b64, .targetDeviceId = r.target }) catch {};
+    }
+
+    fn pollRemote(self: *TerminalDock, cx: anytype) bool {
+        const r = self.remote orelse return false;
+        var changed = false;
+        while (r.watch.next()) |payload| {
+            defer payload.deinit();
+            const ev = std.json.parseFromValueLeaky(engine.protocol.TerminalEvent, payload.arena.allocator(), payload.value, engine.rpc.decode_options) catch continue;
+            const applied = r.stream.apply(self.gpa, self.emu, term.session.Event.fromProtocol(ev)) catch continue;
+            if (applied.responses.len > 0) self.sendRemote(cx, applied.responses);
+            if (applied.disposition == .stop) self.exited = true;
+            changed = true;
+        }
+        if (!self.exited and r.watch.isOpen() and r.watch.end(null) != .open) r.watch.close();
+        return changed;
+    }
 
     pub const Events = .{Hide};
 
@@ -77,6 +143,14 @@ pub const TerminalDock = struct {
 
     pub fn deinit(self: *TerminalDock, app: *App) void {
         self.poll_task.cancel();
+        if (self.remote) |r| {
+            r.watch.close();
+            r.stream.deinit(self.gpa);
+            r.engine.release(app);
+            self.gpa.free(r.terminal_id);
+            if (r.target) |t| self.gpa.free(t);
+            self.gpa.destroy(r);
+        }
         if (has_pty) if (self.pty) |*p| p.deinit();
         self.emu.destroy();
         self.focus.release(app);
@@ -99,7 +173,7 @@ pub const TerminalDock = struct {
     }
 
     fn onPoll(self: *TerminalDock, cx: *Context(TerminalDock)) void {
-        var changed = false;
+        var changed = self.pollRemote(cx);
         if (has_pty) if (self.pty) |*p| {
             var buf: [16 * 1024]u8 = undefined;
             var rounds: usize = 0;
@@ -123,6 +197,15 @@ pub const TerminalDock = struct {
     }
 
     fn onKey(self: *TerminalDock, ev: *const zpui.input.KeyDownEvent, _: *Window, cx: *Context(TerminalDock)) void {
+        if (self.remote != null) {
+            var rbuf: [64]u8 = undefined;
+            const bytes = term.keys.encode(self.emu, term.keys.fromKeystroke(ev.keystroke), &rbuf) orelse return;
+            self.emu.scrollToBottom();
+            self.sendRemote(cx, bytes);
+            cx.stopPropagation();
+            cx.notify();
+            return;
+        }
         if (!has_pty) return;
         const p = if (self.pty) |*pp| pp else return;
         var buf: [64]u8 = undefined;
@@ -172,6 +255,7 @@ pub const TerminalDock = struct {
             self.rows = rows;
             self.emu.resize(cols, rows) catch {};
             if (has_pty) if (self.pty) |*p| p.resize(cols, rows);
+            if (self.remote) |r| model.EngineState.send(r.engine, app, .ResizeTerminal, ResizeParams{ .terminalId = r.terminal_id, .cols = cols, .rows = rows, .targetDeviceId = r.target }) catch {};
         }
         const snap = self.emu.snapshot() catch return;
         var plan = term.paint.build(self.gpa, snap, &pal) catch return;
@@ -266,6 +350,7 @@ pub const TerminalDock = struct {
 
 /// The surface title (OSC title, else "Terminal").
 pub fn surfaceTitle(self: *const TerminalDock) []const u8 {
+    if (self.title_len > 0 and self.remote != null) return self.title_buf[0..self.title_len];
     return self.emu.title() orelse "Terminal";
 }
 

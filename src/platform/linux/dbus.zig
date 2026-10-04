@@ -51,6 +51,17 @@ pub const Builder = struct {
         try b.buf.appendSlice(b.gpa, s);
         try b.u8_(0);
     }
+    pub fn i32_(b: *Builder, v: i32) !void {
+        try b.u32_(@bitCast(v));
+    }
+    pub fn i16_(b: *Builder, v: i16) !void {
+        try b.pad(2);
+        try b.buf.appendSlice(b.gpa, std.mem.asBytes(&std.mem.nativeToLittle(i16, v)));
+    }
+    pub fn f64_(b: *Builder, v: f64) !void {
+        try b.pad(8);
+        try b.buf.appendSlice(b.gpa, std.mem.asBytes(&std.mem.nativeToLittle(u64, @bitCast(v))));
+    }
     pub fn field(b: *Builder, code: HeaderField, type_sig: u8, value: []const u8) !void {
         try b.pad(8);
         try b.u8_(@intFromEnum(code));
@@ -109,6 +120,54 @@ pub fn buildCall(gpa: Allocator, call: Call) ![]u8 {
     return b.buf.toOwnedSlice(gpa);
 }
 
+/// Any outgoing message (method returns, errors and signals for objects we export).
+pub const OutMessage = struct {
+    type: MessageType,
+    serial: u32,
+    flags: u8 = 0,
+    path: ?[]const u8 = null,
+    interface: ?[]const u8 = null,
+    member: ?[]const u8 = null,
+    error_name: ?[]const u8 = null,
+    reply_serial: ?u32 = null,
+    destination: ?[]const u8 = null,
+    signature: []const u8 = "",
+    /// Marshalled body (aligned from offset 0).
+    body: []const u8 = "",
+};
+
+/// Marshals any message; caller frees.
+pub fn buildMessage(gpa: Allocator, m: OutMessage) ![]u8 {
+    var b: Builder = .{ .gpa = gpa };
+    errdefer b.buf.deinit(gpa);
+    try b.u8_('l');
+    try b.u8_(@intFromEnum(m.type));
+    try b.u8_(m.flags);
+    try b.u8_(1);
+    try b.u32_(@intCast(m.body.len));
+    try b.u32_(m.serial);
+    const fields_len_at = b.buf.items.len;
+    try b.u32_(0);
+    const fields_start = b.buf.items.len;
+    if (m.path) |v| try b.field(.path, 'o', v);
+    if (m.interface) |v| try b.field(.interface, 's', v);
+    if (m.member) |v| try b.field(.member, 's', v);
+    if (m.error_name) |v| try b.field(.error_name, 's', v);
+    if (m.reply_serial) |v| {
+        try b.pad(8);
+        try b.u8_(@intFromEnum(HeaderField.reply_serial));
+        try b.sig("u");
+        try b.u32_(v);
+    }
+    if (m.destination) |v| try b.field(.destination, 's', v);
+    if (m.signature.len > 0) try b.field(.signature, 'g', m.signature);
+    const fields_len: u32 = @intCast(b.buf.items.len - fields_start);
+    @memcpy(b.buf.items[fields_len_at..][0..4], std.mem.asBytes(&std.mem.nativeToLittle(u32, fields_len)));
+    try b.pad(8);
+    try b.buf.appendSlice(gpa, m.body);
+    return b.buf.toOwnedSlice(gpa);
+}
+
 /// A parsed message; slices point into the receive buffer.
 pub const Message = struct {
     type: MessageType,
@@ -119,8 +178,12 @@ pub const Message = struct {
     interface: []const u8 = "",
     member: []const u8 = "",
     error_name: []const u8 = "",
+    sender: []const u8 = "",
+    destination: []const u8 = "",
     signature: []const u8 = "",
     body: []const u8 = "",
+    /// Header flags (bit 0: NO_REPLY_EXPECTED).
+    flags: u8 = 0,
 };
 
 /// Bounds-checked reader over a message region (alignment is relative to `base`).
@@ -282,7 +345,7 @@ pub fn parseMessage(bytes: []const u8) ParseError!Message {
     var r: Reader = .{ .bytes = msg_bytes, .pos = 0, .big = msg_bytes[0] == 'B' };
     _ = try r.byte();
     var m: Message = .{ .type = @enumFromInt(try r.byte()), .big_endian = r.big, .serial = 0 };
-    _ = try r.byte(); // flags
+    m.flags = try r.byte();
     _ = try r.byte(); // version
     const body_len = try r.u32_();
     m.serial = try r.u32_();
@@ -307,6 +370,8 @@ pub fn parseMessage(bytes: []const u8) ParseError!Message {
                     .interface => m.interface = s,
                     .member => m.member = s,
                     .error_name => m.error_name = s,
+                    .sender => m.sender = s,
+                    .destination => m.destination = s,
                     else => {},
                 }
             },
@@ -519,6 +584,24 @@ pub const Connection = struct {
         defer c.gpa.free(bytes);
         if (!writeAll(c.fd, bytes)) return error.WriteFailed;
         return cl.serial;
+    }
+
+    /// Next outgoing serial.
+    pub fn nextSerial(c: *Connection) u32 {
+        const s = c.serial;
+        c.serial +%= 1;
+        if (c.serial == 0) c.serial = 1;
+        return s;
+    }
+
+    /// Send any message (its serial is assigned here); returns the serial.
+    pub fn sendMessage(c: *Connection, m: OutMessage) !u32 {
+        var out = m;
+        out.serial = c.nextSerial();
+        const bytes = try buildMessage(c.gpa, out);
+        defer c.gpa.free(bytes);
+        if (!writeAll(c.fd, bytes)) return error.WriteFailed;
+        return out.serial;
     }
 
     /// `org.freedesktop.DBus.AddMatch(rule)`, waiting for the reply.

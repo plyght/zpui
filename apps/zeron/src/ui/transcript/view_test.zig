@@ -73,3 +73,50 @@ test "transcript view builds rows from a fixture and renders" {
     try std.testing.expect(v.rowAt(1).kind == .tool_group);
     try std.testing.expectEqualStrings("Thought process · Ran 1 command · edited 1 file", v.rowAt(1).kind.tool_group.summary);
 }
+
+test "compact mode folds the work into one header that opens in place" {
+    const app = try App.initTest(std.testing.allocator);
+    defer app.deinit();
+    const es = try makeStore(app);
+    defer es[0].release(app);
+    defer es[1].release(app);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const entries = try view.parseFixture(arena.allocator(), fixture);
+    entries[1].durationMs = 12_400;
+    try view.loadEntries(es[1], entries, app);
+
+    const tv = try app.newWith(view.TranscriptView, view.TranscriptView.initWithStore, .{es[1]});
+    defer tv.release(app);
+    const Set = struct {
+        fn on(t: *view.TranscriptView, _: *Context(view.TranscriptView)) void {
+            t.setCompactMode(true);
+        }
+        fn toggle(t: *view.TranscriptView, cx: *Context(view.TranscriptView)) void {
+            // Reduced motion: the body mounts / unmounts instantly.
+            t.toggleCompactFold(t.rowAt(1).key, true, cx);
+        }
+    };
+    tv.update(app, Set.on, .{});
+    const Init = struct {
+        fn f(t: Entity(view.TranscriptView), _: *zpui.Window, _: *Context(Root)) Root {
+            return .{ .tv = t };
+        }
+    };
+    _ = try app.openWindow(.{ .bounds = .{ .origin = .zero, .size = .{ .width = 1200, .height = 900 } } }, Root, Init.f, .{tv.retain(app)});
+    app.runUntilParked();
+    // user bubble, the work header, then the reply's three blocks.
+    try std.testing.expectEqual(@as(usize, 5), tv.read(app).rowCount());
+    const hdr = tv.read(app).rowAt(1).kind.tool_group;
+    try std.testing.expect(hdr.compact_shell);
+    try std.testing.expectEqual(@as(?i64, 12), hdr.worked_secs);
+    tv.update(app, Set.toggle, .{});
+    app.runUntilParked();
+    // Open: the ordinary tool group for the work parts sits under the header.
+    try std.testing.expectEqual(@as(usize, 6), tv.read(app).rowCount());
+    try std.testing.expect(tv.read(app).rowAt(2).compact_fold != null);
+    tv.update(app, Set.toggle, .{});
+    app.runUntilParked();
+    try std.testing.expectEqual(@as(usize, 5), tv.read(app).rowCount());
+}

@@ -50,6 +50,8 @@ pub const view = @import("view.zig");
 pub const input_handler = @import("input_handler.zig");
 pub const image = @import("image.zig");
 pub const liquid_glass_mod = @import("liquid_glass.zig"); // [liquid-glass]
+/// Accessibility tree (src/a11y.zig).
+pub const a11y = @import("../a11y.zig");
 
 const Captures = callback.Captures;
 const ElementArena = arena_mod.ElementArena;
@@ -241,6 +243,9 @@ pub const DeferredDraw = struct {
 /// Lengths of every per-frame list touched in prepaint (gpui `PrepaintStateIndex`).
 pub const PrepaintIndex = struct {
     hitboxes: usize = 0,
+    a11y_nodes: usize = 0,
+    a11y_pieces: usize = 0,
+    a11y_listeners: usize = 0,
     tooltips: usize = 0,
     deferred_draws: usize = 0,
     dispatch_tree: usize = 0,
@@ -259,6 +264,13 @@ pub const PaintIndex = struct {
     line_layout: text_mod.LineLayoutIndex = .{},
     native_views: usize = 0,
     overlay_ranges: usize = 0,
+};
+
+/// An `onA11yAction` registration for one node of the frame's accessibility tree.
+pub const A11yListener = struct {
+    node: a11y.NodeId,
+    action: a11y.Action,
+    listener: @import("../app/context.zig").Listener(a11y.ActionRequest),
 };
 
 /// One native child view painted this frame (`Window.paintNativeView`).
@@ -309,9 +321,12 @@ pub const Frame = struct {
     overlay_capture_input: bool = false,
     /// [liquid-glass] `Window.paintBackdropHole` of this frame (last one wins).
     backdrop_hole: ?platform.BackdropHole = null,
+    /// Accessibility tree, built while accessibility is active (`Window.a11yActive`).
+    a11y: a11y.Tree,
+    a11y_listeners: std.ArrayList(A11yListener) = .empty,
 
     fn init(gpa: Allocator, keymap: *const @import("../app/keymap.zig").Keymap) Frame {
-        return .{ .gpa = gpa, .dispatch_tree = .init(gpa, keymap) };
+        return .{ .gpa = gpa, .dispatch_tree = .init(gpa, keymap), .a11y = .init(gpa) };
     }
 
     fn deinit(self: *Frame, app: *App) void {
@@ -329,6 +344,8 @@ pub const Frame = struct {
         self.tab_stops.deinit(self.gpa);
         self.native_views.deinit(self.gpa);
         self.overlay_ranges.deinit(self.gpa);
+        self.a11y.deinit();
+        self.a11y_listeners.deinit(self.gpa);
     }
 
     /// Reset for reuse. Element states still here were not carried into the newer frame,
@@ -350,6 +367,8 @@ pub const Frame = struct {
         self.native_views.clearRetainingCapacity();
         self.overlay_ranges.clearRetainingCapacity();
         self.overlay_capture_input = false;
+        self.a11y.clear();
+        self.a11y_listeners.clearRetainingCapacity();
         self.backdrop_hole = null; // [liquid-glass]
         self.focus = null;
         self.window_active = false;
@@ -525,6 +544,11 @@ pub const Window = struct {
     /// `onShouldClose` vetoes and `observeBounds` observers (window lifecycle).
     should_close_listeners: std.ArrayList(WindowListener(bool)) = .empty,
     bounds_observers: std.ArrayList(WindowListener(void)) = .empty,
+    /// Accessibility: build the tree each frame (assistive technology is listening, or a
+    /// test turned it on). Changes from the previous tree, and the window title (owned).
+    a11y_active: bool = false,
+    a11y_changes: a11y.Changes = .{},
+    a11y_title: ?[]u8 = null,
 
     // ---- lifecycle ------------------------------------------------------------------
 
@@ -562,6 +586,8 @@ pub const Window = struct {
             .should_close = cbShouldClose,
             .close = cbClose,
             .appearance_changed = cbAppearance,
+            .a11y_action = cbA11yAction,
+            .a11y_activation = cbA11yActivation,
         });
         return self;
     }
@@ -579,6 +605,8 @@ pub const Window = struct {
         self.pending_input.deinit(gpa);
         self.should_close_listeners.deinit(gpa);
         self.bounds_observers.deinit(gpa);
+        self.a11y_changes.deinit(gpa);
+        if (self.a11y_title) |t| gpa.free(t);
         if (self.root) |r| r.entity.release(app);
         self.root = null;
         self.rendered_frame.deinit(app);
@@ -753,6 +781,112 @@ pub const Window = struct {
         self.refresh();
     }
 
+    fn cbA11yAction(ctx: ?*anyopaque, request: a11y.ActionRequest) void {
+        const self = fromCtx(ctx);
+        if (self.removed) return;
+        self.handleA11yAction(request);
+    }
+
+    fn cbA11yActivation(ctx: ?*anyopaque, active: bool) void {
+        const self = fromCtx(ctx);
+        if (self.removed) return;
+        const app = self.app;
+        app.startUpdate();
+        defer app.finishUpdate();
+        self.setA11yActive(active);
+    }
+
+    // ---- accessibility (src/a11y.zig) -------------------------------------------------
+
+    /// Whether frames build the accessibility tree (zui `is_a11y_active`). Gate work that
+    /// only matters to assistive technology on it.
+    pub fn a11yActive(self: *const Window) bool {
+        return self.a11y_active;
+    }
+
+    /// Turn tree building on or off (the platform does this when assistive technology
+    /// connects; tests call it directly). Activation redraws without view caching so the
+    /// first tree is complete.
+    pub fn setA11yActive(self: *Window, active: bool) void {
+        if (self.a11y_active == active) return;
+        self.a11y_active = active;
+        self.refresh();
+    }
+
+    /// The last drawn frame's accessibility tree (empty while inactive).
+    pub fn a11yTree(self: *const Window) *const a11y.Tree {
+        return &self.rendered_frame.a11y;
+    }
+
+    /// What changed between the last two trees.
+    pub fn a11yChanges(self: *const Window) *const a11y.Changes {
+        return &self.a11y_changes;
+    }
+
+    /// The tree is being built this frame (prepaint with accessibility active).
+    pub fn a11yBuilding(self: *const Window) bool {
+        return self.next_frame.a11y.isBuilding();
+    }
+
+    /// Push a node (from an element's prepaint); pair a `true` result with `a11yPopNode`.
+    pub fn a11yPushNode(self: *Window, spec: a11y.NodeSpec) bool {
+        if (!self.next_frame.a11y.isBuilding()) return false;
+        return self.next_frame.a11y.push(spec);
+    }
+
+    pub fn a11yPopNode(self: *Window) void {
+        self.next_frame.a11y.pop();
+    }
+
+    /// Text drawn by a text element at `b` (names the enclosing button, fills the
+    /// enclosing text field's value, or becomes static text).
+    pub fn a11yAppendText(self: *Window, text: []const u8, b: Bounds) void {
+        if (!self.next_frame.a11y.isBuilding()) return;
+        self.next_frame.a11y.appendText(text, b);
+    }
+
+    /// Register `listener` for `action` on `node` this frame (zui `on_a11y_action`).
+    pub fn onA11yAction(self: *Window, node: a11y.NodeId, action: a11y.Action, listener: anytype) void {
+        if (!self.next_frame.a11y.isBuilding()) return;
+        const L = @import("../app/context.zig").Listener(a11y.ActionRequest);
+        self.next_frame.a11y_listeners.append(self.gpa, .{ .node = node, .action = action, .listener = L.init(listener) }) catch @panic("OOM");
+    }
+
+    /// Run an assistive-technology request against the rendered frame (zui
+    /// `handle_a11y_action`): matching `onA11yAction` listeners first, else the built-in
+    /// behaviour — `click` is a synthesized left click at the node's center, `focus`
+    /// focuses the node's focus handle, `blur` clears focus.
+    pub fn handleA11yAction(self: *Window, request: a11y.ActionRequest) void {
+        const app = self.app;
+        app.startUpdate();
+        defer app.finishUpdate();
+        const tree = &self.rendered_frame.a11y;
+        const node = tree.get(request.target);
+        var matched = false;
+        {
+            const n = self.rendered_frame.a11y_listeners.items.len;
+            const ls = self.gpa.dupe(A11yListener, self.rendered_frame.a11y_listeners.items[0..n]) catch return;
+            defer self.gpa.free(ls);
+            for (ls) |*l| {
+                if (l.node != request.target or l.action != request.action) continue;
+                l.listener.callIn(&request, self, app);
+                matched = true;
+            }
+        }
+        if (matched) return;
+        const nd = node orelse return;
+        switch (request.action) {
+            .click => {
+                const center: Point = .{ .x = nd.bounds.origin.x + nd.bounds.size.width / 2, .y = nd.bounds.origin.y + nd.bounds.size.height / 2 };
+                _ = self.dispatchEvent(.{ .mouse_down = .{ .button = .left, .position = center, .click_count = 1 } });
+                _ = self.dispatchEvent(.{ .mouse_up = .{ .button = .left, .position = center, .click_count = 1 } });
+            },
+            .focus => if (nd.focus_id) |f| self.focus(.{ .id = @enumFromInt(f) }),
+            .blur => self.blur(),
+            else => {},
+        }
+    }
+
     // ---- window-level API -------------------------------------------------------------
 
     /// Logical content size.
@@ -781,6 +915,8 @@ pub const Window = struct {
     }
 
     pub fn setTitle(self: *Window, title: []const u8) void {
+        if (self.a11y_title) |t| self.gpa.free(t);
+        self.a11y_title = self.gpa.dupe(u8, title) catch null;
         self.platform_window.setTitle(title);
     }
 
@@ -1039,6 +1175,11 @@ pub const Window = struct {
         self.dirty = false;
 
         if (self.root != null) self.drawRoots();
+        const a11y_built = self.next_frame.a11y.built;
+        if (a11y_built) {
+            self.next_frame.a11y.finalize(if (self.focused_id) |f| @intFromEnum(f) else null);
+            a11y.diff(gpa, &self.rendered_frame.a11y, &self.next_frame.a11y, &self.a11y_changes);
+        }
 
         self.dirty_views.clearRetainingCapacity();
         self.next_frame.window_active = self.active;
@@ -1068,6 +1209,7 @@ pub const Window = struct {
         const prev_active = self.rendered_frame.window_active;
         std.mem.swap(Frame, &self.rendered_frame, &self.next_frame);
         self.next_frame.clear(app);
+        if (a11y_built and !self.platform_closed) self.platform_window.a11yUpdate(.{ .tree = &self.rendered_frame.a11y, .changes = &self.a11y_changes });
         var cur_path = self.rendered_frame.focusPath(gpa);
         defer cur_path.deinit(gpa);
         const cur_active = self.rendered_frame.window_active;
@@ -1101,6 +1243,7 @@ pub const Window = struct {
     fn drawRoots(self: *Window) void {
         const app = self.app;
         self.phase = .prepaint;
+        if (self.a11y_active) self.next_frame.a11y.begin(self.a11y_title, .{ .origin = .zero, .size = self.viewport_size });
         self.tooltip_bounds = null;
         const root_size = self.viewport_size;
 
@@ -1738,6 +1881,9 @@ pub const Window = struct {
     pub fn prepaintIndex(self: *Window) PrepaintIndex {
         return .{
             .hitboxes = self.next_frame.hitboxes.items.len,
+            .a11y_nodes = self.next_frame.a11y.len(),
+            .a11y_pieces = self.next_frame.a11y.piecesLen(),
+            .a11y_listeners = self.next_frame.a11y_listeners.items.len,
             .tooltips = self.next_frame.tooltip_requests.items.len,
             .deferred_draws = self.next_frame.deferred_draws.items.len,
             .dispatch_tree = self.next_frame.dispatch_tree.len(),
@@ -1775,6 +1921,8 @@ pub const Window = struct {
     pub fn truncatePrepaint(self: *Window, index: PrepaintIndex) void {
         const n = &self.next_frame;
         n.hitboxes.shrinkRetainingCapacity(index.hitboxes);
+        n.a11y.truncate(index.a11y_nodes, index.a11y_pieces);
+        if (index.a11y_listeners < n.a11y_listeners.items.len) n.a11y_listeners.shrinkRetainingCapacity(index.a11y_listeners);
         n.tooltip_requests.shrinkRetainingCapacity(index.tooltips);
         n.deferred_draws.shrinkRetainingCapacity(index.deferred_draws);
         n.dispatch_tree.truncate(index.dispatch_tree);
@@ -1803,6 +1951,11 @@ pub const Window = struct {
         const r = &self.rendered_frame;
         const n = &self.next_frame;
         n.hitboxes.appendSlice(gpa, r.hitboxes.items[range[0].hitboxes..range[1].hitboxes]) catch @panic("OOM");
+        if (n.a11y.isBuilding()) {
+            n.a11y.reuseRange(&r.a11y, range[0].a11y_nodes, range[1].a11y_nodes, range[0].a11y_pieces, range[1].a11y_pieces);
+            if (range[1].a11y_listeners <= r.a11y_listeners.items.len)
+                n.a11y_listeners.appendSlice(gpa, r.a11y_listeners.items[range[0].a11y_listeners..range[1].a11y_listeners]) catch @panic("OOM");
+        }
         n.tooltip_requests.appendSlice(gpa, r.tooltip_requests.items[range[0].tooltips..range[1].tooltips]) catch @panic("OOM");
         const reused = n.dispatch_tree.reuseSubtree(
             range[0].dispatch_tree,

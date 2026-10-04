@@ -22,6 +22,11 @@ const assets = @import("zeron_assets");
 pub const rich_text = @import("rich_text.zig");
 pub const file_icons = @import("file_icons.zig");
 pub const diagrams = @import("diagrams.zig");
+pub const veil = @import("veil.zig");
+pub const link_presentation = @import("link_presentation.zig");
+/// The shared media UI (image viewer geometry, lightbox) for hosts that only
+/// import this module (file previews).
+pub const media = @import("zeron_media");
 pub const RichText = rich_text.RichText;
 pub const registry = rich_text.registry;
 
@@ -105,6 +110,22 @@ pub const Options = struct {
     diagrams: bool = false,
     /// Enlarges a rendered diagram (the owner's lightbox).
     diagram_open: ?DiagramOpen = null,
+    /// Streaming fade veil of a live row: newly appended text fades in
+    /// (opacity only — layout commits instantly).
+    veil: ?*veil.RowVeil = null,
+    /// Frame clock driving veil opacities (one per render pass).
+    now_ns: u64 = 0,
+    /// A surface's own link routing (file previews), before the global handler.
+    link_owner: ?rich_text.LinkOwner = null,
+    /// Image source → the local file to load (file previews resolve sources
+    /// against the document); null renders `alt — source` instead. Without a
+    /// resolver `images` loads the source as given.
+    image_resolver: ?ImageResolver = null,
+};
+
+pub const ImageResolver = struct {
+    ctx: *const anyopaque,
+    f: *const fn (ctx: *const anyopaque, source: []const u8, a: std.mem.Allocator) ?[]const u8,
 };
 
 /// The owner's "enlarge diagram" hook: `f(owner, diagram_key, window, app)`.
@@ -263,6 +284,8 @@ fn frameOpts(opts: Options) Options {
     var o = opts;
     // The theme pointer must outlive the frame: copy it into the arena.
     o.theme = zpui.window.arena_mod.current().create(Theme, opts.theme.*);
+    // Link destination cards outlive the frame that built them.
+    rich_text.card_theme = opts.theme.*;
     return o;
 }
 
@@ -487,6 +510,7 @@ pub fn flatElement(flat: FlatText, key: u64, opts: Options) AnyElement {
         .glyph_color = opts.theme.text_faint,
         .selection_wash = opts.theme.selection,
         .selectable = opts.selectable,
+        .link_owner = opts.link_owner,
     });
 }
 
@@ -494,7 +518,8 @@ fn textElement(runs: []const InlineRun, size: f32, lh: f32, bold: bool, ix: usiz
     if (opts.images) {
         for (runs) |r| if (r.style.image != null) return imageText(runs, size, lh, bold, ix, opts);
     }
-    const flat = flattenEx(runs, opts.theme, if (bold) 600 else 400, opts.theme.text, opts.file_links);
+    var flat = flattenEx(runs, opts.theme, if (bold) 600 else 400, opts.theme.text, opts.file_links);
+    if (opts.veil) |v| flat.runs = @constCast(veil.applyVeil(zpui.window.arena_mod.frameAllocator(), flat.runs, v.advance(ix, flat.text, opts.now_ns)));
     const inner = flatElement(flat, mix(opts.key, ix), opts);
     if (opts.file_links) if (soleFileLink(runs)) |url| {
         const path = url["file://".len..];
@@ -514,8 +539,22 @@ fn imageText(runs: []const InlineRun, size: f32, lh: f32, bold: bool, ix: usize,
     for (runs, 0..) |r, i| {
         const image = r.style.image orelse continue;
         if (start < i) col = col.child(textElement(runs[start..i], size, lh, bold, ix *% 4099 +% start + 1000, no_images));
-        col = col.child(div().maxWFull().roundedLg().overflowHidden()
-            .child(zpui.img(zpui.window.arena_mod.dupe(image.source)).maxWFull()));
+        const fa = zpui.window.arena_mod.frameAllocator();
+        const local: ?[]const u8 = if (opts.image_resolver) |res| res.f(res.ctx, image.source, fa) else image.source;
+        if (local) |path| {
+            col = col.child(div().maxWFull().roundedLg().overflowHidden()
+                .child(zpui.img(zpui.window.arena_mod.dupe(path)).maxWFull()));
+        } else {
+            // Never fetched: web images stay a link, others say why.
+            const web = std.mem.startsWith(u8, image.source, "https://") or std.mem.startsWith(u8, image.source, "http://");
+            const label = if (web)
+                zpui.fmt("{s} \u{2014} {s}", .{ image.alt, image.source })
+            else
+                zpui.fmt("{s} \u{2014} Image preview unavailable", .{image.alt});
+            const fallback: InlineRun = .{ .text = label, .style = .{ .link = if (web) image.source else null } };
+            const flat = flatten(&.{fallback}, opts.theme, if (bold) 600 else 400, opts.theme.text_muted);
+            col = col.child(div().textSize(px(size)).lineHeight(px(lh)).minW0().child(flatElement(flat, mix(opts.key, ix *% 4099 +% i + 7000), opts)));
+        }
         start = i + 1;
     }
     if (start < runs.len) col = col.child(textElement(runs[start..], size, lh, bold, ix *% 4099 +% start + 1000, no_images));
@@ -583,6 +622,10 @@ fn codeBlockSource(language: ?[]const u8, code: []const u8, ix: usize, opts: Opt
 
     // Strip one trailing newline (fences end with one).
     const body_code = if (std.mem.endsWith(u8, code, "\n")) code[0 .. code.len - 1] else code;
+    // Streaming veil over appended code, tracked on the whole code text and
+    // sliced per line.
+    const veil_spans: []const veil.Span = if (opts.veil) |v| v.advance(ix, code, opts.now_ns) else &.{};
+    var line_start: usize = 0;
     var lines = div().px(px(code_padding_x)).py(px(code_padding_y))
         .fontFamily(theme.font_mono).textSize(px(size)).lineHeight(px(lh)).flex().flexCol();
     lines = if (fit) lines.wFull().minW0().whitespaceNormal() else lines.minWFull().flexNone().whitespaceNowrap();
@@ -594,7 +637,12 @@ fn codeBlockSource(language: ?[]const u8, code: []const u8, ix: usize, opts: Opt
         var row = div();
         row = if (fit) row.wFull().minW0().minH(px(lh)) else row.h(px(lh)).flexNone();
         const line_text = if (line.len == 0) " " else line;
-        const line_runs = if (line.len == 0) &[_]TextRun{.{ .len = 1, .font = mono, .color = theme.text }} else runs;
+        var line_runs: []const TextRun = if (line.len == 0) &[_]TextRun{.{ .len = 1, .font = mono, .color = theme.text }} else runs;
+        if (veil_spans.len > 0 and line.len > 0) {
+            const fa = zpui.window.arena_mod.frameAllocator();
+            line_runs = veil.applyVeil(fa, line_runs, veil.sliceSpans(fa, veil_spans, line_start, line_start + line.len));
+        }
+        line_start += line.len + 1;
         row = row.child(zpui.intoAnyElement(RichText{
             .id = .{ .hash = mix(key, li) },
             .key = mix(key, li),
@@ -861,4 +909,7 @@ fn table(
 
 test {
     std.testing.refAllDecls(@This());
+    _ = veil;
+    _ = rich_text;
+    _ = @import("link_presentation.zig");
 }

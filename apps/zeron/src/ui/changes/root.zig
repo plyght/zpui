@@ -18,6 +18,7 @@ pub const rows = @import("rows.zig");
 pub const highlight = @import("highlight.zig");
 pub const pane = @import("pane.zig");
 pub const tabs = @import("tabs.zig");
+pub const comment_ui = @import("comment_ui.zig");
 
 pub const ChangesPane = pane.ChangesPane;
 pub const ChangesStore = store.ChangesStore;

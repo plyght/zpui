@@ -149,6 +149,9 @@ pub const Options = struct {
     /// "PaletteSearch" (static string).
     key_context: []const u8 = "Composer",
     single_line: bool = false,
+    /// Accessibility role (zeron `with_accessibility_role`); default: search input for
+    /// "PaletteSearch", text input when single-line, else multiline text input.
+    role: ?zpui.Role = null,
     /// Text metrics in UI pixels at the default 16px rem (scaled with rem).
     text_size: f32 = default_text_size,
     line_height: f32 = default_line_height,
@@ -190,6 +193,7 @@ pub const TextInput = struct {
     state: EditorState,
     focus: zpui.FocusHandle,
     key_context: []const u8,
+    a11y_role: zpui.Role = .multiline_text_input,
     placeholder: std.ArrayList(u8) = .empty,
     colors: Colors,
     font_family: []const u8,
@@ -278,6 +282,7 @@ pub const TextInput = struct {
             .content_height = opts.line_height,
         };
         self.state.single_line = opts.single_line;
+        self.a11y_role = opts.role orelse if (std.mem.eql(u8, opts.key_context, "PaletteSearch")) .search_input else if (opts.single_line) .text_input else .multiline_text_input;
         try self.placeholder.appendSlice(gpa, opts.placeholder);
         self.blink_anchor = cx.app.executor.now();
         return self;
@@ -350,6 +355,12 @@ pub const TextInput = struct {
 
     pub fn isFocused(self: *const TextInput, window: *const Window) bool {
         return self.focus.isFocused(window);
+    }
+
+    /// Assistive technology replaced the value (AXValue / EditableText.SetTextContents).
+    fn onA11ySetValue(self: *TextInput, req: *const zpui.a11y.ActionRequest, _: *Window, cx: *Context(TextInput)) void {
+        const v = req.value orelse return;
+        self.setText(v, cx);
     }
 
     /// Replace the document (draft load, clear-on-submit): history resets.
@@ -1146,6 +1157,9 @@ pub const TextInput = struct {
 
     pub fn render(self: *TextInput, _: *Window, cx: *Context(TextInput)) zpui.StatefulDiv {
         return div().id(.{ "text-input", @intFromEnum(cx.entityId()) })
+            // Accessibility (zeron composer.rs: role + placeholder as label and placeholder).
+            .role(self.a11y_role).ariaLabel(self.placeholder.items).ariaPlaceholder(self.placeholder.items)
+            .ariaValue(self.text()).onA11yAction(.set_value, cx.listener(TextInput.onA11ySetValue))
             .keyContext(self.key_context)
             .trackFocus(self.focus)
             .cursorText()

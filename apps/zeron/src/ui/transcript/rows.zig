@@ -20,6 +20,7 @@ const diff = @import("zeron_diff");
 const assets = @import("zeron_assets");
 const thought = @import("thought.zig");
 const wl = @import("workspace_links.zig");
+pub const badges = @import("badges.zig");
 
 const protocol = engine.protocol;
 const SessionMessageEntry = protocol.SessionMessageEntry;
@@ -109,6 +110,8 @@ pub const RowKind = union(enum) {
     user: struct {
         text: []const u8,
         attachments: []const Attachment,
+        /// Context the prompt folded in as text, lifted back out (`badges`).
+        badges: []const badges.MessageBadge = &.{},
         pending: bool,
     },
     markdown: struct {
@@ -121,6 +124,11 @@ pub const RowKind = union(enum) {
         tools: []const ToolItem,
         auto_open: bool,
         collapses: bool,
+        /// Compact-mode settled duration for this turn, in seconds.
+        worked_secs: ?i64 = null,
+        /// Compact-mode work header: its expanded content is the sibling rows
+        /// tagged `Row.compact_fold`, not chips.
+        compact_shell: bool = false,
     },
     input_chip: struct { header: []const u8, resolved: bool },
     error_chip: struct { message: []const u8 },
@@ -138,6 +146,8 @@ pub const Row = struct {
     /// Hover-timestamp strip under this row (last settled row of an entry).
     timestamp: ?i64 = null,
     copy_text: ?[]const u8 = null,
+    /// Hidden while the named compact-work fold (`{entry}#work`) is closed.
+    compact_fold: ?[]const u8 = null,
     is_user: bool = false,
     /// Stable hash of `id` (element ids, selection keys).
     key: u64 = 0,
@@ -626,6 +636,10 @@ pub const BuildOptions = struct {
     pending: bool = false,
     /// Inline-code file-link probing (workspace roots); null = off.
     probe: ?*wl.Probe = null,
+    /// The transcript's compact mode (`transcriptCompactMode`): every working
+    /// step of a turn folds into ONE collapsed work group, so only the reply
+    /// (the trailing run of text parts) stays visible rows.
+    compact: bool = false,
 };
 
 fn isAgentTool(item: ToolItem) bool {
@@ -672,10 +686,57 @@ fn toolFingerprint(tools: []const ToolItem, auto_open: bool) u64 {
     return h.final();
 }
 
+fn nonBlankText(part: MessagePart) bool {
+    return switch (part) {
+        .text => |t| std.mem.trim(u8, t.text, " \t\r\n").len > 0,
+        else => false,
+    };
+}
+
+/// Compact mode's reply boundary: where the turn's TRAILING run of non-empty
+/// text parts begins. Null while the turn streams (no reply yet) or when it
+/// ends on work.
+pub fn compactReplyStart(entry: *const SessionMessageEntry) ?usize {
+    if (entry.status == .streaming) return null;
+    var i = entry.parts.len;
+    var start: usize = while (i > 0) {
+        i -= 1;
+        if (nonBlankText(entry.parts[i])) break i;
+    } else return null;
+    while (start > 0 and nonBlankText(entry.parts[start - 1])) start -= 1;
+    return start;
+}
+
+/// `is_compact_work_part`: the parts the compact work fold stands for.
+pub fn isCompactWorkPart(ix: usize, part: MessagePart, reply_start: ?usize) bool {
+    return switch (part) {
+        .tool => true,
+        .reasoning => |r| std.mem.trim(u8, r.text, " \t\r\n").len > 0,
+        .text => |t| std.mem.trim(u8, t.text, " \t\r\n").len > 0 and (reply_start == null or ix < reply_start.?),
+        else => false,
+    };
+}
+
+/// The settled duration a compact work header shows ("Worked for 5m 10s"):
+/// whole seconds, at least 1, only once the turn stopped streaming.
+pub fn compactWorkedSecs(entry: *const SessionMessageEntry) ?i64 {
+    if (entry.status == .streaming) return null;
+    const ms = entry.durationMs orelse return null;
+    if (ms <= 0) return null;
+    return @max(@divTrunc(ms, 1000), 1);
+}
+
 /// Build the block rows of one entry into a fresh `EntryRows`.
 pub fn buildEntryRows(gpa: Allocator, parsers: *Parsers, entry: *const SessionMessageEntry, opts: BuildOptions, fingerprint: u64) Allocator.Error!EntryRows {
     var er: EntryRows = .{ .arena = .init(gpa), .fingerprint = fingerprint };
     errdefer er.deinit(gpa);
+    er.rows = try buildRows(gpa, parsers, &er, entry, opts, opts.compact);
+    finalizeKeys(er.rows);
+    return er;
+}
+
+/// `rows_for_entry`: the rows of `entry` (arena memory of `er`).
+fn buildRows(gpa: Allocator, parsers: *Parsers, er: *EntryRows, entry: *const SessionMessageEntry, opts: BuildOptions, compact: bool) Allocator.Error![]Row {
     const a = er.arena.allocator();
     var rows: std.ArrayList(Row) = .empty;
     const streaming = entry.status == .streaming;
@@ -693,31 +754,40 @@ pub fn buildEntryRows(gpa: Allocator, parsers: *Parsers, entry: *const SessionMe
             else => {},
         };
         const parsed = try parseUserMessageImages(a, raw.items);
-        const text = try agentMessageDisplay(a, parsed.text);
+        // Lifted before the attribution rewrite, so a comment body's own
+        // Markdown never lands in the bubble (`badges::split`).
+        const split = try badges.split(a, parsed.text);
+        const text = try agentMessageDisplay(a, split.text);
         try rows.append(a, .{
             .id = entry_id,
             .version = (@as(u64, raw.items.len) << 1) | @intFromBool(opts.pending),
             .turn_start = true,
-            .kind = .{ .user = .{ .text = text, .attachments = parsed.attachments, .pending = opts.pending } },
+            .kind = .{ .user = .{ .text = text, .attachments = parsed.attachments, .badges = split.badges, .pending = opts.pending } },
             .entry_id = entry_id,
             .timestamp = entry.createdAt,
             .copy_text = if (std.mem.trim(u8, text, " \t\r\n").len > 0) text else null,
             .is_user = true,
         });
-        er.rows = rows.items;
-        finalizeKeys(er.rows);
-        return er;
+        return rows.items;
     }
 
     const last_part_ix = entry.parts.len -| 1;
+    const reply_start: ?usize = if (compact) compactReplyStart(entry) else null;
     var group_ix: usize = 0;
     var group: Group = .{};
+    // Compact mode: the row index the single work group lands at — the
+    // position of the FIRST foldable part, so input/error chips ahead of it
+    // keep their doc order.
+    var compact_group_pos: ?usize = null;
 
     for (entry.parts, 0..) |part, part_ix| {
         switch (part) {
             .tool => |t| {
-                const item = try toolItem(gpa, a, &er, t);
-                if (group.items.items.len > 0 and isAgentTool(group.items.items[0]) != item.is_agent)
+                const item = try toolItem(gpa, a, er, t);
+                if (compact) {
+                    // ONE group for the whole turn: agent chips fold in too.
+                    if (compact_group_pos == null) compact_group_pos = rows.items.len;
+                } else if (group.items.items.len > 0 and isAgentTool(group.items.items[0]) != item.is_agent)
                     try flushGroup(a, &rows, &group, &group_ix, entry_id, streaming, last_part_ix);
                 try group.items.append(a, item);
                 try group.calls.append(a, .{ .call = t.call, .is_error = t.isError });
@@ -730,14 +800,30 @@ pub fn buildEntryRows(gpa: Allocator, parsers: *Parsers, entry: *const SessionMe
                 var tree = try parsers.parse(key, r.text, live);
                 defer tree.deinit(gpa);
                 const item = try thoughtItem(a, r.id, tree, live, .thought);
-                if (group.items.items.len > 0 and isAgentTool(group.items.items[0]))
+                if (compact) {
+                    if (compact_group_pos == null) compact_group_pos = rows.items.len;
+                } else if (group.items.items.len > 0 and isAgentTool(group.items.items[0]))
                     try flushGroup(a, &rows, &group, &group_ix, entry_id, streaming, last_part_ix);
                 try group.items.append(a, item);
                 group.thoughts += 1;
                 group.last_part_ix = part_ix;
             },
             else => {
-                try flushGroup(a, &rows, &group, &group_ix, entry_id, streaming, last_part_ix);
+                // Compact mode: narration text folds into the work group as a
+                // "Wrote" chip — only the reply stays a row.
+                if (compact and nonBlankText(part) and (reply_start == null or part_ix < reply_start.?)) {
+                    if (compact_group_pos == null) compact_group_pos = rows.items.len;
+                    const t = part.text;
+                    const key = try std.fmt.allocPrint(a, "{s}#{s}", .{ entry.id, t.id });
+                    var tree = try parsers.parse(key, t.text, streaming);
+                    defer tree.deinit(gpa);
+                    const live = streaming and part_ix == last_part_ix;
+                    try group.items.append(a, try thoughtItem(a, t.id, tree, live, .note));
+                    group.notes += 1;
+                    group.last_part_ix = part_ix;
+                    continue;
+                }
+                if (!compact) try flushGroup(a, &rows, &group, &group_ix, entry_id, streaming, last_part_ix);
                 switch (part) {
                     .text => |t| {
                         if (std.mem.trim(u8, t.text, " \t\r\n").len == 0) continue;
@@ -798,7 +884,45 @@ pub fn buildEntryRows(gpa: Allocator, parsers: *Parsers, entry: *const SessionMe
             },
         }
     }
-    try flushGroup(a, &rows, &group, &group_ix, entry_id, streaming, last_part_ix);
+    if (compact) {
+        // Collapsed: one work header. Expanded: the same rows compact-off
+        // would emit for the work parts, tagged so the fold can hide them.
+        if (group.items.items.len > 0) {
+            const tools = group.items.items;
+            const work_id = try std.fmt.allocPrint(a, "{s}#work", .{entry.id});
+            var work_parts: std.ArrayList(MessagePart) = .empty;
+            for (entry.parts, 0..) |part, ix| if (isCompactWorkPart(ix, part, reply_start)) try work_parts.append(a, part);
+            const inner: []Row = if (work_parts.items.len == 0) &.{} else blk: {
+                var work_entry = entry.*;
+                work_entry.parts = work_parts.items;
+                work_entry.durationMs = null;
+                work_entry.continuationOf = null;
+                break :blk try buildRows(gpa, parsers, er, &work_entry, opts, false);
+            };
+            for (inner) |*row| {
+                row.turn_start = false;
+                row.timestamp = null;
+                row.copy_text = null;
+                row.compact_fold = work_id;
+            }
+            const header: Row = .{
+                .id = work_id,
+                .version = toolFingerprint(tools, false),
+                .kind = .{ .tool_group = .{
+                    .summary = try toolGroupSummary(a, group.calls.items, group.thoughts, group.notes),
+                    .tools = tools,
+                    .auto_open = false,
+                    .collapses = true,
+                    .worked_secs = compactWorkedSecs(entry),
+                    .compact_shell = true,
+                } },
+                .entry_id = entry_id,
+            };
+            const pos = compact_group_pos orelse rows.items.len;
+            try rows.insertSlice(a, pos, inner);
+            try rows.insert(a, pos, header);
+        }
+    } else try flushGroup(a, &rows, &group, &group_ix, entry_id, streaming, last_part_ix);
 
     if (rows.items.len > 0) rows.items[0].turn_start = true;
     if (!streaming and rows.items.len > 0) {
@@ -809,9 +933,7 @@ pub fn buildEntryRows(gpa: Allocator, parsers: *Parsers, entry: *const SessionMe
             last.version ^= @as(u64, 1) << 62;
         }
     }
-    er.rows = rows.items;
-    finalizeKeys(er.rows);
-    return er;
+    return rows.items;
 }
 
 fn finalizeKeys(rows: []Row) void {

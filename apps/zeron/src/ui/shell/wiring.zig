@@ -40,6 +40,8 @@ const settings_ui = @import("../settings/root.zig");
 const background = @import("../background/root.zig");
 const prefs_mod = @import("prefs.zig");
 const harness_updates = @import("harness_updates.zig");
+const project_actions = @import("project_actions.zig"); // titlebar Run/Setup control + editor
+const sync_flow = @import("sync_flow.zig"); // switch wizard, import, sign-out, signed-out restart
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -56,7 +58,7 @@ const Ctx = Context(Shell);
 
 const log = std.log.scoped(.zeron_wiring);
 
-pub const SyncFlow = enum { idle, enabling, canceling };
+pub const SyncFlow = sync_flow.SyncFlow;
 
 /// Shell-owned state for the routed flows (lives in `Shell.wiring`).
 pub const State = struct {
@@ -76,8 +78,15 @@ pub const State = struct {
     /// "Rename project" dialog (`RenameSpaceDialog`) and "Remove project?" confirm.
     rename_space: ?struct { id: []u8, input: Entity(TextInput), sub: zpui.Subscription, focus_pending: bool = true } = null,
     delete_space: ?[]u8 = null,
+    /// Project actions (project_actions.zig), made on first use.
+    project_actions: ?project_actions.Controller = null,
+    /// Runtime changes and the local-work import (sync_flow.zig).
+    runtime: sync_flow.Runtime = .{},
+    last_scope: ?engine.protocol.WorkspaceScope = null,
 
     pub fn deinit(self: *State, gpa: std.mem.Allocator, app: *App) void {
+        if (self.project_actions) |*c| c.deinit(app);
+        self.runtime.deinit(gpa);
         if (self.delete_confirm) |d| gpa.free(d);
         if (self.org_sub) |*s| s.deinit();
         if (self.org_input) |i| i.release(app);
@@ -128,6 +137,9 @@ pub fn attach(self: *Shell, cx: *Ctx) !void {
     try self.subs.add(gpa, try cx.subscribe(auth, onSignInUrl));
     try self.subs.add(gpa, try cx.subscribe(auth, onAuthError));
     try self.subs.add(gpa, try cx.subscribe(auth, onAuthChanged));
+    try self.subs.add(gpa, try cx.subscribe(self.sidebar, onAccountAction));
+    try self.subs.add(gpa, try cx.subscribe(self.state.read(cx).engine, onEngineEvent));
+    try self.subs.add(gpa, try cx.observe(self.state.read(cx).workspace, onWorkspaceForSync));
 }
 
 /// Called from `Shell.deinit`.
@@ -155,7 +167,8 @@ fn inChat(self: *Shell, cx: anytype) bool {
 /// An open palette / project picker owns the keyboard (`overlay_owns_keyboard`).
 fn overlayOwnsKeyboard(self: *Shell) bool {
     return self.palette != null or self.add_project != null or self.wiring.delete_confirm != null or
-        self.wiring.rename_space != null or self.wiring.delete_space != null;
+        self.wiring.rename_space != null or self.wiring.delete_space != null or project_actions.editorOpen(self) or
+        self.wiring.sync_flow.hasVisibleOverlay();
 }
 
 /// Escape on the chat route (`resolve_shell_escape`): with "Escape stops the
@@ -539,8 +552,7 @@ fn onAuthError(self: *Shell, _: Entity(model.AuthStore), ev: *const model.status
         cx.notify();
         return;
     }
-    if (self.wiring.sync_flow == .canceling) self.wiring.sync_flow = .enabling;
-    if (self.wiring.sync_flow == .enabling) self.wiring.sync_flow = .idle;
+    if (self.wiring.sync_flow == .canceling) sync_flow.set(self, .enabling, cx) else if (self.wiring.sync_flow == .enabling) sync_flow.set(self, .idle, cx);
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "Sign in failed: {s}", .{ev.message}) catch "Sign in failed";
     self.sidebar.update(cx, sidebar_mod.Sidebar.setNotice, .{@as(?[]const u8, msg)});
@@ -549,32 +561,52 @@ fn onAuthError(self: *Shell, _: Entity(model.AuthStore), ev: *const model.status
 fn onAuthChanged(self: *Shell, auth: Entity(model.AuthStore), _: *const model.status.AuthChanged, cx: *Ctx) void {
     const a = auth.read(cx).auth orelse return;
     switch (a) {
-        .signedIn => {
-            self.wiring.sync_flow = .idle;
-            self.wiring.org_submitting = false;
-        },
-        .signedOut => if (self.wiring.sync_flow == .canceling) {
-            self.wiring.sync_flow = .idle;
-        },
+        .signedIn => self.wiring.org_submitting = false,
+        .signedOut => if (self.wiring.sync_flow == .canceling) sync_flow.set(self, .idle, cx),
         .needsOrganization => {},
     }
+    // `sync_flow_after_auth` (+ the switch driver / signed-out fallback).
+    sync_flow.onStateChanged(self, cx);
     cx.notify();
+}
+
+/// Engine attach / drop: the switch wizard and runtime changes advance.
+fn onEngineEvent(self: *Shell, _: Entity(model.EngineState), ev: *const model.EngineEvent, cx: *Ctx) void {
+    if (ev.* == .wake) return;
+    sync_flow.onStateChanged(self, cx);
+}
+
+/// The scope arrives with `EngineInfo` (after attach).
+fn onWorkspaceForSync(self: *Shell, _: Entity(model.WorkspaceStore), cx: *Ctx) void {
+    const scope = self.state.read(cx).workspace.read(cx).workspace_scope;
+    if (scope != self.wiring.last_scope) {
+        self.wiring.last_scope = scope;
+        sync_flow.onStateChanged(self, cx);
+    }
 }
 
 fn onEnableSync(self: *Shell, _: Entity(sidebar_mod.Sidebar), _: *const sidebar_mod.EnableSync, cx: *Ctx) void {
     startSignIn(self, cx);
 }
 
+/// The account menu's sync rows (`AccountMenuAction`).
+fn onAccountAction(self: *Shell, _: Entity(sidebar_mod.Sidebar), ev: *const sidebar_mod.AccountAction, cx: *Ctx) void {
+    switch (ev.action) {
+        .enable_sync => startSignIn(self, cx),
+        .sync_in_progress => {},
+        .restart_pending => sync_flow.reopen(self, cx),
+        .sign_out => sync_flow.requestSignOut(self, cx),
+    }
+}
+
 /// `start_sign_in`: `SignIn` → the browser (the URL comes back as an event).
 pub fn startSignIn(self: *Shell, cx: *Ctx) void {
     const ws = self.state.read(cx).workspace.read(cx);
     if (ws.workspace_scope) |s| if (s == .development) return;
-    if (ws.workspace_scope) |s| if (s == .local) {
-        self.wiring.sync_flow = .enabling;
-    };
+    if (ws.workspace_scope) |s| if (s == .local) sync_flow.set(self, .enabling, cx);
     const auth = self.state.read(cx).auth;
     auth.update(cx, model.AuthStore.signIn, .{false}) catch |err| {
-        self.wiring.sync_flow = .idle;
+        sync_flow.set(self, .idle, cx);
         self.sidebar.update(cx, sidebar_mod.Sidebar.setNotice, .{@as(?[]const u8, if (err == error.NotConnected) "Sign in failed: engine not connected" else "Sign in failed")});
     };
     cx.notify();
@@ -582,11 +614,9 @@ pub fn startSignIn(self: *Shell, cx: *Ctx) void {
 
 fn onSyncCancel(self: *Shell, _: *const zpui.ClickEvent, _: *Window, cx: *Ctx) void {
     // `cancel_auth_setup`: drop the partial sign-in.
-    self.wiring.sync_flow = .canceling;
+    sync_flow.set(self, .canceling, cx);
     const auth = self.state.read(cx).auth;
-    auth.update(cx, model.AuthStore.signOut, .{}) catch {
-        self.wiring.sync_flow = .idle;
-    };
+    auth.update(cx, model.AuthStore.signOut, .{}) catch sync_flow.set(self, .idle, cx);
     cx.notify();
 }
 
@@ -596,10 +626,11 @@ fn onSyncReopen(self: *Shell, _: *const zpui.ClickEvent, _: *Window, cx: *Ctx) v
 
 fn onSyncScrim(_: *Shell, _: *const zpui.input.MouseDownEvent, _: *Window, _: *Ctx) void {}
 
+/// `render_sync_overlay`: Enabling / Canceling here; the wizard, import and
+/// sign-out steps in sync_flow.zig.
 fn syncDialog(self: *Shell, window: *Window, theme_in: *const ui.Theme, cx: *Ctx) ?zpui.AnyElement {
     const theme = zpui.window.arena_mod.current().create(ui.Theme, theme_in.forPopup());
     const card = switch (self.wiring.sync_flow) {
-        .idle => return null,
         .enabling => dialog.card(theme)
             .child(dialog.title(theme, "Enable sync"))
             .child(div().mt(px(6)).child(dialog.body(theme, "Finish signing in in your browser. Zeron will keep using this local workspace until you quit and reopen.")))
@@ -609,6 +640,7 @@ fn syncDialog(self: *Shell, window: *Window, theme_in: *const ui.Theme, cx: *Ctx
         .canceling => dialog.card(theme)
             .child(dialog.title(theme, "Canceling sync setup…"))
             .child(div().mt(px(6)).child(dialog.body(theme, "Removing the partial sign-in before returning to your local workspace."))),
+        else => return sync_flow.overlay(self, window, theme_in, cx),
     };
     return dialog.modal(window, card, cx.listener(onSyncScrim));
 }
@@ -766,6 +798,8 @@ pub fn overlays(self: *Shell, window: *Window, cx: *Ctx) ?zpui.AnyElement {
     const theme = ui.theme.get(cx);
     if (deleteDialog(self, window, theme, cx)) |d| return d;
     if (spaceDialogs(self, window, theme, cx)) |d| return d;
+    if (project_actions.overlay(self, window, theme, cx)) |d| return d;
+    if (sync_flow.signedOutPage(self, window, theme, cx)) |d| return d;
     return syncDialog(self, window, theme, cx);
 }
 
