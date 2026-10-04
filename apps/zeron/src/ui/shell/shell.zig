@@ -879,7 +879,7 @@ pub const Shell = struct {
 // tint everywhere except under the glass (alpha 0 there), and in `glass` mode cuts the
 // same shape out of the window's behind-window blur (`zpui.backdropHole`), so the glass
 // samples the wallpaper through the non-opaque window. `vev` mode instead puts AppKit's
-// behind-window `.sidebar` material under that transparent region with `.clear` glass
+// behind-window `.sidebar` material under that transparent region with `.regular` glass
 // on top (the pre-Tahoe recipe; compare both on a Mac with `ZERON_SIDEBAR_GLASS`).
 // Layout: flush with the window edges, zeron's original column (default), or a
 // floating pane inset 8px (`ZERON_SIDEBAR_LAYOUT=floating`).
@@ -949,7 +949,9 @@ fn liquidSidebar(theme: *const Theme, sidebar_now: f32, window: *Window, cx: any
     // The flush pane's glass extends past the seam by its radius and is clipped there
     // (square inner edge, rounded window-side corners).
     const glass_w = if (lay == .flush) g.w + g.r else g.w;
-    const style: zpui.LiquidGlassStyle = if (mode == .vev) .clear else .regular;
+    // Regular (translucent) glass in both recipes: Apple's `.clear` is the permanently
+    // transparent variant for media, and over the sidebar material it reads as plain blur.
+    const style: zpui.LiquidGlassStyle = .regular;
     const pane = div().absolute().left(px(g.x)).top(px(g.y)).w(px(glass_w)).h(px(g.h))
         .child(if (mode == .vev) zpui.sidebarMaterial("sidebar-material", .{ .corner_radius = if (lay == .floating) g.r else 0 }, div().sizeFull()) else null)
         .child(zpui.liquidGlass("sidebar-glass", .{ .style = style, .shape = .{ .rounded = g.r }, .tint = theme.glassTint() }, div().sizeFull()));
