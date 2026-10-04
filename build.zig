@@ -24,6 +24,7 @@ pub fn build(b: *std.Build) void {
     addMacPlatform(b, target, optimize, zpui);
     addZeronSyntax(b, target, optimize, test_step);
     addZeronMarkdownDiff(b, target, optimize, test_step);
+    addImageSupport(b, target, optimize, zpui);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -396,4 +397,31 @@ fn addZeronMarkdownDiff(
         });
         test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .name = m[0], .root_module = mod })).step);
     }
+}
+
+/// Image + SVG support (src/image/): the vendored lunasvg/plutovg, stb_image
+/// and simplewebp compiled into `zpui` (src/image/image_build.zig), plus the
+/// `icon-sheet` visual check (`zig build icon-sheet` writes zig-out/icon-sheet.png).
+fn addImageSupport(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    @import("src/image/image_build.zig").add(b, zpui);
+
+    const sheet = b.addExecutable(.{
+        .name = "icon-sheet",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/icon_sheet.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    const run = b.addRunArtifact(sheet);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    const step = b.step("icon-sheet", "Rasterize every zeron icon + sample images to zig-out/icon-sheet.png");
+    step.dependOn(&run.step);
 }

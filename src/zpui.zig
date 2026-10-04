@@ -70,6 +70,8 @@ pub const KeyContext = core.KeyContext;
 pub const KeyBinding = core.KeyBinding;
 pub const Keymap = core.Keymap;
 
+pub const image = @import("image/image.zig");
+
 test {
     @import("std").testing.refAllDecls(@This());
 }
