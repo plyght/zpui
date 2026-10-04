@@ -4,6 +4,13 @@ on:
   push:
   pull_request:
 
+env:
+  LINUX_DEPS: >-
+    libvulkan-dev mesa-vulkan-drivers glslc
+    libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev
+    libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libxcursor-dev libxi-dev libxrandr-dev
+    libfreetype-dev libharfbuzz-dev libfontconfig-dev fonts-inter fonts-noto-color-emoji
+
 jobs:
   test:
     strategy:
@@ -16,21 +23,42 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
-      - name: Install Linux dependencies (Vulkan/lavapipe, Wayland, X11, fonts)
+      - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            libvulkan-dev mesa-vulkan-drivers glslc \
-            libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev \
-            libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libxcursor-dev libxi-dev libxrandr-dev \
-            libfreetype-dev libharfbuzz-dev libfontconfig-dev fonts-inter fonts-noto-color-emoji
+          sudo apt-get install -y --no-install-recommends $LINUX_DEPS
           echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json" >> "$GITHUB_ENV"
       - run: zig build test --summary all
+      # Apple Silicon runners expose no Metal device, so macOS only builds here; renders run on Intel below.
+      - run: zig build --summary all
+
+  # Renders the showcase scene with the real GPU backend and uploads the PNG.
+  render:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            backend: vulkan-lavapipe
+          - os: macos-15-intel
+            backend: metal
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $LINUX_DEPS
+          echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json" >> "$GITHUB_ENV"
       - run: zig build render-test --summary all
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: render-test-${{ matrix.os }}
-          path: zig-out/render-test.png
+          name: render-${{ matrix.backend }}
+          path: zig-out/*.png
           if-no-files-found: warn
