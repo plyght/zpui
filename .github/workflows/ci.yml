@@ -9,7 +9,7 @@ env:
     libvulkan-dev mesa-vulkan-drivers glslc
     libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev
     libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libxcursor-dev libxi-dev libxrandr-dev
-    libfreetype-dev libharfbuzz-dev libfontconfig-dev fonts-inter fonts-noto-color-emoji
+    libfreetype-dev libharfbuzz-dev libfontconfig-dev fonts-inter fonts-jetbrains-mono fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
 
 jobs:
   test:

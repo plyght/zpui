@@ -103,9 +103,13 @@ pub fn sel(name: [:0]const u8) SEL {
 /// `sel` for a comptime-known name, registered once per selector. Concurrent
 /// first calls race benignly (the runtime returns the same SEL).
 pub fn cachedSel(comptime name: [:0]const u8) SEL {
+    // The struct must capture `name`: container types inside generic functions are
+    // deduplicated by captured values, so without it every selector would share one slot.
     const Cache = struct {
+        const key = name;
         var value: ?SEL = null;
     };
+    comptime std.debug.assert(std.mem.eql(u8, Cache.key, name));
     if (@atomicLoad(?SEL, &Cache.value, .monotonic)) |v| return v;
     const v = sel(name);
     @atomicStore(?SEL, &Cache.value, v, .monotonic);
@@ -259,4 +263,20 @@ pub inline fn msgSendStret(comptime Ret: type, target: anytype, selector: SEL, a
 /// `[obj isKindOfClass:class]`.
 pub fn isKindOf(obj: id, class: *Class) bool {
     return obj.msg(BOOL, "isKindOfClass:", .{class}) == YES;
+}
+
+test "cachedSel keeps one cache slot per selector name" {
+    // Mirrors cachedSel's caching pattern without needing the Objective-C runtime.
+    const Probe = struct {
+        fn slot(comptime name: [:0]const u8) *?[]const u8 {
+            const Cache = struct {
+                const key = name;
+                var value: ?[]const u8 = null;
+            };
+            if (Cache.value == null) Cache.value = Cache.key;
+            return &Cache.value;
+        }
+    };
+    try std.testing.expectEqualStrings("a", Probe.slot("a").*.?);
+    try std.testing.expectEqualStrings("b", Probe.slot("b").*.?);
 }
