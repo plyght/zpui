@@ -1222,8 +1222,8 @@ pub const Window = struct {
     fn scaleFactor(ptr: *anyopaque) f32 {
         return cast(ptr).common.scale;
     }
-    fn appearance(_: *anyopaque) platform.WindowAppearance {
-        return .light;
+    fn appearance(ptr: *anyopaque) platform.WindowAppearance {
+        return cast(ptr).client.plat.appearance;
     }
     fn mousePosition(ptr: *anyopaque) platform.Point {
         return cast(ptr).common.mouse_position;

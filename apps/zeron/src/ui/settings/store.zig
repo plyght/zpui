@@ -56,15 +56,17 @@ pub fn update(cx: anytype, policy: SavePolicy, ctx: anytype, comptime mutate: an
     if (settings_store.update(app, policy, ctx, mutate)) app.refreshWindows();
 }
 
-/// The OS appearance as the window reports it (light when unknown).
+/// The OS appearance as the window reports it (the platform's before any
+/// window exists; light when unknown).
 pub fn systemAppearance(app: *App) zt.Appearance {
-    for (app.windows.items) |w| if (w) |win| {
-        return switch (win.windowAppearance()) {
-            .dark, .vibrant_dark => .dark,
-            .light, .vibrant_light => .light,
-        };
+    const native = blk: {
+        for (app.windows.items) |w| if (w) |win| break :blk win.windowAppearance();
+        break :blk app.platform.vtable.windowAppearance(app.platform.ptr);
     };
-    return .light;
+    return switch (native) {
+        .dark, .vibrant_dark => .dark,
+        .light, .vibrant_light => .light,
+    };
 }
 
 /// The appearance the settings resolve to right now.

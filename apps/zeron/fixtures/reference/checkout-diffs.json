@@ -1,0 +1,60 @@
+[
+  {
+    "checkoutId": "2d6870006a62dfad6c8258369c681da3681eb5f3a3d3fbf6a5b997a64b2e4097",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "cwd": "/home/user/research/reference/demo-repos/aurora",
+    "patch": "diff --git a/src/config.rs b/src/config.rs\nindex a527538..109cfa1 100644\n--- a/src/config.rs\n+++ b/src/config.rs\n@@ -6,6 +6,6 @@ pub struct Config {\n \n impl Default for Config {\n     fn default() -> Self {\n-        Self { retries: 5, timeout_ms: 5_000 }\n+        Self { retries: 5, timeout_ms: 8_000 }\n     }\n }\ndiff --git a/src/stream.rs b/src/stream.rs\nindex d9159a7..516016b 100644\n--- a/src/stream.rs\n+++ b/src/stream.rs\n@@ -1,20 +1,26 @@\n //! Streaming pipeline: folds agent events into renderable parts.\n \n+use std::time::Duration;\n+\n pub struct Pipeline {\n     capacity: usize,\n+    high_water: usize,\n }\n \n impl Pipeline {\n     pub fn new(capacity: usize) -> Self {\n-        Self { capacity }\n+        Self { capacity, high_water: capacity * 3 / 4 }\n     }\n \n+    /// Drain the buffer, yielding to the runtime once we cross the\n+    /// high-water mark so slow consumers apply backpressure.\n     pub async fn run(&self) -> anyhow::Result<()> {\n         let mut buffer = Vec::with_capacity(self.capacity);\n-        loop {\n-            buffer.clear();\n-            break;\n+        while buffer.len() < self.high_water {\n+            buffer.push(0u8);\n         }\n+        tokio::time::sleep(Duration::from_millis(5)).await;\n+        buffer.clear();\n         Ok(())\n     }\n }\ndiff --git a/src/retry.rs b/src/retry.rs\nnew file mode 100644\n--- /dev/null\n+++ b/src/retry.rs\n@@ -0,0 +1,3 @@\n+pub fn backoff(attempt: u32) -> u64 {\n+    100 * 2u64.pow(attempt.min(6))\n+}\n",
+    "files": [
+      {
+        "path": "src/config.rs",
+        "status": "modified",
+        "additions": 1,
+        "deletions": 1,
+        "binary": false
+      },
+      {
+        "path": "src/stream.rs",
+        "status": "modified",
+        "additions": 10,
+        "deletions": 4,
+        "binary": false
+      },
+      {
+        "path": "src/retry.rs",
+        "status": "added",
+        "additions": 3,
+        "deletions": 0,
+        "binary": false
+      }
+    ],
+    "additions": 14,
+    "deletions": 5,
+    "truncated": false,
+    "checksum": "dc23f9a699b05cab3d8416b1ae2d134de69955bd2d8fefe48bef9eae29ae7f79",
+    "updatedAt": "2026-10-04T07:25:46.010657160Z"
+  },
+  {
+    "checkoutId": "3c2bcfe9e939d18d847dab09e2ca1f5cd035a847115e9b7880a4abddce807d99",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "cwd": "/home/user/research/reference/demo-repos/lumen-web",
+    "patch": "",
+    "files": [],
+    "additions": 0,
+    "deletions": 0,
+    "truncated": false,
+    "checksum": "dc844110875518b799e2c91105c1ff204e68247f90f22083dad52985f4108b0a",
+    "updatedAt": "2026-10-04T07:25:46.006092219Z"
+  },
+  {
+    "checkoutId": "ff9caa71ceb3002bafbe3c07ed4f5c28979fe1db4742cf9ed3bf37a122986f2f",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "cwd": "/home/user/research/reference/demo-repos/notes-cli",
+    "patch": "",
+    "files": [],
+    "additions": 0,
+    "deletions": 0,
+    "truncated": false,
+    "checksum": "b826e6cbb3e179b3404d814f269ef24f639f8ddf934f31b19075506ad0c222a1",
+    "updatedAt": "2026-10-04T07:25:46.008623592Z"
+  }
+]

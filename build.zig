@@ -35,6 +35,8 @@ pub fn build(b: *std.Build) void {
     addZeronApp(b, target, optimize, zpui, test_step);
     addListDemo(b, target, optimize, zpui);
     addZeronRightPane(b, target, optimize, zpui, test_step);
+    addZeronPackaging(b, target);
+    addZeronFiles(b, target, optimize, zpui, test_step);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -841,4 +843,70 @@ fn addZeronRightPane(
     run.setCwd(b.path("."));
     run.addPassthruArgs();
     b.step("changes-demo", "Render the right-pane Changes/History surfaces from fixtures").dependOn(&run.step);
+}
+
+/// zeron packaging (after `addZeronApp`, whose `zeron` step installs the binary):
+///   `zig build zeron-app-bundle [-Dtarget=aarch64-macos|x86_64-macos]` → zig-out/Zeron.app
+///     (apps/zeron/scripts/macos-bundle.sh; macOS hosts only — linking needs the SDK).
+///     Run it for both arches to get a universal (lipo) binary in the bundle.
+///   `zig build zeron-dist` (Linux) → zig-out/zeron-<version>-linux-<arch>.tar.gz
+///     (apps/zeron/scripts/linux-dist.sh: binary + desktop entry + icon + licenses).
+/// `-Dzeron-version=` sets the bundle/tarball version (default: the Rust app's).
+fn addZeronPackaging(b: *std.Build, target: std.Build.ResolvedTarget) void {
+    const os = target.result.os.tag;
+    if (os != .linux and os != .macos) return;
+    const zeron_step = b.top_level_steps.get("zeron") orelse return;
+    const version = b.option([]const u8, "zeron-version", "Version for Zeron.app / the Linux tarball (default 0.2.102)") orelse "0.2.102";
+    const arch = @tagName(target.result.cpu.arch);
+    const script, const name, const desc = if (os == .macos)
+        .{ "apps/zeron/scripts/macos-bundle.sh", "zeron-app-bundle", "Assemble zig-out/Zeron.app (macOS host; build both arches for a universal binary)" }
+    else
+        .{ "apps/zeron/scripts/linux-dist.sh", "zeron-dist", "Package zig-out/zeron-<version>-linux-<arch>.tar.gz" };
+    const run = b.addSystemCommand(&.{"bash"});
+    run.addFileArg(b.path(script));
+    run.addDirectoryArg(b.path("."));
+    run.addDirectoryArg(b.graph.path(.install_prefix, ""));
+    run.addArgs(&.{ arch, version });
+    run.has_side_effects = true;
+    run.step.dependOn(&zeron_step.step);
+    b.step(name, desc).dependOn(&run.step);
+}
+
+/// zeron Files explorer + file editor (apps/zeron/src/ui/files, apps/zeron/src/ui/editor;
+/// hosted by the shell via relative imports): their tests (`zig build files-test`) and
+/// `zig build files-demo -- --help` (apps/zeron/src/ui/files_demo.zig), which renders the
+/// explorer and editor over `apps/zeron/fixtures/files` at the reference pane positions.
+fn addZeronFiles(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
+) void {
+    const os = target.result.os.tag;
+    const names = [_][]const u8{ "zeron_assets", "zeron_theme", "zeron_model", "zeron_engine", "zeron_actions", "zeron_markdown", "zeron_diff", "zeron_syntax", "zeron_input", "zeron_ui_markdown" };
+    var imports: std.ArrayList(std.Build.Module.Import) = .empty;
+    imports.append(b.allocator, .{ .name = "zpui", .module = zpui }) catch @panic("OOM");
+    for (names) |n| {
+        const m = b.modules.get(n) orelse return;
+        imports.append(b.allocator, .{ .name = n, .module = m }) catch @panic("OOM");
+    }
+    const root = b.createModule(.{
+        .root_source_file = b.path("apps/zeron/src/ui/files_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = imports.items,
+    });
+    const tests = b.addRunArtifact(b.addTest(.{ .name = "zeron_files", .root_module = root }));
+    tests.setCwd(b.path("."));
+    b.step("files-test", "Run the zeron Files explorer / file editor tests").dependOn(&tests.step);
+    test_step.dependOn(&tests.step);
+    if (os != .linux) return;
+    const exe = b.addExecutable(.{ .name = "files-demo", .root_module = root });
+    const install = b.addInstallArtifact(exe, .{});
+    const run = b.addRunArtifact(exe);
+    run.step.dependOn(&install.step);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    b.step("files-demo", "Render the zeron Files explorer and file editor from fixtures").dependOn(&run.step);
 }

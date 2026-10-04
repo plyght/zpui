@@ -21,6 +21,7 @@ pub const vk_surface = @import("vk_surface.zig");
 pub const presenter = @import("presenter.zig");
 pub const wayland = @import("wayland.zig");
 pub const x11 = @import("x11.zig");
+pub const appearance = @import("appearance.zig");
 const text_mod = @import("../../text/text.zig");
 
 pub const BackendKind = enum { wayland, x11 };
@@ -49,6 +50,9 @@ pub const LinuxPlatform = struct {
     text_system: platform.TextSystem,
     quit_requested: bool = false,
     cursor_style: platform.CursorStyle = .arrow,
+    /// System light/dark (settings portal / gsettings; light when unknown).
+    appearance: platform.WindowAppearance = .light,
+    appearance_watcher: ?*appearance.Watcher = null,
 
     /// Ends `run` after the current loop iteration.
     pub fn requestQuit(self: *LinuxPlatform) void {
@@ -112,9 +116,17 @@ pub const LinuxPlatform = struct {
             inline else => |b| b.displays(out),
         };
     }
-    fn windowAppearance(_: *anyopaque) platform.WindowAppearance {
-        // TODO: read org.freedesktop.appearance color-scheme from the settings portal.
-        return .light;
+    fn windowAppearance(ptr: *anyopaque) platform.WindowAppearance {
+        return cast(ptr).appearance;
+    }
+
+    /// Portal `SettingChanged`: record it and fire every window's appearance callback.
+    fn onAppearanceChanged(ctx: ?*anyopaque, value: platform.WindowAppearance) void {
+        const self: *LinuxPlatform = @ptrCast(@alignCast(ctx.?));
+        self.appearance = value;
+        switch (self.backend) {
+            inline else => |b| for (b.windows.items) |w| w.common.appearanceChanged(),
+        }
     }
     fn setCursorStyle(ptr: *anyopaque, style: platform.CursorStyle) void {
         const self = cast(ptr);
@@ -145,6 +157,7 @@ pub const LinuxPlatform = struct {
     }
     fn deinitFn(ptr: *anyopaque) void {
         const self = cast(ptr);
+        if (self.appearance_watcher) |w| w.destroy();
         switch (self.backend) {
             inline else => |b| b.destroy(),
         }
@@ -204,6 +217,11 @@ pub fn create(gpa: Allocator, options: Options) !platform.Platform {
         },
         .x11 => .{ .x11 = try x11.Client.create(gpa, self) },
     };
+    if (std.c.getenv("ZPUI_NO_APPEARANCE_PORTAL") == null) {
+        const started = appearance.Watcher.start(gpa, &self.loop, appearance.Watcher.envFromProcess(), .{ .ctx = self, .func = LinuxPlatform.onAppearanceChanged });
+        self.appearance = started.appearance;
+        self.appearance_watcher = started.watcher;
+    }
     return self.platformInterface();
 }
 

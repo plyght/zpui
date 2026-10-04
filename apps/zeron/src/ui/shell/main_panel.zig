@@ -12,7 +12,6 @@ const zt = @import("zeron_theme");
 const ui = @import("../components/root.zig");
 const prefs_mod = @import("prefs.zig");
 const fixtures_mod = @import("fixtures.zig");
-const shell_mod = @import("shell.zig");
 const slots = @import("slots.zig");
 const terminal_dock = @import("terminal_dock.zig");
 
@@ -93,7 +92,7 @@ pub const MainPanel = struct {
         } else {
             // The canvas composer sits a touch above center (the dock's home slot).
             col = col.child(div().flex1().minH0())
-                .child(div().mb(px(16)).child(self.slots.composer(width, cx)))
+                .child(div().mb(px(12)).child(self.slots.composer(width, cx)))
                 .child(div().flex1().minH0());
         }
         if (prefs_mod.get(cx).terminal_open) {
@@ -129,35 +128,4 @@ fn onboarding(theme: *const Theme) zpui.Div {
             .child(div().mt(px(24)).textSize(ui.rems(16)).fontWeight(500).textColor(theme.text).child("Add a project to get started"))
             .child(div().mt(px(6)).textSize(ui.rems(13)).textColor(theme.text_muted.opacity(0.7)).child("A project is a folder on one of your devices."))
             .child(ui.button.solid("onboarding-add-space", "Add a project", theme).mt(px(20)).h(px(32)).px(px(14)).textSize(ui.rems(13))));
-}
-
-/// The right pane: a flush, left-bordered panel under the titlebar strip.
-/// With no surfaces open it shows the launcher (`render_surface_picker`).
-pub fn rightPane(shell: *shell_mod.Shell, theme: *const Theme, cx: *Context(shell_mod.Shell)) zpui.Div {
-    if (shell.activeSurface()) |surface| {
-        return div().sizeFull().flex().flexCol().bg(theme.panelBg()).borderL1().borderColor(theme.border)
-            .pt(px(layout.titlebar_height))
-            .child(div().flex1().minH0().borderT1().borderColor(theme.hairline(0.07)).child(surface));
-    }
-    const git = if (shell.state.read(cx).workspace.read(cx).selectedChatRow()) |c| blk: {
-        const ws = shell.state.read(cx).workspace.read(cx);
-        break :blk if (ws.spaceForChat(c)) |s| s.gitDetected else false;
-    } else false;
-    var list = div().wFull().maxW(px(280)).flex().flexCol().gap(px(8))
-        .child(surfaceCard(theme, "surface-card-browser", .globe, "Browser"))
-        .child(surfaceCard(theme, "surface-card-terminal", .terminal, "Terminal").onClick(cx.listener(shell_mod.Shell.onAddTerminalSurface)));
-    if (git) list = list.child(surfaceCard(theme, "surface-card-diffs", .list, "Diffs"))
-        .child(surfaceCard(theme, "surface-card-history", .git_branch, "History"));
-    return div().sizeFull().flex().flexCol().bg(theme.panelBg()).borderL1().borderColor(theme.border)
-        .pt(px(layout.titlebar_height))
-        .child(div().flex1().minH0().relative().flex().itemsCenter().justifyCenter().p(px(16)).child(list));
-}
-
-fn surfaceCard(theme: *const Theme, id: []const u8, i: ui.icon.Icon, title: []const u8) zpui.StatefulDiv {
-    return div().id(id).wFull().h(px(44)).px(px(14)).rounded(px(10))
-        .border1().borderColor(theme.border).bg(theme.ink(0.02))
-        .flex().flexRow().itemsCenter().gap(px(10)).cursorPointer()
-        .hover(sb.bg(theme.ink(0.05)).borderColor(theme.border_strong))
-        .child(ui.icon.of(i, 15, theme.text_muted))
-        .child(div().textSize(ui.rems(13)).fontWeight(500).textColor(theme.text).child(title));
 }

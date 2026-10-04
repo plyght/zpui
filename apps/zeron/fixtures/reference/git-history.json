@@ -1,0 +1,59 @@
+{
+ "commits": [
+  {
+   "sha": "f5618ff7f1ff8c2accf7e282cbcffc5870f45e17",
+   "parentShas": [
+    "ac6effd8e2bf66235cba791853e832905b0a15c4"
+   ],
+   "subject": "Bump retry default",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-04T07:11:12+00:00",
+   "refs": [
+    {
+     "kind": "branch",
+     "label": "feat/stream-backpressure"
+    },
+    {
+     "kind": "branch",
+     "label": "main"
+    }
+   ]
+  },
+  {
+   "sha": "ac6effd8e2bf66235cba791853e832905b0a15c4",
+   "parentShas": [],
+   "subject": "Initial commit",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-04T07:11:12+00:00",
+   "refs": []
+  }
+ ],
+ "branchTips": [
+  {
+   "sha": "f5618ff7f1ff8c2accf7e282cbcffc5870f45e17",
+   "parentShas": [
+    "ac6effd8e2bf66235cba791853e832905b0a15c4"
+   ],
+   "subject": "Bump retry default",
+   "authorName": "Ada Park",
+   "authorEmail": "ada@example.com",
+   "authoredAt": "2026-10-04T07:11:12+00:00",
+   "refs": [
+    {
+     "kind": "branch",
+     "label": "feat/stream-backpressure"
+    },
+    {
+     "kind": "branch",
+     "label": "main"
+    }
+   ]
+  }
+ ],
+ "headSha": "f5618ff7f1ff8c2accf7e282cbcffc5870f45e17",
+ "nextCursor": null,
+ "totalCount": 2,
+ "headCommitCount": 2
+}

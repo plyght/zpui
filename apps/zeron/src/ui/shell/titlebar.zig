@@ -117,19 +117,26 @@ pub fn cluster(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div
 
 // ---- session bar ------------------------------------------------------------------
 
-pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, theme: *const Theme, cx: *Context(Shell)) zpui.StatefulDiv {
+pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, files_now: f32, theme: *const Theme, cx: *Context(Shell)) zpui.StatefulDiv {
     const state = shell.state.read(cx);
     const ws = state.workspace.read(cx);
     const chat = ws.selectedChatRow();
     const on_canvas = chat == null;
     const plus_inset: f32 = if (on_canvas) 0 else action_slot_width;
-    const row_left = @max(sidebar_now + layout.space_lg, contentStart() + plus_inset);
+    // In takeover the title hides and the strip owns the band: the row pulls
+    // back to the sidebar seam (the strip brings its own 8px pad).
+    const takeover = shell.right_expanded and right_now > 0.5;
+    const row_left = if (takeover)
+        @max(sidebar_now - 8, contentStart() - layout.titlebar_identity_gap + plus_inset - 14)
+    else
+        @max(sidebar_now + layout.space_lg, contentStart() + plus_inset);
     const right_pad = rightPad(shell);
 
     var inner = div().sizeFull().flex().itemsCenter().pt(px(layout.titlebar_top_pad))
         .gap(px(8)).pl(px(row_left)).pr(px(right_pad));
 
-    if (chat) |c| {
+    if (chat != null and !takeover) {
+        const c = chat.?;
         const folder = if (c.spaceId) |sid| (if (ws.space(sid)) |s| model.view.spaceDisplayName(s) else "~") else "~";
         const device = ws.deviceName(c.deviceId) orelse "Unknown device";
         const title_raw = c.title orelse "New session";
@@ -144,7 +151,7 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, theme: *const
     }
     inner = inner.child(div().flex1());
 
-    if (!on_canvas) {
+    if (!on_canvas and !takeover) {
         // Session controls: new side chat, fork.
         inner = inner.child(div().flexNone().flex().flexRow().itemsCenter().gap(px(2))
             .child(button.headerIcon("session-new-side-chat", .plus, "New side chat", theme))
@@ -152,20 +159,35 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, theme: *const
         // Project actions: the empty state's "Add action" pill (24px, radius 7,
         // the composer's material and edge).
         if (chat.?.spaceId != null) inner = inner.child(addActionPill(theme));
+    }
+    if (!on_canvas) {
         // Trailing strip: explorer + pane toggles, right-aligned over the pane.
-        const files_controls = @max(0 - right_pad, panel_toggle_slots);
+        // `panel_titlebar_widths`: the toggles anchor over the explorer column
+        // (or the window edge); the surface tabs reveal to their left.
+        const files_controls = @max(files_now - right_pad, panel_toggle_slots);
         var trailing = div().id("right-titlebar-controls").flexNone().hFull().flex().flexRow().itemsCenter();
         if (right_now > 0.5) {
-            const reveal = @max(right_now - right_pad - files_controls, 0);
+            const reveal = @max(right_now + files_now - right_pad - files_controls, 0);
+            const strip = blk: {
+                var l = shell.right_pane.lease(cx);
+                defer l.end();
+                break :blk l.value.renderStrip(theme, &l.cx);
+            };
             trailing = trailing.child(div().w(px(reveal)).hFull().flexNone().flex().flexRow().itemsCenter().gap(px(4))
                 .overflowHidden().pl(px(8)).pr(px(4))
-                .child(div().flex1().minW0().hFull().flex().flexRow().itemsCenter().gap(px(4)).overflowHidden()
-                    .child(if (shell.surfaces.items.len > 0) surfaceStrip(shell, theme, cx) else null))
-                .child(button.headerIcon("expand-changes", .expand_arrows, "Expand panel", theme)));
+                .child(div().flex1().minW0().hFull().overflowHidden().child(strip))
+                .child(button.headerIcon("expand-changes", if (shell.right_expanded) .collapse_arrows else .expand_arrows, if (shell.right_expanded) "Collapse panel" else "Expand panel", theme)
+                    .onClick(cx.listener(Shell.onToggleExpandClick))));
         }
         trailing = trailing.child(div().w(px(files_controls)).hFull().flexNone().flex().itemsCenter().justifyEnd()
             .gap(px(panel_toggle_gap))
-            .child(button.headerIcon("toggle-files-panel", .file_tree, "Show files panel", theme))
+            .child(blk: {
+                const files_open = shell.filesOpen(cx);
+                var b = button.headerIcon("toggle-files-panel", .file_tree, if (files_open) "Hide files panel" else "Show files panel", theme)
+                    .onClick(cx.listener(Shell.onToggleFilesClick));
+                if (files_open) b = b.bg(theme.wash(0.09));
+                break :blk b;
+            })
             .child(button.headerIcon("toggle-changes", .sidebar_minimalistic, "Toggle right sidebar", theme)
                 .onClick(cx.listener(Shell.onToggleRightClick))));
         inner = inner.child(trailing);
@@ -173,54 +195,6 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, theme: *const
 
     const bar = div().h(px(layout.titlebar_height)).flexNone().child(inner);
     return dragRegion("chat-titlebar", bar, cx);
-}
-
-const chip_w: f32 = 112;
-
-/// The right pane's surface tabs (t3 RightPanelTabs): 112px chips (icon,
-/// 11.5px title, close on hover) and the `+` new-tab menu.
-fn surfaceStrip(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div {
-    var strip = div().flex().flexRow().itemsCenter().gap(px(4));
-    for (shell.surfaces.items, 0..) |e, ix| {
-        const active = ix == @min(shell.surface_active, shell.surfaces.items.len - 1);
-        const group = zpui.fmt("right-surface-tab-{d}", .{ix});
-        const title = zpui.fmt("{s}", .{@import("terminal_dock.zig").surfaceTitle(e.read(cx))});
-        var chip = div().id(.{ "right-surface-tab", ix }).group(group)
-            .h(px(24)).w(px(chip_w)).flexNone().px(px(4)).rounded(px(6))
-            .flex().flexRow().itemsCenter().gap(px(3)).cursorPointer()
-            .blockMouseExceptScroll()
-            .onClick(cx.listenerWith(ix, Shell.onSelectSurface))
-            .child(div().flexNone().size(px(18)).flex().itemsCenter().justifyCenter()
-                .child(ui.icon.of(.terminal, 12, if (active) theme.text_muted else theme.text_muted.opacity(0.7))))
-            .child(div().flex1().minW0().truncate().whitespaceNowrap().textSize(ui.rems(11.5))
-                .textColor(if (active) theme.text else theme.text_muted).child(title))
-            .child(div().id(.{ "right-surface-close", ix }).flexNone().size(px(18)).rounded(px(4)).relative()
-                .hover(sb.bg(theme.wash(0.12)))
-                .onClick(cx.listenerWith(ix, Shell.onCloseSurface))
-                .child(div().absolute().inset0().flex().itemsCenter().justifyCenter().opacity(0)
-                    .groupHover(group, sb.opacity(1))
-                    .child(ui.icon.of(.close, 12, theme.text_muted))));
-        chip = if (active) chip.bg(theme.wash(0.10)) else chip.hover(sb.bg(theme.wash(0.06)));
-        strip = strip.child(chip);
-    }
-    var plus = div().id("right-surface-new").relative().size(px(24)).flexNone().flex().itemsCenter().justifyCenter()
-        .rounded(px(6)).cursorPointer().hover(sb.bg(theme.wash(0.06)))
-        .onClick(cx.listener(Shell.onNewTabMenu))
-        .child(ui.icon.of(.plus, 14, theme.text_muted));
-    if (!shell.newtab_menu_open) plus = plus.tooltipWith(@as([]const u8, "New tab"), ui.tooltip.build);
-    if (shell.newtab_menu_open) {
-        const pt = zpui.window.arena_mod.current().create(Theme, theme.forPopup());
-        var menu = ui.popover.card(pt).w(px(168)).onMouseDownOut(cx.listener(Shell.onCloseNewTabMenu));
-        const rows = [_]struct { []const u8, ui.icon.Icon }{ .{ "Files", .document }, .{ "Browser", .globe }, .{ "Terminal", .terminal }, .{ "Diffs", .list }, .{ "History", .git_branch } };
-        for (rows, 0..) |r, i| {
-            var row = ui.popover.menuRow(pt, false).id(.{ "newtab-row", i })
-                .child(ui.icon.of(r[1], 16, pt.text_muted)).child(r[0]);
-            if (i == 2) row = row.onClick(cx.listener(Shell.onAddTerminalSurface));
-            menu = menu.child(row);
-        }
-        plus = plus.child(ui.popover.anchoredBelow(menu));
-    }
-    return strip.child(plus);
 }
 
 fn addActionPill(theme: *const Theme) zpui.Div {
@@ -234,7 +208,9 @@ fn addActionPill(theme: *const Theme) zpui.Div {
             .textSize(px(11.5)).fontWeight(500).textColor(theme.text)
             .hover(sb.bg(theme.wash(0.04)))
             .child(ui.icon.of(.plus, 13, theme.text_muted))
-            .child("Add action"));
+            // gpui lands this 11.5px label's baseline a device pixel higher
+            // than our centering does (measured against the reference).
+            .child(div().relative().top(px(-1)).child("Add action")));
 }
 
 fn rightTab(theme: *const Theme, label: []const u8, active: bool) zpui.Div {

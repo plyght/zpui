@@ -25,6 +25,9 @@ The zeron Rust engine/daemon is unchanged; the client talks to it over its local
 | zeron syntax | `apps/zeron/src/syntax/`, `vendor/tree-sitter/` | span-exact with Rust |
 | zeron markdown + diff | `apps/zeron/src/{markdown,diff}/` | pulldown-cmark port, exact with Rust |
 | zeron app state | `apps/zeron/src/model/`, `actions.zig`, `keymap.zig` | stores as zpui entities |
+| zeron right-pane host | `apps/zeron/src/ui/shell/right_pane.zig` | per-chat tabs (Diffs, History, commit diffs, Terminal, Browser page, file editors), `+` menu, drag reorder, takeover, docked Files explorer |
+| zeron pickers | `apps/zeron/src/ui/pickers/` | project / device / checkout / branch popovers on the composer chips, "New project" folder browser |
+| Linux system appearance | `src/platform/linux/appearance.zig` | settings-portal `color-scheme` + `SettingChanged` over a pure-Zig D-Bus client, gsettings fallback |
 
 ## In progress
 
@@ -40,7 +43,9 @@ The zeron Rust engine/daemon is unchanged; the client talks to it over its local
 4. Settings (11 pages), theme switching, light theme
 5. Files explorer + code editor (gpui-component's editor equivalent)
 6. Browser pane (WKWebView on macOS; zeron's WebKitGTK helper on Linux), voice dictation, Mermaid
-7. Packaging: macOS .app bundle, Linux tarball/installer, auto-update
+7. Packaging: auto-update, Linux installer, signing/notarization. Done: `zig build zeron-app-bundle`
+   (Zeron.app, universal via lipo), `zig build zeron-dist` (Linux tarball), CI real-app smoke
+   (`zeron --smoke-frames N`, jobs `zeron-app`, `zeron-app-linux`, `zeron-bundle`)
 8. zui tracking: scheduled workflow diffing zui against the pinned rev (`667d0aa`) and opening port issues
 
 ## Conventions

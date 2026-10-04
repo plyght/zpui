@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Zeron.app/Contents/Info.plist template (`zig build zeron-app-bundle`, which
+     substitutes __VERSION__ from -Dzeron-version). Mirrors the Rust app's
+     zeron/dist/macos/Info.plist: same bundle id, name, URL scheme and minimum OS. -->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleDisplayName</key>
+    <string>Zeron</string>
+    <key>CFBundleExecutable</key>
+    <string>zeron</string>
+    <key>CFBundleIconFile</key>
+    <string>zeron.icns</string>
+    <key>CFBundleIdentifier</key>
+    <string>sh.zeron.app</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>Zeron</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>__VERSION__</string>
+    <key>CFBundleVersion</key>
+    <string>__VERSION__</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>sh.zeron.app.conversation</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>zeron</string>
+            </array>
+        </dict>
+    </array>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <!-- A regular Dock app with a menu bar, not an agent. -->
+    <key>LSUIElement</key>
+    <false/>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Dictate into your draft using on-device Parakeet transcription.</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>© 2026</string>
+    <!-- zpui renders via Metal. -->
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+</dict>
+</plist>

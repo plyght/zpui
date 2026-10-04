@@ -11,6 +11,8 @@ const prefs_mod = @import("prefs.zig");
 const fixtures_mod = @import("fixtures.zig");
 const shell_mod = @import("shell.zig");
 const sidebar_mod = @import("../sidebar/sidebar.zig");
+const right_pane_mod = @import("right_pane.zig");
+const pickers_mod = @import("../pickers/root.zig");
 
 const testing = std.testing;
 const TestWindow = zpui.core.test_platform.TestWindow;
@@ -80,8 +82,95 @@ test "shell renders the reference fixture and toggles panes" {
     tw.typeKey(mod ++ "-b");
     try testing.expect(!prefs_mod.get(h.app).sidebar_collapsed);
     tw.typeKey(mod ++ "-r");
-    try testing.expect(prefs_mod.get(h.app).right_pane_open);
+    try testing.expect(rightOpen(&h));
+    tw.typeKey(mod ++ "-r");
+    try testing.expect(!rightOpen(&h));
+}
 
+fn rightOpen(h: *Harness) bool {
+    var l = h.handle.rootView(h.app).?.lease(h.app);
+    defer l.end();
+    return l.value.rightOpen(h.app);
+}
+
+fn rightTabs(h: *Harness) ?*const right_pane_mod.ChatTabs {
+    const shell = h.handle.rootView(h.app).?.read(h.app);
+    return shell.right_pane.read(h.app).peek(h.app);
+}
+
+test "right pane hosts surfaces per chat: launcher, tabs, + menu, close" {
+    var h = try Harness.init("apps/zeron/fixtures/reference");
+    defer h.deinit();
+    const w = h.window();
+    const tw = TestWindow.of(w.platform_window);
+    const mod = if (@import("builtin").os.tag == .macos) "cmd" else "ctrl";
+    tw.typeKey(mod ++ "-r");
+    h.app.advanceClock(400 * std.time.ns_per_ms);
+    h.app.runUntilParked();
+    try testing.expect(rightOpen(&h));
+    // The launcher's "Diffs" card (pane spans x 1080..1600, cards are 44px
+    // rows centered vertically: Browser, Terminal, Diffs, History).
+    tw.click(1340, 544);
+    h.app.runUntilParked();
+    const tabs = rightTabs(&h).?;
+    try testing.expectEqual(@as(usize, 1), tabs.tabs.items.len);
+    try testing.expect(tabs.tabs.items[0].surface == .changes);
+    // `+` → History.
+    tw.click(1215, 20);
+    h.app.runUntilParked();
+    try testing.expect(h.handle.rootView(h.app).?.read(h.app).right_pane.read(h.app).plus_open);
+    tw.click(1260, 204);
+    h.app.runUntilParked();
+    try testing.expectEqual(@as(usize, 2), rightTabs(&h).?.tabs.items.len);
+    try testing.expect(rightTabs(&h).?.tabs.items[1].surface == .history);
+    try testing.expectEqual(rightTabs(&h).?.tabs.items[1].id, rightTabs(&h).?.resolvedActive().?);
+    // The other chat has its own (empty, closed) host.
+    tw.click(120, 129);
+    h.app.runUntilParked();
+    try testing.expect(!rightOpen(&h));
+    tw.click(120, 160);
+    h.app.runUntilParked();
+    try testing.expect(rightOpen(&h));
+    try testing.expectEqual(@as(usize, 2), rightTabs(&h).?.tabs.items.len);
+}
+
+test "new-session pickers open from the canvas chips and pick" {
+    var h = try Harness.init("apps/zeron/fixtures/reference");
+    defer h.deinit();
+    const w = h.window();
+    const tw = TestWindow.of(w.platform_window);
+    const mod = if (@import("builtin").os.tag == .macos) "cmd" else "ctrl";
+    tw.typeKey(mod ++ "-n");
+    h.app.runUntilParked();
+    const ws_e = h.state.read(h.app).workspace;
+    try testing.expect(ws_e.read(h.app).selected_chat == null);
+    const shell = h.handle.rootView(h.app).?.read(h.app);
+    const pickers = shell.main.read(h.app).slots.pickers;
+    // Open the project picker programmatically, navigate with the keyboard.
+    {
+        var l = pickers.lease(h.app);
+        defer l.end();
+        l.value.toggle(.space, w, &l.cx);
+    }
+    h.app.runUntilParked();
+    try testing.expectEqual(@as(?pickers_mod.Kind, .space), pickers.read(h.app).open);
+    tw.typeKey("down");
+    tw.typeKey("enter");
+    h.app.runUntilParked();
+    try testing.expectEqual(@as(?pickers_mod.Kind, null), pickers.read(h.app).open);
+    try testing.expect(ws_e.read(h.app).selectedSpaceRow() != null);
+    // The opt-out row is last: up from the top wraps to it.
+    {
+        var l = pickers.lease(h.app);
+        defer l.end();
+        l.value.toggle(.space, w, &l.cx);
+        l.value.active = null;
+    }
+    h.app.runUntilParked();
+    tw.typeKey("up");
+    tw.typeKey("enter");
+    h.app.runUntilParked();
+    try testing.expect(ws_e.read(h.app).no_project);
 }
 
 test "clicking a sidebar row selects its chat" {

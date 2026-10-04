@@ -95,3 +95,110 @@ jobs:
           name: mac-window-smoke
           path: zig-out/mac-window*.png
           if-no-files-found: warn
+
+  # Real-app smoke test (macOS, Metal): builds the zeron desktop client in
+  # ReleaseSafe and runs it from the checked-in reference fixtures (no engine)
+  # in dark and light appearance. `--smoke-frames 60` renders 60 frames, captures
+  # the window (CGWindowListCreateImage) to zig-out/zeron-macos[-light].png and
+  # exits 0, or prints `FAIL: zeron smoke: <reason>` (no frames within the
+  # watchdog, capture error, blank image) and exits 1.
+  # Intel runner: Apple Silicon runners expose no Metal device.
+  zeron-app:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Build zeron (ReleaseSafe)
+        run: zig build zeron -Doptimize=ReleaseSafe --summary all
+      - name: Smoke test zeron, dark (60 frames, reference fixtures)
+        timeout-minutes: 5
+        run: ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --dark
+      - name: Smoke test zeron, light (60 frames, reference fixtures)
+        timeout-minutes: 5
+        run: ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --light
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zeron-macos
+          path: zig-out/zeron-macos*.png
+          if-no-files-found: warn
+
+  # Same smoke test on Linux: Xvfb (X11, server decorations) + Vulkan lavapipe.
+  # The window is captured with ImageMagick `import` (zig-out/zeron-linux[-light].png).
+  # Also packages the Linux tarball (`zig build zeron-dist`).
+  zeron-app-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Install Linux dependencies (+ Xvfb, ImageMagick)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $LINUX_DEPS xvfb xauth imagemagick
+          echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json" >> "$GITHUB_ENV"
+      - name: Build zeron (ReleaseSafe)
+        run: zig build zeron -Doptimize=ReleaseSafe --summary all
+      - name: Smoke test zeron, dark (60 frames, reference fixtures, Xvfb + lavapipe)
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1600x1000x24 -nolisten tcp" ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --dark
+      - name: Smoke test zeron, light (60 frames, reference fixtures, Xvfb + lavapipe)
+        timeout-minutes: 5
+        run: xvfb-run -a -s "-screen 0 1600x1000x24 -nolisten tcp" ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --light
+      - name: Package Linux tarball (zig build zeron-dist)
+        run: zig build zeron-dist -Doptimize=ReleaseSafe --summary all
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zeron-linux
+          path: zig-out/zeron-linux*.png
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zeron-linux-dist
+          path: zig-out/zeron-*-linux-*.tar.gz
+          if-no-files-found: error
+
+  # macOS packaging: Zeron.app with a universal (arm64 + x86_64) binary, built
+  # per arch then merged with lipo by `zig build zeron-app-bundle`. Apple Silicon
+  # has no Metal device on CI, so the bundle is checked structurally and by
+  # running its binary (`zeron headless` must refuse with exit 2: proves the
+  # arm64 slice loads its frameworks), not rendered.
+  zeron-bundle:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Build Zeron.app (x86_64, then aarch64 + lipo → universal)
+        run: |
+          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=x86_64-macos --summary all
+          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=aarch64-macos --summary all
+      - name: Verify bundle
+        run: |
+          app=zig-out/Zeron.app
+          plutil -lint "$app/Contents/Info.plist"
+          echo "bundle id: $(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")"
+          echo "version:   $(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")"
+          test -s "$app/Contents/Resources/zeron.icns" || { echo "FAIL: zeron.icns missing"; exit 1; }
+          lipo -info "$app/Contents/MacOS/zeron"
+          for a in arm64 x86_64; do
+            lipo "$app/Contents/MacOS/zeron" -verify_arch "$a" || { echo "FAIL: universal binary lacks $a"; exit 1; }
+          done
+          codesign --verify --verbose=2 "$app"
+          set +e
+          "$app/Contents/MacOS/zeron" headless; code=$?
+          set -e
+          if [ "$code" != 2 ]; then echo "FAIL: bundled zeron did not start (exit $code; expected the 'not the engine' refusal, 2)"; exit 1; fi
+          echo "bundled binary starts (refused 'headless' as expected)"
+      - name: Zip Zeron.app
+        run: ditto -c -k --keepParent zig-out/Zeron.app zig-out/Zeron-macos-app.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zeron-macos-app
+          path: zig-out/Zeron-macos-app.zip
+          if-no-files-found: error

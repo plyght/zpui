@@ -3,7 +3,7 @@
 //! Boot: platform → App → Geist fonts → theme global → actions + keymap →
 //! settings (`ui-settings.json`) → AppState (connects to the engine on
 //! `ZERON_IPC_PORT`, spawning `zeron headless` when nothing answers; binary
-//! from `ZERON_BIN`, else a `zeron` next to this executable, else `$PATH`) →
+//! from `ZERON_BIN`, else a `zeron-engine`/`zeron` sibling, `$PATH`, install dirs; see engine_bin.zig) →
 //! main window (1320×880, min 900×600, transparent titlebar, traffic lights
 //! at 14,14 on macOS, blurred background on macOS, transparent +
 //! client-side decorations on Linux).
@@ -19,6 +19,9 @@
 //!   fixture overrides:      --gate ready|loading|sign_in|org_gate|failed:<msg>, --splash,
 //!                           --select <chat-id|none>, --compact, --detailed
 //!   --backend x11|wayland   force a Linux backend
+//!   --smoke-frames <n>      CI smoke test (also ZERON_SMOKE_FRAMES): render n frames,
+//!                           capture the window to zig-out/zeron-<os>[-light].png and
+//!                           exit 0, or exit 1 after a FAIL: line (see smoke.zig)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -33,6 +36,8 @@ const prefs_mod = @import("ui/shell/prefs.zig");
 const fixtures_mod = @import("ui/shell/fixtures.zig");
 const shell_mod = @import("ui/shell/shell.zig");
 const settings_ui = @import("ui/settings/root.zig");
+const smoke = @import("smoke.zig");
+const engine_bin = @import("engine_bin.zig");
 
 const App = zpui.App;
 const log = std.log.scoped(.zeron);
@@ -46,6 +51,7 @@ const Launch = struct {
     environ: *const std.process.Environ.Map,
     fixtures_dir: ?[]const u8 = null,
     max_frames: ?u64 = null,
+    smoke_frames: ?u64 = null, // --smoke-frames / ZERON_SMOKE_FRAMES (smoke.zig)
     size: zpui.Size(f32) = .{ .width = 1320, .height = 880 },
     appearance: ?zt.Appearance = null,
     server_decorations: bool = false,
@@ -61,24 +67,8 @@ const Launch = struct {
 };
 
 fn resolveZeronBin(l: *Launch, arena: std.mem.Allocator) void {
-    if (l.environ.get("ZERON_BIN")) |b| {
-        l.zeron_bin = b;
-        return;
-    }
-    const exe = std.process.executablePathAlloc(l.io, arena) catch {
-        l.zeron_bin = "zeron";
-        return;
-    };
-    const dir = std.fs.path.dirname(exe) orelse ".";
-    const candidate = std.fs.path.join(arena, &.{ dir, "zeron" }) catch "zeron";
-    // Our own binary is also named `zeron`: only use a sibling that is not us.
-    if (!std.mem.eql(u8, candidate, exe)) {
-        if (std.Io.Dir.cwd().access(l.io, candidate, .{})) |_| {
-            l.zeron_bin = candidate;
-            return;
-        } else |_| {}
-    }
-    l.zeron_bin = "zeron";
+    // ZERON_BIN, then siblings (incl. inside Zeron.app), PATH, install locations; never ourselves.
+    l.zeron_bin = engine_bin.resolve(arena, l.io, l.environ);
 }
 
 fn registerFonts(app: *App) void {
@@ -173,6 +163,9 @@ fn onLaunch(l: *Launch, app: *App) void {
         return;
     };
     if (handle.window(app)) |w| w.setRemSize(16);
+    // --- smoke test (CI): render N frames, capture, exit (smoke.zig) ---
+    if (l.smoke_frames) |n| if (handle.window(app)) |w|
+        smoke.start(l.gpa, l.io, w, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT") });
     if (l.max_frames) |n| {
         const Quit = struct {
             left: u64,
@@ -188,6 +181,13 @@ pub fn main(init: std.process.Init) !void {
     const gpa = if (is_mac) std.heap.c_allocator else init.gpa;
     const arena = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(arena);
+    // This is the desktop client; the engine (`zeron headless`) is a separate
+    // binary that shares the name. Refuse instead of opening a window, so a
+    // mis-resolved engine path can never make us respawn ourselves.
+    if (argv.len > 1 and std.mem.eql(u8, argv[1], "headless")) {
+        std.debug.print("zeron: this is the zeron desktop client, not the engine; point ZERON_BIN at the engine binary\n", .{});
+        std.process.exit(2);
+    }
     var launch: Launch = .{ .gpa = gpa, .io = init.io, .environ = init.environ_map };
     var backend: if (is_linux) ?zpui.linux_platform.BackendKind else ?void = null;
     var force_csd = false;
@@ -200,6 +200,9 @@ pub fn main(init: std.process.Init) !void {
         } else if (std.mem.eql(u8, a, "--frames") and i + 1 < argv.len) {
             i += 1;
             launch.max_frames = try std.fmt.parseInt(u64, argv[i], 10);
+        } else if (std.mem.eql(u8, a, "--smoke-frames") and i + 1 < argv.len) {
+            i += 1;
+            launch.smoke_frames = try std.fmt.parseInt(u64, argv[i], 10);
         } else if (std.mem.eql(u8, a, "--size") and i + 1 < argv.len) {
             i += 1;
             var it = std.mem.splitScalar(u8, argv[i], 'x');
@@ -231,6 +234,9 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     if (launch.fixtures_dir == null) launch.fixtures_dir = init.environ_map.get("ZERON_FIXTURES");
+    if (launch.smoke_frames == null) if (init.environ_map.get("ZERON_SMOKE_FRAMES")) |v| {
+        launch.smoke_frames = try std.fmt.parseInt(u64, v, 10);
+    };
     // Client-side decorations need a compositor (gpui falls back to server
     // decorations without one). With no desktop session at all (bare Xvfb,
     // CI) keep the square, compositor-framed window; `--csd` forces CSD.
@@ -254,9 +260,18 @@ pub fn main(init: std.process.Init) !void {
         gpa.destroy(f);
     }
     if (launch.data_dir) |d| gpa.free(d);
+    if (launch.smoke_frames != null) {
+        const code = smoke.exitCode(); // smoke test result (smoke.zig)
+        if (code != 0) std.process.exit(code);
+    }
 }
 
 test {
+    _ = @import("smoke.zig");
+    _ = @import("engine_bin.zig");
     _ = @import("ui/shell/shell_test.zig");
     _ = @import("ui/settings/root.zig");
+    _ = @import("ui/pickers/root.zig");
+    _ = @import("ui/shell/right_pane.zig");
+    _ = @import("ui/sidebar/project_icon.zig");
 }

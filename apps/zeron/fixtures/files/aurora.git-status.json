@@ -1,0 +1,11 @@
+{
+  "checkoutId": "fixture-aurora",
+  "deviceId": "fixture",
+  "revision": "f5618ff",
+  "complete": true,
+  "files": [
+    { "path": "src/config.rs", "index": "unchanged", "worktree": "modified" },
+    { "path": "src/stream.rs", "index": "unchanged", "worktree": "modified" },
+    { "path": "src/retry.rs", "index": "untracked", "worktree": "untracked" }
+  ]
+}

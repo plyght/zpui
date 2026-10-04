@@ -19,6 +19,7 @@ const engine = @import("zeron_engine");
 const zt = @import("zeron_theme");
 const ui = @import("../components/root.zig");
 const prefs_mod = @import("../shell/prefs.zig");
+const project_icon_mod = @import("project_icon.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -34,6 +35,63 @@ const view = model.view;
 const Timestamp = model.time.Timestamp;
 const Chat = engine.protocol.Chat;
 const ChatIndicator = view.ChatIndicator;
+
+/// A pinned row being dragged (manual pin order; regular rows never move).
+pub const PinDrag = struct {
+    from: usize,
+    title_buf: [64]u8 = undefined,
+    title_len: u8 = 0,
+};
+
+/// The floating row under the pointer while a pin drags.
+pub const PinGhost = struct {
+    buf: [64]u8 = undefined,
+    len: u8 = 0,
+
+    pub fn render(self: *PinGhost, _: *Window, cx: *Context(PinGhost)) zpui.Div {
+        const theme = ui.theme.get(cx);
+        return div().h(px(29)).w(px(220)).px(px(zt.layout.space_sm)).flex().itemsCenter().rounded(px(8))
+            .bg(theme.surface_raised).border1().borderColor(theme.border_strong).opacity(0.9)
+            .fontFamily(theme.font_sans).textSize(rems(13)).textColor(theme.text)
+            .child(div().truncate().whitespaceNowrap().child(self.buf[0..self.len]));
+    }
+};
+
+fn buildPinGhost(drag: *const PinDrag, _: zpui.Point(f32), _: *Window, app: *App) Entity(PinGhost) {
+    var g: PinGhost = .{ .len = drag.title_len };
+    @memcpy(g.buf[0..drag.title_len], drag.title_buf[0..drag.title_len]);
+    return app.new(PinGhost, g) catch @panic("OOM");
+}
+
+/// Slot `y` px into the pinned list (cumulative row slots) → drop index.
+pub fn pinDropIndex(y: f32, slots: []const f32) usize {
+    if (slots.len == 0) return 0;
+    var top: f32 = 0;
+    for (slots, 0..) |h, i| {
+        if (y < top + h) return i;
+        top += h;
+    }
+    return slots.len - 1;
+}
+
+/// Move `from` to `to` in `ids` (the drop's "after"/"before" neighbours
+/// are read off the result).
+pub fn movePin(ids: [][]const u8, from: usize, to: usize) void {
+    if (from >= ids.len or to >= ids.len or from == to) return;
+    const moving = ids[from];
+    if (from < to) {
+        std.mem.copyForwards([]const u8, ids[from..to], ids[from + 1 .. to + 1]);
+    } else {
+        std.mem.copyBackwards([]const u8, ids[to + 1 .. from + 1], ids[to..from]);
+    }
+    ids[to] = moving;
+}
+
+fn slideOffsetY(ix: usize, from: usize, over: usize) f32 {
+    if (from < over and ix > from and ix <= over) return -1;
+    if (over < from and ix >= over and ix < from) return 1;
+    return 0;
+}
 
 pub const OpenSettings = struct {};
 pub const NewSession = struct {};
@@ -91,6 +149,8 @@ const RowData = struct {
     folder: []const u8,
     project_name: []const u8,
     project_seed: []const u8,
+    /// Local project folder (artwork lookup); null for home / remote rows.
+    space_path: ?[]const u8 = null,
     branch: ?[]const u8,
     pr: ?u64,
     time_ago: []const u8,
@@ -125,6 +185,13 @@ pub const Sidebar = struct {
     collapsed_groups: std.ArrayList([]u8) = .empty,
     /// Space ids listed in the open spaces menu (owned).
     menu_space_ids: std.ArrayList([]u8) = .empty,
+    /// Project artwork (favicons) per local project folder.
+    icons: project_icon_mod.Cache = .{},
+    /// Pinned-row drag: hovered slot + slide epoch (Rust `PinnedSessionDragState`).
+    pin_drag: ?struct { from: usize, over: usize, prev_over: usize, epoch: usize } = null,
+    /// Pinned rows rendered last frame: count and slot heights (row + gap).
+    pinned_count: usize = 0,
+    pin_slots: std.ArrayList(f32) = .empty,
 
     pub const Events = .{ OpenSettings, NewSession, SignOut };
 
@@ -152,6 +219,8 @@ pub const Sidebar = struct {
         self.group_keys.deinit(self.gpa);
         self.clearIds(&self.collapsed_groups);
         self.collapsed_groups.deinit(self.gpa);
+        self.icons.deinit(self.gpa);
+        self.pin_slots.deinit(self.gpa);
         self.state.release(app);
     }
 
@@ -162,6 +231,83 @@ pub const Sidebar = struct {
 
     fn onModelChanged(_: *Sidebar, _: anytype, cx: *Context(Sidebar)) void {
         cx.notify();
+    }
+
+    /// A row's project tile: the project's artwork once resolved, else the
+    /// monogram (also while loading).
+    fn projectTile(self: *Sidebar, r: *const RowData, theme: *const Theme, cx: *Context(Sidebar)) zpui.AnyElement {
+        const mono = ui.badge.monogram(r.project_name, r.project_seed, harness_icon_size, r.selected, row_group, theme);
+        const dir = r.space_path orelse return zpui.intoAnyElement(mono);
+        var start = false;
+        if (self.icons.get(self.gpa, dir, &start)) |art| {
+            return zpui.intoAnyElement(div().size(px(harness_icon_size)).flexNone()
+                .child(zpui.img(art.source()).sizeFull().objectFit(.contain)));
+        }
+        if (start) {
+            const io = self.state.read(cx).workspace.read(cx).io;
+            const owned = self.gpa.dupe(u8, dir) catch return zpui.intoAnyElement(mono);
+            if (cx.spawn(project_icon_mod.LoadJob{ .gpa = self.gpa, .io = io, .dir = owned }, onIconLoaded)) |task| {
+                var t = task;
+                t.detach();
+            } else |_| self.gpa.free(owned);
+        }
+        return zpui.intoAnyElement(mono);
+    }
+
+    fn onPinDragMove(self: *Sidebar, ev: *const zpui.DragMoveEvent(PinDrag), _: *Window, cx: *Context(Sidebar)) void {
+        const over = pinDropIndex(ev.event.position.y - ev.bounds.origin.y, self.pin_slots.items);
+        if (self.pin_drag) |*d| {
+            if (d.over != over) {
+                d.prev_over = d.over;
+                d.over = over;
+                d.epoch += 1;
+                cx.notify();
+            }
+        } else {
+            self.pin_drag = .{ .from = ev.value.from, .over = over, .prev_over = ev.value.from, .epoch = 0 };
+            cx.notify();
+        }
+    }
+
+    /// Drop: reorder the local pin list and tell the engine (`changeSidebarPin`
+    /// move with the new neighbours).
+    fn onPinDrop(self: *Sidebar, payload: *const PinDrag, _: *Window, cx: *Context(Sidebar)) void {
+        const to = if (self.pin_drag) |d| d.over else payload.from;
+        self.pin_drag = null;
+        defer cx.notify();
+        const n = @min(self.pinned_count, self.row_ids.items.len);
+        if (payload.from >= n or to >= n or payload.from == to) return;
+        const order = self.gpa.alloc([]const u8, n) catch return;
+        defer self.gpa.free(order);
+        for (0..n) |i| order[i] = self.row_ids.items[i];
+        movePin(order, payload.from, to);
+        const p = prefs_mod.mut(cx);
+        // Visible pins take the new order; hidden pins (other filters) keep theirs after.
+        var rest: std.ArrayList([]u8) = .empty;
+        defer rest.deinit(self.gpa);
+        for (p.pins.items) |id| {
+            var visible = false;
+            for (order) |o| if (std.mem.eql(u8, o, id)) {
+                visible = true;
+            };
+            if (!visible) rest.append(self.gpa, id) catch {} else self.gpa.free(id);
+        }
+        p.pins.clearRetainingCapacity();
+        for (order) |id| p.pins.append(self.gpa, self.gpa.dupe(u8, id) catch continue) catch {};
+        for (rest.items) |id| p.pins.append(self.gpa, id) catch self.gpa.free(id);
+        const moved = order[to];
+        const ws = self.state.read(cx).workspace;
+        ws.update(cx, model.WorkspaceStore.mutate, .{engine.protocol.Mutate{ .changeSidebarPin = .{ .change = .{ .move = .{
+            .sessionId = moved,
+            .after = if (to > 0) order[to - 1] else null,
+            .before = if (to + 1 < order.len) order[to + 1] else null,
+        } } } }}) catch {};
+    }
+
+    fn onIconLoaded(self: *Sidebar, r: project_icon_mod.LoadJob.Result, cx: *Context(Sidebar)) void {
+        const landed = r.art != null;
+        self.icons.finish(self.gpa, r);
+        if (landed) cx.notify();
     }
 
     fn rowId(self: *Sidebar, ix: usize) ?[]const u8 {
@@ -401,6 +547,7 @@ pub const Sidebar = struct {
             .folder = folder,
             .project_name = if (space) |s| view.spaceDisplayName(s) else "Home",
             .project_seed = if (space) |s| s.path else "home",
+            .space_path = if (space) |s| (if (remote) null else s.path) else null,
             .branch = branch,
             .pr = if (prefs.show_pull_request) prefs.pullRequest(c.id) else null,
             .time_ago = ago,
@@ -474,12 +621,42 @@ pub const Sidebar = struct {
         if (pinned.items.len + regular.items.len == 0) {
             list = div().px(px(8)).pb(px(8)).textSize(rems(12)).textColor(theme.text_faint).child("No sessions yet");
         } else {
+            self.pin_slots.clearRetainingCapacity();
+            self.pinned_count = 0;
+            if (self.pin_drag != null and !cx.app.hasActiveDrag()) self.pin_drag = null;
             if (show_pinned) {
-                var body = div().flex().flexCol().gap(px(list_gap)).pt(px(disclosure_body_inset));
-                for (pinned.items) |*r| {
+                var body = div().id("sidebar-pinned").flex().flexCol().gap(px(list_gap)).pt(px(disclosure_body_inset))
+                    .onDragMove(PinDrag, cx.listener(Sidebar.onPinDragMove))
+                    .onDrop(PinDrag, cx.listener(Sidebar.onPinDrop));
+                for (pinned.items, 0..) |*r, pi| {
                     any_working = any_working or r.status == .working;
-                    body = body.child(self.renderRow(r, theme, prefs, cx));
+                    const h = rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null);
+                    self.pin_slots.append(self.gpa, h + list_gap) catch {};
+                    var drag: PinDrag = .{ .from = pi };
+                    const n: u8 = @intCast(@min(r.title.len, drag.title_buf.len));
+                    @memcpy(drag.title_buf[0..n], r.title[0..n]);
+                    drag.title_len = n;
+                    const row = self.renderRow(r, theme, prefs, cx).onDrag(drag, buildPinGhost).onDrop(PinDrag, cx.listener(Sidebar.onPinDrop));
+                    if (self.pin_drag) |d| {
+                        if (pi == d.from) {
+                            body = body.child(div().h(px(h)).flexNone());
+                            continue;
+                        }
+                        const dragged = &pinned.items[@min(d.from, pinned.items.len - 1)];
+                        const slot = rowHeight(prefs.sidebar_compact, prefs.show_project_label, dragged.branch != null, dragged.pr != null) + list_gap;
+                        const target = slideOffsetY(pi, d.from, d.over) * slot;
+                        const start = slideOffsetY(pi, d.from, d.prev_over) * slot;
+                        const Slide = struct {
+                            fn f(c: [2]f32, el: zpui.StatefulDiv, t: f32) zpui.StatefulDiv {
+                                return el.relative().top(px(c[0] + (c[1] - c[0]) * t));
+                            }
+                        };
+                        body = body.child(zpui.withAnimationCtx(row, .{ "pin-slide", (pi & 0xffff) | (d.epoch << 16) }, zpui.Animation.ms(150).withEasing(zpui.easing.ease_out_quint), [2]f32{ start, target }, Slide.f));
+                        continue;
+                    }
+                    body = body.child(row);
                 }
+                self.pinned_count = pinned.items.len;
                 list = list.child(div().flex().flexCol()
                     .child(self.sectionHeader(0, if (self.pinned_open) "Pinned" else zpui.fmt("Pinned ({d})", .{pinned.items.len}), self.pinned_open, theme, cx))
                     .child(if (self.pinned_open) body else null));
@@ -698,7 +875,7 @@ pub const Sidebar = struct {
         // Harness + project icons.
         const harness: ?zpui.elements.Svg = if (prefs.show_harness) (if (r.chat.config) |cfg| icon.harness(cfg.harness, harness_icon_size, subline, if (archived_muted) 0.4 else 0.8) else null) else null;
         const project_icon: ?zpui.Div = if (prefs.show_project_icon)
-            div().flexNone().opacity(if (archived_muted) 0.4 else 1.0).child(ui.badge.monogram(r.project_name, r.project_seed, harness_icon_size, r.selected, row_group, theme))
+            div().flexNone().opacity(if (archived_muted) 0.4 else 1.0).child(self.projectTile(r, theme, cx))
         else
             null;
 
@@ -987,3 +1164,18 @@ pub const Sidebar = struct {
     }
 };
 
+
+test "pinned drop index and reorder" {
+    const slots = [_]f32{ 31, 31, 31 };
+    try std.testing.expectEqual(@as(usize, 0), pinDropIndex(-4, &slots));
+    try std.testing.expectEqual(@as(usize, 1), pinDropIndex(40, &slots));
+    try std.testing.expectEqual(@as(usize, 2), pinDropIndex(500, &slots));
+    var ids = [_][]const u8{ "a", "b", "c", "d" };
+    movePin(&ids, 0, 2);
+    try std.testing.expectEqualStrings("b", ids[0]);
+    try std.testing.expectEqualStrings("c", ids[1]);
+    try std.testing.expectEqualStrings("a", ids[2]);
+    movePin(&ids, 3, 0);
+    try std.testing.expectEqualStrings("d", ids[0]);
+    try std.testing.expectEqualStrings("a", ids[3]);
+}

@@ -23,6 +23,8 @@ const gates = @import("gates.zig");
 const main_panel = @import("main_panel.zig");
 const palette_mod = @import("palette.zig");
 const terminal_dock = @import("terminal_dock.zig");
+const right_pane_mod = @import("right_pane.zig");
+const pickers_mod = @import("../pickers/root.zig");
 const settings_ui = @import("../settings/root.zig"); // settings mode (ui/settings owns it)
 
 const App = zpui.App;
@@ -93,16 +95,24 @@ pub const Shell = struct {
     splash_fade_start: u64 = 0,
     sidebar_tween: ?Tween = null,
     right_tween: ?Tween = null,
+    /// The explorer column's width tween (mod-e).
+    files_tween: ?Tween = null,
     /// Navigation history of selected chats (null = new-session canvas).
     nav: std.ArrayList(?[]u8) = .empty,
     nav_ix: usize = 0,
     nav_suppress: bool = false,
     server_decorations: bool = false,
     palette: ?Entity(palette_mod.Palette) = null,
-    /// Right-pane surfaces (terminals) and the active one.
-    surfaces: std.ArrayList(Entity(terminal_dock.TerminalDock)) = .empty,
-    surface_active: usize = 0,
-    newtab_menu_open: bool = false,
+    /// The "New project" palette (pickers/add_project.zig).
+    add_project: ?Entity(pickers_mod.AddProject) = null,
+    add_project_subs: zpui.Subscriptions = .{},
+    /// The right-pane surface host (per-chat tabs).
+    right_pane: Entity(right_pane_mod.RightPane),
+    /// Right-pane takeover (the header's expand button).
+    right_expanded: bool = false,
+    viewport_w: f32 = 1320,
+    /// Last OS appearance seen (re-resolves a `system` theme on change).
+    system_appearance: ?zpui.platform.WindowAppearance = null,
     palette_subs: zpui.Subscriptions = .{},
     // ---- settings mode (ui/settings/view.zig) ----
     settings_view: ?Entity(settings_ui.SettingsView) = null,
@@ -116,6 +126,7 @@ pub const Shell = struct {
             .state = state.retain(cx),
             .sidebar = try cx.newWith(sidebar_mod.Sidebar, sidebar_mod.Sidebar.init, .{state}),
             .main = try cx.newWith(main_panel.MainPanel, main_panel.MainPanel.init, .{ state, fixtures }),
+            .right_pane = try cx.newWith(right_pane_mod.RightPane, right_pane_mod.RightPane.init, .{ state, fixtures, prefs_mod.get(cx).right_pane_open }),
             .focus = focus,
             .fixtures = fixtures,
             .server_decorations = server_decorations,
@@ -127,6 +138,9 @@ pub const Shell = struct {
         try self.subs.add(cx.gpa(), try cx.subscribe(self.sidebar, onOpenSettings));
         try self.subs.add(cx.gpa(), try cx.subscribe(self.sidebar, onNewSessionEvent));
         try self.subs.add(cx.gpa(), try cx.subscribe(self.sidebar, onSignOutEvent));
+        try self.subs.add(cx.gpa(), try cx.subscribe(self.right_pane, onSurfacesEmptied));
+        try self.subs.add(cx.gpa(), try cx.subscribe(self.right_pane, onOpenExplorer));
+        try self.subs.add(cx.gpa(), try cx.observe(self.right_pane, onModelChanged));
         if (fixtures) |f| if (f.meta.splash) {
             self.splash = .visible;
         } else {
@@ -140,10 +154,11 @@ pub const Shell = struct {
         self.subs.deinit(self.gpa);
         self.palette_subs.deinit(self.gpa);
         if (self.palette) |p| p.release(app);
+        self.add_project_subs.deinit(self.gpa);
+        if (self.add_project) |p| p.release(app);
         if (self.settings_sub) |*sub| sub.deinit();
         if (self.settings_view) |v| v.release(app);
-        for (self.surfaces.items) |e| e.release(app);
-        self.surfaces.deinit(self.gpa);
+        self.right_pane.release(app);
         for (self.nav.items) |e| if (e) |s| self.gpa.free(s);
         self.nav.deinit(self.gpa);
         self.focus.release(app);
@@ -281,10 +296,15 @@ pub const Shell = struct {
         return target;
     }
 
+    pub fn rightOpen(self: *Shell, cx: anytype) bool {
+        if (self.state.read(cx).workspace.read(cx).selected_chat == null) return false;
+        return self.right_pane.read(cx).isOpen(cx);
+    }
+
     fn rightTarget(self: *Shell, cx: anytype) f32 {
+        if (!self.rightOpen(cx)) return 0;
         const p = prefs_mod.get(cx);
-        if (!p.right_pane_open) return 0;
-        if (self.state.read(cx).workspace.read(cx).selected_chat == null) return 0;
+        if (self.right_expanded) return @max(self.viewport_w - self.sidebarNow(cx), 0);
         return p.right_pane_width;
     }
 
@@ -298,7 +318,56 @@ pub const Shell = struct {
     }
 
     fn tweening(self: *const Shell) bool {
-        return self.sidebar_tween != null or self.right_tween != null;
+        return self.sidebar_tween != null or self.right_tween != null or self.files_tween != null;
+    }
+
+    // ---- explorer column (ui/files FilesPanel, mod-e) ----------------------------------
+
+    pub fn filesOpen(self: *Shell, cx: anytype) bool {
+        if (self.state.read(cx).workspace.read(cx).selected_chat == null) return false;
+        return self.right_pane.read(cx).filesOpen(cx);
+    }
+
+    fn filesTarget(self: *Shell, cx: anytype) f32 {
+        if (!self.filesOpen(cx)) return 0;
+        const w = if (model.settings_store.current(cx.app)) |st| st.filesPanelWidth else layout.files_panel_default;
+        // Never squeeze the conversation below its floor for the tree.
+        const avail = @max(self.viewport_w - self.sidebarNow(cx) - layout.chat_panel_min - self.rightTarget(cx), layout.files_panel_min);
+        return @min(w, avail);
+    }
+
+    pub fn filesNow(self: *Shell, cx: anytype) f32 {
+        const target = self.filesTarget(cx);
+        if (self.files_tween) |t| {
+            if (t.to == target and !t.done(now(cx), motion.resize)) return t.value(now(cx), motion.resize);
+            self.files_tween = null;
+        }
+        return target;
+    }
+
+    /// The explorer's own toggle: docking it opens the pane with just that
+    /// portion when the surface host is closed.
+    pub fn toggleFiles(self: *Shell, window: *Window, cx: *Context(Shell)) void {
+        if (self.state.read(cx).workspace.read(cx).selected_chat == null) return;
+        const from = self.filesNow(cx);
+        const open = !self.filesOpen(cx);
+        self.right_pane.update(cx, right_pane_mod.RightPane.setFilesOpen, .{ open, @as(?*Window, window) });
+        if (!open) window.focus(self.focus);
+        self.files_tween = .{ .from = from, .to = self.filesTarget(cx), .start_ns = now(cx) };
+        cx.notify();
+    }
+
+    pub fn onToggleFilesClick(self: *Shell, _: *const zpui.ClickEvent, window: *Window, cx: *Context(Shell)) void {
+        self.toggleFiles(window, cx);
+    }
+
+    fn onOpenExplorer(_: *Shell, _: Entity(right_pane_mod.RightPane), _: *const right_pane_mod.OpenExplorer, cx: *Context(Shell)) void {
+        cx.deferUpdate(struct {
+            fn f(sh: *Shell, c: *Context(Shell)) void {
+                const w = c.app.windows.items[0] orelse return;
+                if (!sh.filesOpen(c)) sh.toggleFiles(w, c);
+            }
+        }.f);
     }
 
     fn toggleSidebar(self: *Shell, cx: *Context(Shell)) void {
@@ -310,9 +379,33 @@ pub const Shell = struct {
     }
 
     fn toggleRight(self: *Shell, cx: *Context(Shell)) void {
+        self.setRightOpen(!self.rightOpen(cx), cx);
+    }
+
+    /// Show or hide the surface host (a no-op on the canvas / when already there).
+    pub fn setRightOpen(self: *Shell, open: bool, cx: *Context(Shell)) void {
+        if (self.state.read(cx).workspace.read(cx).selected_chat == null) return;
+        if (self.rightOpen(cx) == open) return;
         const from = self.rightNow(cx);
-        const p = prefs_mod.mut(cx);
-        p.right_pane_open = !p.right_pane_open;
+        self.right_pane.update(cx, right_pane_mod.RightPane.setOpen, .{open});
+        // Closing always leaves takeover mode.
+        if (!open) self.right_expanded = false;
+        self.right_tween = .{ .from = from, .to = self.rightTarget(cx), .start_ns = now(cx) };
+        cx.notify();
+    }
+
+    fn onSurfacesEmptied(_: *Shell, _: Entity(right_pane_mod.RightPane), _: *const right_pane_mod.SurfacesEmptied, cx: *Context(Shell)) void {
+        cx.deferUpdate(struct {
+            fn f(sh: *Shell, c: *Context(Shell)) void {
+                sh.setRightOpen(false, c);
+            }
+        }.f);
+    }
+
+    /// The header's expand button: the pane takes over everything right of the sidebar.
+    pub fn onToggleExpandClick(self: *Shell, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Shell)) void {
+        const from = self.rightNow(cx);
+        self.right_expanded = !self.right_expanded;
         self.right_tween = .{ .from = from, .to = self.rightTarget(cx), .start_ns = now(cx) };
         cx.notify();
     }
@@ -337,8 +430,8 @@ pub const Shell = struct {
     fn actToggleChanges(self: *Shell, _: *const shell_actions.ToggleChanges, _: *Window, cx: *Context(Shell)) void {
         self.toggleRight(cx);
     }
-    fn actToggleFiles(self: *Shell, _: *const shell_actions.ToggleFiles, _: *Window, cx: *Context(Shell)) void {
-        self.toggleRight(cx);
+    fn actToggleFiles(self: *Shell, _: *const shell_actions.ToggleFiles, window: *Window, cx: *Context(Shell)) void {
+        self.toggleFiles(window, cx);
     }
     fn actToggleTerminal(_: *Shell, _: *const actions.terminal.ToggleTerminal, _: *Window, cx: *Context(Shell)) void {
         const p = prefs_mod.mut(cx);
@@ -390,6 +483,16 @@ pub const Shell = struct {
                 return;
             },
             .new_chat => self.newSession(cx),
+            .new_project => {
+                self.deferClose(cx);
+                cx.deferUpdate(struct {
+                    fn f(sh: *Shell, c: *Context(Shell)) void {
+                        const w = c.app.windows.items[0] orelse return;
+                        sh.openAddProject(w, c);
+                    }
+                }.f);
+                return;
+            },
             .chat => if (ev.chat_id) |id| {
                 const copy = self.gpa.dupe(u8, id) catch return;
                 defer self.gpa.free(copy);
@@ -401,54 +504,55 @@ pub const Shell = struct {
         self.deferClose(cx);
     }
 
-    pub fn activeSurface(self: *Shell) ?Entity(terminal_dock.TerminalDock) {
-        if (self.surfaces.items.len == 0) return null;
-        return self.surfaces.items[@min(self.surface_active, self.surfaces.items.len - 1)];
-    }
+    // ---- New project palette ---------------------------------------------------------
 
-    pub fn onAddTerminalSurface(self: *Shell, _: *const zpui.ClickEvent, window: *Window, cx: *Context(Shell)) void {
-        self.newtab_menu_open = false;
-        const ws = self.state.read(cx).workspace.read(cx);
-        const chat = ws.selectedChatRow();
-        const cwd: ?[]const u8 = if (chat) |c| (c.cwd orelse if (ws.spaceForChat(c)) |sp| sp.path else null) else null;
-        const T = terminal_dock.TerminalDock;
-        const e = cx.newWith(T, T.init, .{ ws.io, cwd, window }) catch return;
-        {
-            var l = e.lease(cx);
-            defer l.end();
-            l.value.chrome = false;
-        }
-        self.surfaces.append(self.gpa, e) catch {
-            e.release(cx);
-            return;
-        };
-        self.surface_active = self.surfaces.items.len - 1;
+    pub fn openAddProject(self: *Shell, window: *Window, cx: *Context(Shell)) void {
+        if (self.add_project != null) return;
+        if (self.palette != null) self.closePalette(window, cx);
+        const P = pickers_mod.AddProject;
+        const p = cx.newWith(P, P.init, .{ self.state, self.fixtures, window }) catch return;
+        self.add_project_subs.add(self.gpa, cx.subscribe(p, onAddProjectClose) catch return) catch {};
+        self.add_project_subs.add(self.gpa, cx.subscribe(p, onAddProjectCreated) catch return) catch {};
+        self.add_project = p;
         cx.notify();
     }
 
-    pub fn onSelectSurface(self: *Shell, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Shell)) void {
-        self.surface_active = ix;
+    fn closeAddProject(self: *Shell, window: *Window, cx: *Context(Shell)) void {
+        self.add_project_subs.deinit(self.gpa);
+        self.add_project_subs = .{};
+        if (self.add_project) |p| p.release(cx);
+        self.add_project = null;
+        window.focus(self.focus);
         cx.notify();
     }
 
-    pub fn onCloseSurface(self: *Shell, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Shell)) void {
-        cx.stopPropagation();
-        if (ix >= self.surfaces.items.len) return;
-        self.surfaces.orderedRemove(ix).release(cx);
-        if (self.surface_active >= self.surfaces.items.len and self.surface_active > 0) self.surface_active -= 1;
-        cx.notify();
+    fn deferCloseAddProject(_: *Shell, cx: *Context(Shell)) void {
+        cx.deferUpdate(struct {
+            fn f(sh: *Shell, c: *Context(Shell)) void {
+                const w = c.app.windows.items[0] orelse return;
+                sh.closeAddProject(w, c);
+            }
+        }.f);
     }
 
-    pub fn onNewTabMenu(self: *Shell, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Shell)) void {
-        self.newtab_menu_open = !self.newtab_menu_open;
-        cx.notify();
+    fn onAddProjectClose(self: *Shell, _: Entity(pickers_mod.AddProject), _: *const pickers_mod.add_project.Close, cx: *Context(Shell)) void {
+        self.deferCloseAddProject(cx);
     }
 
-    pub fn onCloseNewTabMenu(self: *Shell, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(Shell)) void {
-        if (self.newtab_menu_open) {
-            self.newtab_menu_open = false;
-            cx.notify();
-        }
+    /// `land_in_space`: the new project opens on the canvas (an explicit
+    /// sidebar filter follows it).
+    fn onAddProjectCreated(self: *Shell, _: Entity(pickers_mod.AddProject), ev: *const pickers_mod.add_project.Created, cx: *Context(Shell)) void {
+        const id = self.gpa.dupe(u8, ev.space_id) catch return;
+        defer self.gpa.free(id);
+        if (prefs_mod.get(cx).space_filter != null) prefs_mod.mut(cx).setFilter(id);
+        const ws = self.state.read(cx).workspace;
+        ws.update(cx, model.WorkspaceStore.selectChat, .{@as(?[]const u8, null)});
+        ws.update(cx, model.WorkspaceStore.selectSpace, .{@as(?[]const u8, id)});
+        self.deferCloseAddProject(cx);
+    }
+
+    fn actAddSpace(self: *Shell, _: *const shell_actions.AddSpacePalette, window: *Window, cx: *Context(Shell)) void {
+        if (self.add_project != null) self.closeAddProject(window, cx) else self.openAddProject(window, cx);
     }
 
     fn actNewSession(self: *Shell, _: *const shell_actions.NewSession, _: *Window, cx: *Context(Shell)) void {
@@ -502,7 +606,7 @@ pub const Shell = struct {
         const vw = window.viewportSize().width;
         const p = prefs_mod.mut(cx);
         const max = @max(layout.right_pane_min, vw - sidebarTarget(cx) - layout.chat_panel_min);
-        p.right_pane_width = std.math.clamp(vw - ev.event.position.x, layout.right_pane_min, max);
+        p.right_pane_width = std.math.clamp(vw - self.filesNow(cx) - ev.event.position.x, layout.right_pane_min, max);
         self.right_tween = null;
         cx.notify();
     }
@@ -549,6 +653,17 @@ pub const Shell = struct {
     }
 
     pub fn render(self: *Shell, window: *Window, cx: *Context(Shell)) zpui.Div {
+        // The OS flipped light/dark (Linux settings portal, macOS effective
+        // appearance): re-resolve a `system` theme on the next tick.
+        const sys = window.windowAppearance();
+        if (self.system_appearance != null and self.system_appearance.? != sys) {
+            cx.deferUpdate(struct {
+                fn f(_: *Shell, c: *Context(Shell)) void {
+                    settings_ui.store.applyTheme(c.app);
+                }
+            }.f);
+        }
+        self.system_appearance = sys;
         const theme = ui.theme.get(cx);
         const g = self.gate(cx);
         const radius = self.windowCornerRadius(window);
@@ -569,6 +684,7 @@ pub const Shell = struct {
             .onAction(shell_actions.ToggleFiles, cx.listener(Shell.actToggleFiles))
             .onAction(actions.terminal.ToggleTerminal, cx.listener(Shell.actToggleTerminal))
             .onAction(shell_actions.NewSession, cx.listener(Shell.actNewSession))
+            .onAction(shell_actions.AddSpacePalette, cx.listener(Shell.actAddSpace))
             .onAction(shell_actions.ToggleCommandPalette, cx.listener(Shell.actTogglePalette))
             .onAction(shell_actions.OpenSettings, cx.listener(Shell.actOpenSettings))
             .onAction(shell_actions.NextSession, cx.listener(Shell.actNext))
@@ -605,6 +721,7 @@ pub const Shell = struct {
         }
 
         if (self.palette) |p| root = root.child(p);
+        if (self.add_project) |p| root = root.child(p);
         if (g != .ready and !is_mac) root = root.child(titlebar.dragStrip(self, "gate-titlebar-drag", cx));
         root = root.child(titlebar.linuxCaptions(self, window, theme, cx));
         root = root.child(titlebar.linuxResizeBorders(self, window));
@@ -613,11 +730,30 @@ pub const Shell = struct {
         return root;
     }
 
+    /// The right pane: a flush, left-bordered panel under the titlebar band
+    /// (the band carries the surface tabs), the active surface or launcher.
+    fn renderRightPanel(self: *Shell, window: *Window, theme: *const Theme, cx: *Context(Shell)) zpui.Div {
+        const content = blk: {
+            var l = self.right_pane.lease(cx);
+            defer l.end();
+            break :blk l.value.renderContent(theme, &l.cx);
+        };
+        var panel = div().sizeFull().flex().flexCol().bg(theme.panelBg()).overflowHidden()
+            .pt(px(layout.titlebar_height))
+            .child(div().flex1().minH0().relative().child(content));
+        if (!self.right_expanded) panel = panel.borderL1().borderColor(theme.border);
+        const radius = self.windowCornerRadius(window);
+        if (radius > 0 and self.filesNow(cx) <= 0) panel = panel.roundedTr(px(radius)).roundedBr(px(radius));
+        return panel;
+    }
+
     fn renderReady(self: *Shell, window: *Window, cx: *Context(Shell)) zpui.Div {
         const theme = ui.theme.get(cx);
         const radius = self.windowCornerRadius(window);
+        self.viewport_w = window.viewportSize().width;
         const sidebar_now = self.sidebarNow(cx);
         const right_now = self.rightNow(cx);
+        const files_now = self.filesNow(cx);
         const prefs = prefs_mod.get(cx);
 
         // Settings mode takes over the window (ui/settings): tone + page, no titlebar cluster.
@@ -643,7 +779,7 @@ pub const Shell = struct {
             const vw = window.viewportSize().width;
             var l = self.main.lease(cx);
             defer l.end();
-            l.value.width = @max(vw - sidebar_now - right_now, 0);
+            l.value.width = @max(vw - sidebar_now - right_now - files_now, 0);
         }
         const card = div().flex1().minW0().flex().flexRow().overflowHidden().child(self.main);
 
@@ -652,19 +788,33 @@ pub const Shell = struct {
         if (right_now > 0.5) {
             right_wrap = right_wrap.child(div().hFull().flexNone().relative().overflowHidden().w(px(right_now))
                 .child(div().absolute().top(px(0)).right(px(0)).hFull().w(px(@max(prefs.right_pane_width, right_now)))
-                    .child(main_panel.rightPane(self, theme, cx))));
+                    .child(self.renderRightPanel(window, theme, cx))));
             if (self.right_tween == null)
                 right_wrap = right_wrap.child(div().absolute().left(px(0)).top(px(0)).w(px(0)).hFull()
                     .child(resizeHandle(RightPaneResize, "right-pane-resize", cx.listener(Shell.onRightSeamClick))));
         }
+
+        // The explorer: the right pane's rightmost column (its left hairline is
+        // the divider from the surface host), fixed-width content clipped by
+        // the animated column.
+        var files_col: ?zpui.Div = null;
+        if (files_now > 0.5) if (self.right_pane.read(cx).explorerView(cx)) |explorer| {
+            const content_w = @max(self.filesTarget(cx), if (self.files_tween) |t| @max(t.from, t.to) else 0);
+            var inner = div().w(px(content_w)).hFull().pt(px(layout.titlebar_height)).occlude()
+                .borderL1().borderColor(theme.border).bg(theme.panelBg()).overflowHidden()
+                .child(explorer);
+            if (radius > 0) inner = inner.roundedTr(px(radius)).roundedBr(px(radius));
+            files_col = div().hFull().flexNone().relative().overflowHidden().w(px(files_now)).child(inner);
+        };
 
         const page = div().sizeFull().relative()
             .child(div().sizeFull().flex().flexRow()
                 .child(sidebar_col)
                 .child(sidebar_seam)
                 .child(card)
-                .child(right_wrap))
-            .child(div().absolute().top(px(0)).left(px(0)).right(px(0)).child(titlebar.sessionBar(self, sidebar_now, right_now, theme, cx)))
+                .child(right_wrap)
+                .child(files_col))
+            .child(div().absolute().top(px(0)).left(px(0)).right(px(0)).child(titlebar.sessionBar(self, sidebar_now, right_now, files_now, theme, cx)))
             .child(titlebar.cluster(self, theme, cx));
 
         return div().absolute().inset0().child(tone).child(ui.anim.fadeIn("phase-app", page));

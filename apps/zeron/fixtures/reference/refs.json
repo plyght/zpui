@@ -1,0 +1,12 @@
+{
+  "/home/user/research/reference/demo-repos/aurora": [
+    { "name": "feat/stream-backpressure", "current": true },
+    { "name": "main" }
+  ],
+  "/home/user/research/reference/demo-repos/lumen-web": [
+    { "name": "main", "current": true }
+  ],
+  "/home/user/research/reference/demo-repos/notes-cli": [
+    { "name": "main", "current": true }
+  ]
+}

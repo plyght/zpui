@@ -82,6 +82,8 @@ const PendingNew = struct {
     message_id: [36]u8,
     prompt: []u8,
     cwd: []u8,
+    /// A "New worktree" plan: the host materializes it when the run drains.
+    worktree: ?struct { repo_path: []u8, base: []u8, space_id: ?[]u8 } = null,
 };
 
 pub const ComposerView = struct {
@@ -122,6 +124,14 @@ pub const ComposerView = struct {
     /// Per-chat drafts ("" = the new-thread canvas).
     drafts: std.StringHashMapUnmanaged([]u8) = .empty,
     current_key: std.ArrayList(u8) = .empty,
+
+    // ---- host hooks (the shell's `ui/pickers`) ----
+    /// Replaces the built-in device/project chips above the canvas pill.
+    target_row: ?zpui.AnyView = null,
+    /// Replaces the canvas footer's checkout chip (checkout + ref pickers).
+    git_row: ?zpui.AnyView = null,
+    /// The new session's checkout plan (strings owned by the host).
+    checkout_plan: ?model.view.CheckoutPlan = null,
 
     pub const Events = .{ComposerEvent};
 
@@ -180,6 +190,11 @@ pub const ComposerView = struct {
     fn freePending(self: *ComposerView, p: PendingNew) void {
         self.gpa.free(p.prompt);
         self.gpa.free(p.cwd);
+        if (p.worktree) |w| {
+            self.gpa.free(w.repo_path);
+            self.gpa.free(w.base);
+            if (w.space_id) |id| self.gpa.free(id);
+        }
     }
 
     fn onObserved(comptime S: type) fn (*ComposerView, Entity(S), *Context(ComposerView)) void {
@@ -364,7 +379,8 @@ pub const ComposerView = struct {
         self.pending_new = null;
         defer self.freePending(p);
         const resolved = self.picker.read(cx).resolved(cx);
-        self.queueRun(t, &p.chat_id, &p.message_id, p.prompt, p.cwd, resolved, cx);
+        const spec: ?protocol.WorktreeSpec = if (p.worktree) |w| .{ .repoPath = w.repo_path, .base = w.base, .spaceId = w.space_id } else null;
+        self.queueRunIn(t, &p.message_id, p.prompt, p.cwd, spec, resolved, cx);
         cx.notify();
     }
 
@@ -493,7 +509,20 @@ pub const ComposerView = struct {
         if (is_new) {
             const chat_id = self.uuid();
             const space = ws.selectedSpaceRow();
-            const cwd = rc.sendCwd(true, if (space) |s| s.path else null, null);
+            var cwd = rc.sendCwd(true, if (space) |s| s.path else null, null);
+            // The picked checkout: reuse an existing worktree (cwd override)
+            // and name the ref on createChat so the footer shows it at once.
+            var chat_branch: ?[]const u8 = null;
+            var chat_cwd: ?[]const u8 = null;
+            if (space != null) if (self.checkout_plan) |plan| switch (plan) {
+                .current_checkout => |c| chat_branch = c.branch,
+                .reuse_worktree => |r| {
+                    cwd = r.path;
+                    chat_cwd = r.path;
+                    chat_branch = r.branch;
+                },
+                .new_worktree => |n| chat_branch = n.base,
+            };
             const config: ?protocol.ChatConfig = if (resolved.harness) |h| .{
                 .harness = h,
                 .model = resolved.model,
@@ -506,6 +535,8 @@ pub const ComposerView = struct {
                 .spaceId = if (space) |s| s.id else null,
                 .deviceId = if (space == null) (ws.effectiveDeviceId() orelse "local") else null,
                 .config = config,
+                .branch = chat_branch,
+                .cwd = chat_cwd,
             } };
             st.workspace.update(cx, model.WorkspaceStore.mutate, .{op}) catch |err| {
                 std.log.scoped(.composer).warn("createChat failed: {t}", .{err});
@@ -516,6 +547,15 @@ pub const ComposerView = struct {
                 .message_id = message_id,
                 .prompt = self.gpa.dupe(u8, prompt) catch @panic("OOM"),
                 .cwd = self.gpa.dupe(u8, cwd) catch @panic("OOM"),
+            };
+            // A fresh worktree off the picked base (HEAD when the ref list
+            // never arrived: the isolation the user picked must not be dropped).
+            if (space) |sp| if (self.checkout_plan) |plan| if (plan == .new_worktree) {
+                self.pending_new.?.worktree = .{
+                    .repo_path = self.gpa.dupe(u8, sp.path) catch @panic("OOM"),
+                    .base = self.gpa.dupe(u8, plan.new_worktree.base orelse "HEAD") catch @panic("OOM"),
+                    .space_id = self.gpa.dupe(u8, sp.id) catch @panic("OOM"),
+                };
             };
             self.clearAfterSend(cx);
             // The canvas draft must not follow us into the new chat.
@@ -540,6 +580,10 @@ pub const ComposerView = struct {
 
     fn queueRun(self: *ComposerView, t: Entity(model.TranscriptStore), chat_id: []const u8, message_id: []const u8, prompt: []const u8, cwd: []const u8, resolved: rc.Resolved, cx: *Context(ComposerView)) void {
         _ = chat_id;
+        self.queueRunIn(t, message_id, prompt, cwd, null, resolved, cx);
+    }
+
+    fn queueRunIn(self: *ComposerView, t: Entity(model.TranscriptStore), message_id: []const u8, prompt: []const u8, cwd: []const u8, worktree: ?protocol.WorktreeSpec, resolved: rc.Resolved, cx: *Context(ComposerView)) void {
         var paths: [32][]const u8 = undefined;
         const n = @min(self.attachments.items.len, paths.len);
         for (self.attachments.items[0..n], 0..) |a, i| paths[i] = a.path;
@@ -554,7 +598,7 @@ pub const ComposerView = struct {
             .deviceId = "local",
         }}) catch {};
         t.update(cx, model.TranscriptStore.beginPendingSend, .{message_id}) catch {};
-        const cmd = rc.runCommand(resolved, .{ .prompt = prompt, .cwd = cwd, .message_id = message_id, .attachments = paths[0..n] });
+        const cmd = rc.runCommand(resolved, .{ .prompt = prompt, .cwd = cwd, .message_id = message_id, .attachments = paths[0..n], .worktree = worktree });
         t.update(cx, model.TranscriptStore.queueCommand, .{cmd}) catch |err| {
             t.update(cx, model.TranscriptStore.removeEcho, .{message_id});
             t.update(cx, model.TranscriptStore.endPendingSend, .{message_id});
@@ -999,6 +1043,8 @@ pub const ComposerView = struct {
                 left = left.child(if (is_worktree) footerLabel(theme, .folder_with_files, "Worktree") else footerLabel(theme, .folder, "Local checkout"))
                     .child(div().minW0().maxW(px(280)).child(footerLabel(theme, .git_branch, branch orelse "No ref")));
             };
+        } else if (new_chat and self.git_row != null) {
+            left = left.child(self.git_row.?);
         } else if (new_chat) {
             // New-session draft: the checkout plan chip (the ref chip needs
             // the space's ref list, which the model doesn't load yet).
@@ -1028,6 +1074,7 @@ pub const ComposerView = struct {
         const theme = &self.theme;
         const ws = self.state.read(cx).workspace.read(cx);
         var row = div().wFull().h(px(m.new_thread_selector_row_height)).px(px(10)).flex().itemsStart().justifyEnd().gap(px(4));
+        if (self.target_row) |v| return row.child(v);
         const chip = struct {
             fn f(t: *const Theme, i: chrome.Icon, label: []const u8) zpui.Div {
                 return div().h(px(20)).maxW(px(280)).flex().flexRow().itemsCenter().gap(px(6)).px(px(8)).rounded(px(6))
