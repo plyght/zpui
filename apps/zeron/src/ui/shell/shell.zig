@@ -887,9 +887,9 @@ pub const Shell = struct {
 pub const SidebarGlassMode = enum { glass, vev };
 pub const SidebarLayout = enum { floating, flush };
 
-/// `ZERON_SIDEBAR_GLASS=glass|vev` (main.zig). Default `vev`: the desktop is frosted
-/// (translucent), not seen through the raw hole of `glass` mode (user preference).
-pub var sidebar_glass_mode: SidebarGlassMode = .vev;
+/// `ZERON_SIDEBAR_GLASS=glass|vev` (main.zig). Default `glass`: regular glass straight
+/// on the desktop (user preference); `vev` adds AppKit's frosted sidebar material under it.
+pub var sidebar_glass_mode: SidebarGlassMode = .glass;
 /// `ZERON_SIDEBAR_LAYOUT=floating|flush` (main.zig); null = flush.
 pub var sidebar_layout_override: ?SidebarLayout = null;
 

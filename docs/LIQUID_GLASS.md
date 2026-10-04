@@ -78,11 +78,11 @@ What zeron does now:
 
   | `ZERON_SIDEBAR_GLASS=` | What sits under the pane | On top |
   |---|---|---|
-  | `glass` | nothing: a hole through zpui's surface **and** the window blur | `NSGlassEffectView`, `.regular` |
-  | `vev` (default) | AppKit's behind-window `NSVisualEffectView` (`.sidebar`, follows the window's active state) under zpui's transparent region | `NSGlassEffectView`, `.regular` (translucent; `.clear` read as plain blur) |
+  | `glass` (default) | nothing: a hole through zpui's surface **and** the window blur | `NSGlassEffectView`, `.regular` |
+  | `vev` | AppKit's behind-window `NSVisualEffectView` (`.sidebar`, follows the window's active state) under zpui's transparent region | `NSGlassEffectView`, `.regular` (translucent; `.clear` read as plain blur) |
 
-  `vev` is the default: the desktop reads as frosted, translucent glass. `glass` shows
-  the desktop through unblurred (see-through), which looked wrong on a real Mac.
+  `glass` is the default: regular glass directly on the desktop. `vev` adds AppKit's
+  frosted sidebar blur underneath for a milkier pane.
 * **Layout.** `floating` puts the pane 8 px from the window edges with radius 12, as
   on Tahoe. `flush` follows the WWDC26 sidebar: it runs to the top, left and bottom
   window edges with a square inner edge and a hairline seam, and the window's own
