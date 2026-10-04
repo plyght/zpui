@@ -449,6 +449,11 @@ fn DivImpl(comptime stateful: bool) type {
             return self;
         }
 
+        // Animation wrappers (src/elements/animation.zig, gpui `AnimationExt`).
+        pub const withAnimation = @import("animation.zig").Ext(Self).withAnimation;
+        pub const withAnimationCtx = @import("animation.zig").Ext(Self).withAnimationCtx;
+        pub const withAnimations = @import("animation.zig").Ext(Self).withAnimations;
+
         // Generated Styled forwarders (scripts/gen_styled.py --forward src/elements/div.zig).
         // zpui:styled-forwarders begin(Self)
         const StyledMethods = zpui_styled.Styled(Self);

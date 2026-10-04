@@ -473,6 +473,9 @@ pub const Window = struct {
     intern_arena: std.heap.ArenaAllocator,
     /// The element input handler currently given to the platform (IME bridge).
     input_handler: ?InputHandlerRequest = null,
+    /// Pending autoscroll request from an element (gpui `requested_autoscroll`), consumed by
+    /// scroll containers such as `list` during prepaint.
+    requested_autoscroll: ?Bounds = null,
 
     // ---- lifecycle ------------------------------------------------------------------
 
@@ -1561,6 +1564,19 @@ pub const Window = struct {
     }
 
     /// Draw `el` after everything else at `offset` (gpui `defer_draw`; prepaint).
+    /// Ask the enclosing scroll container (e.g. `list`) to scroll `b` into view; call during
+    /// prepaint (gpui `request_autoscroll`).
+    pub fn requestAutoscroll(self: *Window, b: Bounds) void {
+        self.requested_autoscroll = b;
+    }
+
+    /// Take the pending autoscroll request (gpui `take_autoscroll`).
+    pub fn takeAutoscroll(self: *Window) ?Bounds {
+        const b = self.requested_autoscroll;
+        self.requested_autoscroll = null;
+        return b;
+    }
+
     pub fn deferDraw(self: *Window, el: AnyElement, offset: Point, priority: usize, content_mask: ?ContentMask) void {
         const parent = self.next_frame.dispatch_tree.activeNodeId().?;
         const styles = arena_mod.frameAllocator().dupe(TextStyleRefinement, self.text_style_stack.items) catch @panic("OOM");

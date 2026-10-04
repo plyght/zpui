@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
     addImageSupport(b, target, optimize, zpui);
     addZeronModel(b, target, optimize, zpui, test_step);
     addHelloExample(b, target, optimize, zpui);
+    addListDemo(b, target, optimize, zpui);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -512,5 +513,35 @@ fn addHelloExample(
     const run = b.addRunArtifact(exe);
     run.addPassthruArgs();
     const step = b.step("hello", "Run the zpui hello example (Counter view)");
+    step.dependOn(&run.step);
+}
+
+/// `zig build list-demo`: examples/list_demo.zig — virtualized chat list (10k rows),
+/// entrance animations, edge fade, overlay scrollbar and a frosted panel (Linux).
+fn addListDemo(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    if (target.result.os.tag != .linux) return;
+    const assets = b.modules.get("zeron_assets") orelse return;
+    const exe = b.addExecutable(.{
+        .name = "list-demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/list_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zpui", .module = zpui },
+                .{ .name = "zeron_assets", .module = assets },
+            },
+        }),
+    });
+    const install = b.addInstallArtifact(exe, .{});
+    const run = b.addRunArtifact(exe);
+    run.step.dependOn(&install.step);
+    run.addPassthruArgs();
+    const step = b.step("list-demo", "Run the virtualized list demo (examples/list_demo.zig)");
     step.dependOn(&run.step);
 }

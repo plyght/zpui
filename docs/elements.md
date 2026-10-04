@@ -268,6 +268,114 @@ zpui.svg().source("close", @embedFile("close.svg")).size4().textColor(theme.mute
 zpui.svg().path("icons/close.svg")
 ```
 
+## 5a. Lists, animation, scrollbars, effects
+
+Ported from gpui `elements/{list,uniform_list,animation}.rs`, gpui-component's scrollbar
+and zeron's `edge_fade.rs`/`frost.rs` (`src/elements/{list,uniform_list,animation,scrollbar,effects}.zig`;
+`zig build list-demo` shows all of them together).
+
+### `list()` — variable-height virtualized list
+
+```zig
+// view state (reference counted; release in deinit)
+self.items = zpui.ListState.init(cx.gpa(), n, .bottom, px(320));  // count, alignment, overdraw
+self.items.setFollowMode(.tail);           // chat: stay at the end while the user is there
+// render: entity-bound callback (or `list(state, ctx_value, fn(ctx, ix, *Window, *App) R)`)
+zpui.list(self.items, cx, Self.renderRow).sizeFull()
+fn renderRow(self: *Chat, ix: usize, window: *Window, cx: *Context(Chat)) zpui.Div { ... }
+```
+
+Only items in the viewport plus `overdraw` px are rendered/laid out each frame; heights are
+measured on demand and cached in a treap of per-item summaries (gpui's `SumTree`), so offset ↔
+index, splice and remeasure are O(log n). The scroll position is logical
+(`ListOffset{ item_ix, offset_in_item }`), which anchors the view when items are spliced
+above it. Tell the state about data changes:
+
+| call | when |
+|---|---|
+| `splice(.{ .start, .end }, new_count)` / `spliceFocusable(range, handles)` | items replaced/inserted/removed |
+| `remeasureItems(range)` | an item's height changed (streaming text); keeps the pixel offset into the top item |
+| `remeasure()` | everything changed height (font size); keeps the proportional offset |
+| `reset(n)` / `resetWithUniformHeight(n, h)` / `withUniformItemHeight(h)` | new data; height hints size the scrollbar before measurement |
+| `measureAll()` | measure every item on the first layout |
+
+Scrolling: `scrollTo(offset)`, `scrollBy(px)`, `scrollToEnd()`, `scrollToRevealItem(ix)`,
+`logicalScrollTop()`, `isScrolledToEnd()`, `isFollowingTail()`, `boundsForItem(ix)`,
+`itemIsAboveViewport/BelowViewport(ix)`, `setScrollHandler(cx.listener(Self.onScroll))`
+(`ListScrollEvent`), `setTailReservation(.{ .start, .inset })` (zui fork: reserve a
+viewport from `start` so a just-sent message can sit at the top), scrollbar hooks
+(`scrollPxOffsetForScrollbar`, `maxOffsetForScrollbar`, `setOffsetFromScrollbar`,
+`scrollbarDragStarted/Ended`), diagnostics (`lastVisibleCount`, `lastRenderedCount`,
+`measuredCount`). Unmeasured items without a hint count as 0px (as in gpui), so wheel
+scrolling clamps to what has been measured and the scrollbar converges as you scroll.
+`.withSizingBehavior(.infer)` sizes the list to its items. Children may call
+`window.requestAutoscroll(bounds)` during prepaint to have the list scroll them into view.
+
+### `uniformList()` — same-height rows
+
+```zig
+self.scroll = zpui.UniformListScrollHandle.init(cx.gpa());           // release in deinit
+zpui.uniformList("files", n, cx, Self.rows).trackScroll(self.scroll).sizeFull()
+fn rows(self: *Files, range: zpui.Range, window: *Window, cx: *Context(Files)) []zpui.AnyElement
+self.scroll.scrollToItem(ix, .nearest);  // .top .center .bottom .nearest; *Strict / *WithOffset
+```
+
+Measures one item, renders only `range`. `.withHorizontalSizingBehavior(.unconstrained)`,
+`.yFlipped(true)`, `.withDecoration(ctx, f)`, `.withWidthFromItem(ix)`.
+
+### Animation
+
+```zig
+zpui.withAnimation(el, "fade-in", zpui.Animation.ms(500).withEasing(zpui.easing.ease_out_expo), struct {
+    fn f(e: zpui.Div, t: f32) zpui.Div { return e.opacity(t).relative().top(px(4 * (1 - t))); }
+}.f)
+div().id("dot").withAnimation("pulse", zpui.Animation.ms(1200).repeat()
+    .withEasing(zpui.easing.pulsatingBetween(0.4, 1)), Self.pulse)    // also on Div/StatefulDiv
+zpui.withAnimationCtx(el, id, anim, captured, fn (C, E, f32) R)     // captured data
+zpui.withAnimations(el, id, &.{ a, b }, fn (E, usize, f32) R)       // chains
+```
+
+Progress is kept in element state under the id; frames are requested with
+`window.requestAnimationFrame()` until done. With `window.prefersReducedMotion()` oneshot
+animations render their end state, repeating ones their start state, without frames.
+Easings: `linear quadratic ease_in_out ease_out_quint bounce(e) pulsatingBetween(min,max)
+cubicBezier(x1,y1,x2,y2)` (exact CSS solver) plus presets `ease css_ease_in css_ease_out
+css_ease_in_out ease_out_expo standard`, and `custom(fn)`. `animation.Tween` (time-based
+interpolation, e.g. scroll glides) and `animation.Spring` (per-frame damped spring) help
+with hand-driven motion.
+
+### Scrollbars
+
+```zig
+div().relative().sizeFull()
+    .child(zpui.list(self.items, cx, Self.row).sizeFull())
+    .child(zpui.scrollbar(self.items))          // ListState | ScrollHandle | UniformListScrollHandle
+zpui.scrollbar(self.scroll).id("sb2").axis(.both).mode(.hover)
+    .withStyle(.{ .thumb = fg.opacity(0.30), .thumb_hover = fg.opacity(0.42), .thumb_active = fg.opacity(0.55) })
+zpui.scrollbar(self.scroll).withStyle(zpui.ScrollbarStyle.compact)   // zeron's menu bar
+```
+
+An absolutely positioned overlay filling its parent: the thumb shows while scrolling and
+fades after `fade_delay_ms` (`.scrolling`), or on hover (`.hover`), or always; it widens
+on hover, drags (thumb) and jumps (track click). State lives in element state under its id.
+
+### Edge fade, frost, layers
+
+```zig
+zpui.edgeFaded(24, true, true, scroller).fadeOverflowY(self.items)   // fades only where content is hidden
+    .bandTop(12).bandBottom(30).insetTop(7)   // also fadeLeft/fadeRight, fadeOverflowX, fadeScrollX, fadeLabelOverflow
+zpui.frosted(12, zpui.effects.menu_blur, card)   // backdrop blur + card in one layer; .enabled(false) to pass through
+zpui.layered(child)                              // a fresh draw order for overlays inside a frosted card
+```
+
+### Scrolling notes
+
+Wheel/trackpad input arrives as `ScrollWheelEvent`s: precise pixel deltas from Wayland
+finger/continuous sources and XI2 smooth-scroll valuators (fractional lines on X11), line
+deltas from wheels. `list` coalesces same-direction deltas per frame (20 px per line, like
+gpui). gpui implements no kinetic/momentum scrolling for desktop Linux (its momentum is only
+for touch-screen pans), so neither does zpui; use `animation.Spring`/`Tween` for glides.
+
 ## 6. State that is not in your view
 
 * **Element state** (for elements you write): `window.elementState(S, gid)` returns a
@@ -368,7 +476,7 @@ The fake text system lays every character out 10px wide at 16px. See
   in `deinit` (see core-model.md).
 * `Div` is a handle; `id()` returns `StatefulDiv`. `.hover()` works without an id.
 * Element phases cannot fail (OOM panics, like the core's fire-and-forget effects).
-* Not ported yet: `uniform_list`/`list`, animation helpers, prompts, inspector, a11y,
+* Not ported yet: prompts, inspector, a11y,
   external file drags (they move the mouse but carry no payload), `anchor_scroll`,
   window-scoped `observe_in`/`spawn_in` (use the entity variants), presentation callbacks
   and the macOS native-view overlay plane.

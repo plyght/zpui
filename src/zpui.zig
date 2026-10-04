@@ -123,6 +123,39 @@ pub const deferred = elements.deferred;
 pub const anchored = elements.anchored;
 pub const img = elements.img;
 pub const svg = elements.svg;
+pub const list = elements.list;
+pub const List = elements.List;
+pub const ListState = elements.ListState;
+pub const ListOffset = elements.ListOffset;
+pub const ListAlignment = elements.ListAlignment;
+pub const ListScrollEvent = elements.ListScrollEvent;
+pub const ListSizingBehavior = elements.ListSizingBehavior;
+pub const FollowMode = elements.FollowMode;
+pub const Range = elements.Range;
+pub const uniformList = elements.uniformList;
+pub const UniformList = elements.UniformList;
+pub const UniformListScrollHandle = elements.UniformListScrollHandle;
+pub const ScrollStrategy = elements.ScrollStrategy;
+pub const animation = elements.animation;
+pub const Animation = elements.Animation;
+pub const Easing = elements.Easing;
+pub const easing = elements.easing;
+pub const withAnimation = elements.withAnimation;
+pub const withAnimationCtx = elements.withAnimationCtx;
+pub const withAnimations = elements.withAnimations;
+pub const scrollbar = elements.scrollbar;
+pub const Scrollbar = elements.Scrollbar;
+pub const ScrollbarStyle = elements.ScrollbarStyle;
+pub const ScrollbarMode = elements.ScrollbarMode;
+pub const ScrollbarAxis = elements.ScrollbarAxis;
+pub const TailReservation = elements.TailReservation;
+/// Edge fade / frost / layer wrappers (src/elements/effects.zig).
+pub const effects = elements.effects;
+pub const edgeFaded = elements.edgeFaded;
+pub const frosted = elements.frosted;
+pub const layered = elements.layered;
+/// The frame arena allocator (valid until the frame is presented).
+pub const frameAllocator = window.arena_mod.frameAllocator;
 
 test {
     @import("std").testing.refAllDecls(@This());
