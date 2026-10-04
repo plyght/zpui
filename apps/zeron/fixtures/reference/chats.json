@@ -1,0 +1,224 @@
+[
+  {
+    "id": "10ae39a4-caa6-5efd-ae67-b939b8288656",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "title": "Fix flaky Button snapshot test",
+    "archived": false,
+    "cwd": "/home/user/research/reference/demo-repos/lumen-web",
+    "branch": "main",
+    "checkoutId": "3c2bcfe9e939d18d847dab09e2ca1f5cd035a847115e9b7880a4abddce807d99",
+    "sourceContext": {
+      "checkoutId": "3c2bcfe9e939d18d847dab09e2ca1f5cd035a847115e9b7880a4abddce807d99",
+      "repoRoot": "/home/user/research/reference/demo-repos/lumen-web",
+      "cwd": "/home/user/research/reference/demo-repos/lumen-web",
+      "branch": "main",
+      "headSha": "fa8f687d5aca15903ebed38d3d1779789d3df4c4",
+      "observedAt": "2026-10-04T07:17:06.824720002Z"
+    },
+    "config": {
+      "harness": "claude-code",
+      "model": "claude-sonnet-5",
+      "reasoning": "medium",
+      "modelOptions": {},
+      "sandbox": "workspace-write"
+    },
+    "lastMessagePreview": "Found it. The test passes with `--runInBand` and fails in parallel, so the dark-variant test depends on a `matchMedia` m",
+    "lastMessageAt": "2026-10-04T04:17:04.790Z",
+    "createdAt": "2026-10-04T04:07:04.790Z",
+    "harnessSessionId": "c2be75e3-0143-49ac-aad2-0a6a9290f7da",
+    "harnessSessionCwd": "/home/user/research/reference/demo-repos/lumen-web",
+    "spaceId": "2b090de0-83cd-5618-9076-890a99f2c858",
+    "lastSeenAt": "2026-10-04T07:26:01.448Z",
+    "roomGen": 2
+  },
+  {
+    "id": "3d082f2f-880f-5326-9b2a-522f20f41db1",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "title": "Explain the event stream architecture",
+    "archived": false,
+    "cwd": "/home/user/research/reference/demo-repos/aurora",
+    "branch": "feat/stream-backpressure",
+    "checkoutId": "2d6870006a62dfad6c8258369c681da3681eb5f3a3d3fbf6a5b997a64b2e4097",
+    "sourceContext": {
+      "checkoutId": "2d6870006a62dfad6c8258369c681da3681eb5f3a3d3fbf6a5b997a64b2e4097",
+      "repoRoot": "/home/user/research/reference/demo-repos/aurora",
+      "cwd": "/home/user/research/reference/demo-repos/aurora",
+      "branch": "feat/stream-backpressure",
+      "headSha": "f5618ff7f1ff8c2accf7e282cbcffc5870f45e17",
+      "observedAt": "2026-10-04T07:17:07.835405318Z"
+    },
+    "config": {
+      "harness": "claude-code",
+      "model": "claude-opus-5-5",
+      "reasoning": "high",
+      "modelOptions": {},
+      "sandbox": "workspace-write"
+    },
+    "lastMessagePreview": "# How Aurora streams events\n\nAurora is a small pipeline with three stages. Each stage owns one buffer and hands batches ",
+    "lastMessageAt": "2026-10-04T02:17:04.790Z",
+    "createdAt": "2026-10-04T02:07:04.790Z",
+    "harnessSessionId": "f9631c12-fc44-4c3d-9ccf-36c0e62b262b",
+    "harnessSessionCwd": "/home/user/research/reference/demo-repos/aurora",
+    "spaceId": "a9c4cb5a-7aee-541c-a026-20c5e64cfca1",
+    "lastSeenAt": "2026-10-04T07:26:01.449Z",
+    "roomGen": 2
+  },
+  {
+    "id": "75fdc758-a8d5-58bb-a89d-9d5ac5e98425",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "title": "Add backpressure to stream pipeline",
+    "archived": false,
+    "cwd": "/home/user/research/reference/demo-repos/aurora",
+    "branch": "feat/stream-backpressure",
+    "checkoutId": "2d6870006a62dfad6c8258369c681da3681eb5f3a3d3fbf6a5b997a64b2e4097",
+    "sourceContext": {
+      "checkoutId": "2d6870006a62dfad6c8258369c681da3681eb5f3a3d3fbf6a5b997a64b2e4097",
+      "repoRoot": "/home/user/research/reference/demo-repos/aurora",
+      "cwd": "/home/user/research/reference/demo-repos/aurora",
+      "branch": "feat/stream-backpressure",
+      "headSha": "f5618ff7f1ff8c2accf7e282cbcffc5870f45e17",
+      "observedAt": "2026-10-04T07:17:04.801756073Z"
+    },
+    "config": {
+      "harness": "claude-code",
+      "model": "claude-opus-5-5",
+      "reasoning": "high",
+      "modelOptions": {},
+      "sandbox": "workspace-write"
+    },
+    "lastMessagePreview": "There's a single call site in `src/main.rs`, so the constructor can change without a migration. I'll add the high-water ",
+    "lastMessageAt": "2026-10-04T07:15:04.790Z",
+    "createdAt": "2026-10-04T07:05:04.790Z",
+    "harnessSessionId": "4eb64e7d-5cda-468c-8daf-2e8dc7cfbbe4",
+    "harnessSessionCwd": "/home/user/research/reference/demo-repos/aurora",
+    "spaceId": "a9c4cb5a-7aee-541c-a026-20c5e64cfca1",
+    "lastSeenAt": "2026-10-04T07:26:01.453Z",
+    "roomGen": 2
+  },
+  {
+    "id": "7ee7f896-1f63-5c8a-9b9e-87b14cbd6bfd",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "title": "Initial context exploration",
+    "archived": false,
+    "cwd": "/home/user/research/reference/demo-repos/notes-cli",
+    "branch": "main",
+    "checkoutId": "ff9caa71ceb3002bafbe3c07ed4f5c28979fe1db4742cf9ed3bf37a122986f2f",
+    "sourceContext": {
+      "checkoutId": "ff9caa71ceb3002bafbe3c07ed4f5c28979fe1db4742cf9ed3bf37a122986f2f",
+      "repoRoot": "/home/user/research/reference/demo-repos/notes-cli",
+      "cwd": "/home/user/research/reference/demo-repos/notes-cli",
+      "branch": "main",
+      "headSha": "9ffaf7e74d1bbeab65714a7383f7014e655fe1bb",
+      "observedAt": "2026-10-04T07:17:10.879611429Z"
+    },
+    "config": {
+      "harness": "claude-code",
+      "model": "claude-opus-5-5",
+      "reasoning": "high",
+      "modelOptions": {},
+      "sandbox": "workspace-write"
+    },
+    "lastMessagePreview": "Sure. Here's a quick summary of the current branch:\n\n- `feat/stream-backpressure` is **2 commits** ahead of `main`\n- Wor",
+    "lastMessageAt": "2026-09-30T07:17:04.790Z",
+    "createdAt": "2026-09-30T07:07:04.790Z",
+    "harnessSessionId": "3f51be85-5c20-40ab-8623-1462d244221e",
+    "harnessSessionCwd": "/home/user/research/reference/demo-repos/notes-cli",
+    "spaceId": "a14a052c-9cd4-5b56-8289-35be0aaff354",
+    "lastSeenAt": "2026-10-04T07:26:01.456Z",
+    "roomGen": 2
+  },
+  {
+    "id": "9bdb72ee-56a2-5645-83b0-2867bb0c6b13",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "title": "Rename stream setting",
+    "archived": false,
+    "cwd": "/home/user/research/reference/demo-repos/lumen-web",
+    "branch": "main",
+    "checkoutId": "3c2bcfe9e939d18d847dab09e2ca1f5cd035a847115e9b7880a4abddce807d99",
+    "sourceContext": {
+      "checkoutId": "3c2bcfe9e939d18d847dab09e2ca1f5cd035a847115e9b7880a4abddce807d99",
+      "repoRoot": "/home/user/research/reference/demo-repos/lumen-web",
+      "cwd": "/home/user/research/reference/demo-repos/lumen-web",
+      "branch": "main",
+      "headSha": "fa8f687d5aca15903ebed38d3d1779789d3df4c4",
+      "observedAt": "2026-10-04T07:17:09.862085454Z"
+    },
+    "config": {
+      "harness": "claude-code",
+      "model": "claude-haiku-4-5",
+      "reasoning": null,
+      "modelOptions": {},
+      "sandbox": "workspace-write"
+    },
+    "lastMessagePreview": "Done. I renamed the setting to `stream.highWater` and updated the two call sites.",
+    "lastMessageAt": "2026-10-02T05:17:04.790Z",
+    "createdAt": "2026-10-02T05:07:04.790Z",
+    "harnessSessionId": "2d6d89f0-7f08-454a-a136-512cbf17f8f3",
+    "harnessSessionCwd": "/home/user/research/reference/demo-repos/lumen-web",
+    "spaceId": "2b090de0-83cd-5618-9076-890a99f2c858",
+    "lastSeenAt": "2026-10-04T07:26:01.459Z",
+    "roomGen": 2
+  },
+  {
+    "id": "a1c244f1-dc55-5f4b-b0d1-39d01558acac",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "title": "Streaming pipeline walkthrough",
+    "archived": false,
+    "cwd": "/home/user/research/reference/demo-repos/aurora",
+    "branch": "feat/stream-backpressure",
+    "checkoutId": "2d6870006a62dfad6c8258369c681da3681eb5f3a3d3fbf6a5b997a64b2e4097",
+    "sourceContext": {
+      "checkoutId": "2d6870006a62dfad6c8258369c681da3681eb5f3a3d3fbf6a5b997a64b2e4097",
+      "repoRoot": "/home/user/research/reference/demo-repos/aurora",
+      "cwd": "/home/user/research/reference/demo-repos/aurora",
+      "branch": "feat/stream-backpressure",
+      "headSha": "f5618ff7f1ff8c2accf7e282cbcffc5870f45e17",
+      "observedAt": "2026-10-04T07:17:08.848957645Z"
+    },
+    "config": {
+      "harness": "mock",
+      "model": "fable-5",
+      "reasoning": null,
+      "modelOptions": {},
+      "sandbox": "workspace-write"
+    },
+    "lastMessagePreview": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run`",
+    "lastMessageAt": "2026-10-03T05:17:04.790Z",
+    "createdAt": "2026-10-03T05:07:04.790Z",
+    "spaceId": "a9c4cb5a-7aee-541c-a026-20c5e64cfca1",
+    "lastSeenAt": "2026-10-04T07:26:01.463Z",
+    "roomGen": 2
+  },
+  {
+    "id": "e5ec567d-b9d5-548a-aa21-22071bab8550",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "title": "Retry backoff helper",
+    "archived": false,
+    "cwd": "/home/user/research/reference/demo-repos/aurora",
+    "branch": "feat/stream-backpressure",
+    "checkoutId": "2d6870006a62dfad6c8258369c681da3681eb5f3a3d3fbf6a5b997a64b2e4097",
+    "sourceContext": {
+      "checkoutId": "2d6870006a62dfad6c8258369c681da3681eb5f3a3d3fbf6a5b997a64b2e4097",
+      "repoRoot": "/home/user/research/reference/demo-repos/aurora",
+      "cwd": "/home/user/research/reference/demo-repos/aurora",
+      "branch": "feat/stream-backpressure",
+      "headSha": "f5618ff7f1ff8c2accf7e282cbcffc5870f45e17",
+      "observedAt": "2026-10-04T07:21:53.345786539Z"
+    },
+    "config": {
+      "harness": "pi",
+      "model": "claude-sonnet-5",
+      "reasoning": null,
+      "modelOptions": {},
+      "sandbox": "workspace-write"
+    },
+    "lastMessagePreview": "`backoff` now takes a `seed` and returns a value in `0..=ceiling` (full jitter). No new dependency: `rand` isn't in `Car",
+    "lastMessageAt": "2026-10-04T07:21:53.424Z",
+    "createdAt": "2026-10-04T06:17:04.790Z",
+    "harnessSessionId": "d2c33ba6-4951-439a-ae42-cde68fec188c",
+    "harnessSessionCwd": "/home/user/research/reference/demo-repos/aurora",
+    "spaceId": "a9c4cb5a-7aee-541c-a026-20c5e64cfca1",
+    "lastSeenAt": "2026-10-04T07:26:01.466Z",
+    "roomGen": 2
+  }
+]

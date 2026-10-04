@@ -1,0 +1,224 @@
+[
+  {
+    "id": "claude-opus-5-5",
+    "label": "Opus 5.5",
+    "description": "Best for everyday, complex tasks",
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultracode",
+      "ultrathink"
+    ],
+    "options": [
+      {
+        "id": "contextWindow",
+        "label": "Context Window",
+        "choices": [
+          {
+            "id": "200k",
+            "label": "200K"
+          },
+          {
+            "id": "1m",
+            "label": "1M"
+          }
+        ],
+        "defaultChoice": "200k"
+      },
+      {
+        "id": "fastMode",
+        "label": "Fast Mode",
+        "choices": [
+          {
+            "id": "off",
+            "label": "Off"
+          },
+          {
+            "id": "on",
+            "label": "On"
+          }
+        ],
+        "defaultChoice": "off"
+      }
+    ]
+  },
+  {
+    "id": "claude-fable-5-1",
+    "label": "Fable 5.1",
+    "description": "Most intelligent model for building agents",
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultracode",
+      "ultrathink"
+    ],
+    "options": [
+      {
+        "id": "contextWindow",
+        "label": "Context Window",
+        "choices": [
+          {
+            "id": "200k",
+            "label": "200K"
+          },
+          {
+            "id": "1m",
+            "label": "1M"
+          }
+        ],
+        "defaultChoice": "200k"
+      }
+    ]
+  },
+  {
+    "id": "claude-fable-5",
+    "label": "Fable 5",
+    "description": "Previous generation Fable",
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultracode",
+      "ultrathink"
+    ],
+    "options": [
+      {
+        "id": "contextWindow",
+        "label": "Context Window",
+        "choices": [
+          {
+            "id": "200k",
+            "label": "200K"
+          },
+          {
+            "id": "1m",
+            "label": "1M"
+          }
+        ],
+        "defaultChoice": "200k"
+      }
+    ]
+  },
+  {
+    "id": "claude-opus-4-8",
+    "label": "Opus 4.8",
+    "description": "Previous generation Opus",
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultracode",
+      "ultrathink"
+    ],
+    "options": [
+      {
+        "id": "fastMode",
+        "label": "Fast Mode",
+        "choices": [
+          {
+            "id": "off",
+            "label": "Off"
+          },
+          {
+            "id": "on",
+            "label": "On"
+          }
+        ],
+        "defaultChoice": "off"
+      }
+    ]
+  },
+  {
+    "id": "claude-opus-4-7",
+    "label": "Opus 4.7",
+    "description": "Older generation Opus",
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultrathink"
+    ],
+    "options": [
+      {
+        "id": "fastMode",
+        "label": "Fast Mode",
+        "choices": [
+          {
+            "id": "off",
+            "label": "Off"
+          },
+          {
+            "id": "on",
+            "label": "On"
+          }
+        ],
+        "defaultChoice": "off"
+      }
+    ]
+  },
+  {
+    "id": "claude-sonnet-5",
+    "label": "Sonnet 5",
+    "description": "Balanced speed and intelligence",
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+      "ultrathink"
+    ],
+    "options": [
+      {
+        "id": "contextWindow",
+        "label": "Context Window",
+        "choices": [
+          {
+            "id": "200k",
+            "label": "200K"
+          },
+          {
+            "id": "1m",
+            "label": "1M"
+          }
+        ],
+        "defaultChoice": "200k"
+      }
+    ]
+  },
+  {
+    "id": "claude-haiku-4-5",
+    "label": "Haiku 4.5",
+    "description": "Fastest model for everyday tasks",
+    "reasoningLevels": [],
+    "options": [
+      {
+        "id": "thinking",
+        "label": "Thinking",
+        "choices": [
+          {
+            "id": "off",
+            "label": "Off"
+          },
+          {
+            "id": "on",
+            "label": "On"
+          }
+        ],
+        "defaultChoice": "off"
+      }
+    ]
+  }
+]

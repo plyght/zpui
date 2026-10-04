@@ -1,0 +1,20 @@
+[
+  {
+    "id": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "name": "Workstation",
+    "platform": "linux",
+    "lastSeenAt": "2026-10-04T07:25:26.438Z",
+    "createdAt": "2026-10-04T07:16:28.835Z",
+    "version": "0.2.102",
+    "cursorSdkVersion": "1.0.32",
+    "capabilities": [
+      "composer-references-v1",
+      "message-queue-v1",
+      "message-queue-actions-v1",
+      "message-queue-attachments-v1",
+      "message-queue-clean-attachment-text-v1",
+      "message-queue-edit-lease-v1",
+      "harness-updates-v1"
+    ]
+  }
+]

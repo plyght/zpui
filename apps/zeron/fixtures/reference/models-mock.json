@@ -1,0 +1,21 @@
+[
+  {
+    "id": "mock-1",
+    "label": "Mock 1",
+    "reasoningLevels": [
+      "medium"
+    ],
+    "options": []
+  },
+  {
+    "id": "mock-fable-5",
+    "label": "Fable 5",
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high",
+      "xhigh"
+    ],
+    "options": []
+  }
+]

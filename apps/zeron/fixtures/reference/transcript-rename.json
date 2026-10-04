@@ -1,0 +1,47 @@
+{
+  "reset": [
+    {
+      "id": "d20572e9-c039-4574-96ad-b3f2342721bf",
+      "role": "user",
+      "parts": [
+        {
+          "kind": "text",
+          "id": "t0",
+          "text": "rename the stream setting to stream.highWater"
+        }
+      ],
+      "createdAt": 1791098229850,
+      "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+      "status": "complete"
+    },
+    {
+      "id": "65259c4e-4567-404a-983d-06461ccd035b",
+      "role": "assistant",
+      "parts": [
+        {
+          "kind": "text",
+          "id": "t0",
+          "text": "Done. I renamed the setting to `stream.highWater` and updated the two call sites."
+        }
+      ],
+      "createdAt": 1791098229871,
+      "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+      "status": "complete",
+      "durationMs": 22
+    }
+  ],
+  "contextUsage": {
+    "tokens": 39200,
+    "window": 200000
+  },
+  "replayBaseline": {
+    "entries": {
+      "d20572e9-c039-4574-96ad-b3f2342721bf": {
+        "t0": 45
+      },
+      "65259c4e-4567-404a-983d-06461ccd035b": {
+        "t0": 81
+      }
+    }
+  }
+}

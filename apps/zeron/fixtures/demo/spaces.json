@@ -1,0 +1,23 @@
+[
+ {
+  "id": "sp-aurora",
+  "deviceId": "ws",
+  "path": "/home/user/research/reference/demo-repos/aurora",
+  "gitDetected": true,
+  "createdAt": "2026-09-29T07:20:00Z"
+ },
+ {
+  "id": "sp-lumen",
+  "deviceId": "ws",
+  "path": "/home/user/research/reference/demo-repos/lumen-web",
+  "gitDetected": true,
+  "createdAt": "2026-09-29T07:20:00Z"
+ },
+ {
+  "id": "sp-notes",
+  "deviceId": "ws",
+  "path": "/home/user/research/reference/demo-repos/notes-cli",
+  "gitDetected": true,
+  "createdAt": "2026-09-29T07:20:00Z"
+ }
+]

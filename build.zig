@@ -18,17 +18,20 @@ pub fn build(b: *std.Build) void {
     addZeronEngine(b, target, optimize, test_step);
     addZeronDesign(b, target, optimize, zpui, test_step);
     addVulkanRenderer(b, target, optimize, zpui);
-    addMetalRenderer(b, target, optimize, zpui);
-    addLinuxText(b, target, optimize, zpui);
     addLinuxPlatform(b, target, optimize, zpui);
+    addLinuxText(b, target, optimize, zpui);
+    addMetalRenderer(b, target, optimize, zpui);
     addMacPlatform(b, target, optimize, zpui);
     addZeronSyntax(b, target, optimize, test_step);
-    addZeronMarkdownDiff(b, target, optimize, test_step);
     addImageSupport(b, target, optimize, zpui);
+    addZeronMarkdownDiff(b, target, optimize, test_step);
     addZeronModel(b, target, optimize, zpui, test_step);
     addHelloExample(b, target, optimize, zpui);
-    addListDemo(b, target, optimize, zpui);
+    addZeronTerminal(b, target, optimize, zpui, test_step);
+    addZeronComposer(b, target, optimize, zpui, test_step);
     addZeronTranscriptUi(b, target, optimize, zpui, test_step);
+    addZeronApp(b, target, optimize, zpui, test_step);
+    addListDemo(b, target, optimize, zpui);
 }
 
 /// zeron engine client library (apps/zeron/src/engine), its tests, and the
@@ -61,31 +64,6 @@ fn addZeronEngine(
     run_probe.addPassthruArgs();
     const probe_step = b.step("probe", "Run zeron-probe against a local engine");
     probe_step.dependOn(&run_probe.step);
-}
-
-fn addZeronDesign(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    zpui: *std.Build.Module,
-    test_step: *std.Build.Step,
-) void {
-    const theme = b.addModule("zeron_theme", .{
-        .root_source_file = b.path("apps/zeron/src/theme/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "zpui", .module = zpui }},
-    });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = theme })).step);
-
-    const files = b.addWriteFiles();
-    _ = files.addCopyDirectory(b.path("apps/zeron/assets"), "assets", .{});
-    const assets = b.addModule("zeron_assets", .{
-        .root_source_file = files.addCopyFile(b.path("apps/zeron/src/assets.zig"), "assets.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = assets })).step);
 }
 
 /// Vulkan renderer (src/renderer/vulkan/) on non-Apple targets: Vulkan C
@@ -161,6 +139,60 @@ fn addVulkanRenderer(
     step.dependOn(&run.step);
 }
 
+/// Linux platform backend (src/platform/linux/): wayland-scanner protocol
+/// bindings, the `linux_c` translate-c module (wayland, xkbcommon, Xlib/xcb),
+/// system libraries, and the `linux-window` demo (`zig build linux-window`).
+fn addLinuxPlatform(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    if (target.result.os.tag != .linux) return;
+
+    const c = b.addTranslateC(.{
+        .root_source_file = b.path("src/platform/linux/c.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const protocols = [_][]const u8{
+        "xdg-shell",              "xdg-decoration-unstable-v1", "fractional-scale-v1",
+        "viewporter",             "tablet-v2",                  "cursor-shape-v1",
+        "text-input-unstable-v3", "org-kde-kwin-blur",
+    };
+    for (protocols) |name| {
+        const xml = b.path(b.fmt("src/platform/linux/protocols/{s}.xml", .{name}));
+        const header = b.addSystemCommand(&.{ "wayland-scanner", "client-header" });
+        header.addFileArg(xml);
+        c.addIncludePath(header.addOutputFileArg(b.fmt("{s}-client-protocol.h", .{name})).dirname());
+        const code = b.addSystemCommand(&.{ "wayland-scanner", "private-code" });
+        code.addFileArg(xml);
+        zpui.addCSourceFile(.{ .file = code.addOutputFileArg(b.fmt("{s}-protocol.c", .{name})) });
+    }
+    zpui.addImport("linux_c", c.createModule());
+    zpui.link_libc = true;
+    for ([_][]const u8{
+        "wayland-client", "wayland-cursor", "xkbcommon", "xkbcommon-x11",
+        "X11",            "X11-xcb",        "xcb",       "xcb-xkb",
+        "Xcursor",        "Xi",
+    }) |lib| zpui.linkSystemLibrary(lib, .{});
+
+    const demo = b.addExecutable(.{
+        .name = "linux-window",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/linux_window.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    b.installArtifact(demo);
+    const run = b.addRunArtifact(demo);
+    run.addPassthruArgs();
+    const step = b.step("linux-window", "Open the Linux platform demo window (Wayland or X11)");
+    step.dependOn(&run.step);
+}
+
 /// Metal renderer (src/renderer/metal/) on Apple targets: system frameworks,
 /// the `render-test` harness, and `metal-check`, which compiles the renderer
 /// and showcase scene to an object file. Cross builds from non-macOS hosts
@@ -215,6 +247,34 @@ fn addMetalRenderer(
     step.dependOn(&run.step);
 }
 
+/// zeron design system: `zeron_theme` (apps/zeron/src/theme) and
+/// `zeron_assets` (generated apps/zeron/src/assets.zig, compiled next to a
+/// copy of apps/zeron/assets/ so its @embedFile paths resolve), plus tests.
+fn addZeronDesign(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
+) void {
+    const theme = b.addModule("zeron_theme", .{
+        .root_source_file = b.path("apps/zeron/src/theme/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zpui", .module = zpui }},
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = theme })).step);
+
+    const files = b.addWriteFiles();
+    _ = files.addCopyDirectory(b.path("apps/zeron/assets"), "assets", .{});
+    const assets = b.addModule("zeron_assets", .{
+        .root_source_file = files.addCopyFile(b.path("apps/zeron/src/assets.zig"), "assets.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = assets })).step);
+}
+
 /// Linux text backend (src/text/freetype.zig): FreeType, HarfBuzz and fontconfig
 /// via the `freetype_c` translate-c module, plus the `text-dump` CPU raster check
 /// (`zig build text-dump` writes zig-out/text-dump.png).
@@ -250,60 +310,6 @@ fn addLinuxText(
     run.setCwd(b.path("."));
     run.addPassthruArgs();
     const step = b.step("text-dump", "Rasterize a sample paragraph on the CPU to zig-out/text-dump.png");
-    step.dependOn(&run.step);
-}
-
-/// Linux platform backend (src/platform/linux/): wayland-scanner protocol
-/// bindings, the `linux_c` translate-c module (wayland, xkbcommon, Xlib/xcb),
-/// system libraries, and the `linux-window` demo (`zig build linux-window`).
-fn addLinuxPlatform(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    zpui: *std.Build.Module,
-) void {
-    if (target.result.os.tag != .linux) return;
-
-    const c = b.addTranslateC(.{
-        .root_source_file = b.path("src/platform/linux/c.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const protocols = [_][]const u8{
-        "xdg-shell",              "xdg-decoration-unstable-v1", "fractional-scale-v1",
-        "viewporter",             "tablet-v2",                  "cursor-shape-v1",
-        "text-input-unstable-v3", "org-kde-kwin-blur",
-    };
-    for (protocols) |name| {
-        const xml = b.path(b.fmt("src/platform/linux/protocols/{s}.xml", .{name}));
-        const header = b.addSystemCommand(&.{ "wayland-scanner", "client-header" });
-        header.addFileArg(xml);
-        c.addIncludePath(header.addOutputFileArg(b.fmt("{s}-client-protocol.h", .{name})).dirname());
-        const code = b.addSystemCommand(&.{ "wayland-scanner", "private-code" });
-        code.addFileArg(xml);
-        zpui.addCSourceFile(.{ .file = code.addOutputFileArg(b.fmt("{s}-protocol.c", .{name})) });
-    }
-    zpui.addImport("linux_c", c.createModule());
-    zpui.link_libc = true;
-    for ([_][]const u8{
-        "wayland-client", "wayland-cursor", "xkbcommon", "xkbcommon-x11",
-        "X11",            "X11-xcb",        "xcb",       "xcb-xkb",
-        "Xcursor",        "Xi",
-    }) |lib| zpui.linkSystemLibrary(lib, .{});
-
-    const demo = b.addExecutable(.{
-        .name = "linux-window",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/linux_window.zig"),
-            .target = target,
-            .optimize = optimize,
-            .imports = &.{.{ .name = "zpui", .module = zpui }},
-        }),
-    });
-    b.installArtifact(demo);
-    const run = b.addRunArtifact(demo);
-    run.addPassthruArgs();
-    const step = b.step("linux-window", "Open the Linux platform demo window (Wayland or X11)");
     step.dependOn(&run.step);
 }
 
@@ -380,29 +386,6 @@ fn addZeronSyntax(
     b.step("syntax-test", "Run only the zeron_syntax tests").dependOn(&run.step);
 }
 
-/// zeron markdown (apps/zeron/src/markdown: pulldown-cmark 0.12 port, block
-/// model, incremental reparse, streaming mend) and diff (apps/zeron/src/diff:
-/// unified patch parser, `similar` Myers/Patience port) modules + their
-/// parity tests.
-fn addZeronMarkdownDiff(
-    b: *std.Build,
-    target: std.Build.ResolvedTarget,
-    optimize: std.builtin.OptimizeMode,
-    test_step: *std.Build.Step,
-) void {
-    inline for (.{
-        .{ "zeron_markdown", "apps/zeron/src/markdown/root.zig" },
-        .{ "zeron_diff", "apps/zeron/src/diff/root.zig" },
-    }) |m| {
-        const mod = b.addModule(m[0], .{
-            .root_source_file = b.path(m[1]),
-            .target = target,
-            .optimize = optimize,
-        });
-        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .name = m[0], .root_module = mod })).step);
-    }
-}
-
 /// Image + SVG support (src/image/): the vendored lunasvg/plutovg, stb_image
 /// and simplewebp compiled into `zpui` (src/image/image_build.zig), plus the
 /// `icon-sheet` visual check (`zig build icon-sheet` writes zig-out/icon-sheet.png).
@@ -428,6 +411,29 @@ fn addImageSupport(
     run.addPassthruArgs();
     const step = b.step("icon-sheet", "Rasterize every zeron icon + sample images to zig-out/icon-sheet.png");
     step.dependOn(&run.step);
+}
+
+/// zeron markdown (apps/zeron/src/markdown: pulldown-cmark 0.12 port, block
+/// model, incremental reparse, streaming mend) and diff (apps/zeron/src/diff:
+/// unified patch parser, `similar` Myers/Patience port) modules + their
+/// parity tests.
+fn addZeronMarkdownDiff(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    test_step: *std.Build.Step,
+) void {
+    inline for (.{
+        .{ "zeron_markdown", "apps/zeron/src/markdown/root.zig" },
+        .{ "zeron_diff", "apps/zeron/src/diff/root.zig" },
+    }) |m| {
+        const mod = b.addModule(m[0], .{
+            .root_source_file = b.path(m[1]),
+            .target = target,
+            .optimize = optimize,
+        });
+        test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .name = m[0], .root_module = mod })).step);
+    }
 }
 
 /// zeron app state (apps/zeron/src/model: view logic, settings, engine-backed
@@ -517,34 +523,129 @@ fn addHelloExample(
     step.dependOn(&run.step);
 }
 
-/// `zig build list-demo`: examples/list_demo.zig — virtualized chat list (10k rows),
-/// entrance animations, edge fade, overlay scrollbar and a frosted panel (Linux).
-fn addListDemo(
+/// zeron terminal core: vendored Ghostty VT (vendor/ghostty-vt, ported to Zig
+/// 0.17; `ghostty-vt` module) + the zeron wrapper (apps/zeron/src/terminal,
+/// `zeron_terminal`). `zig build terminal-test` runs only the wrapper tests;
+/// `zig build ghostty-vt-test` runs the full vendored Ghostty suite (~2.8k
+/// tests, slow in Debug); `zig build term-dump` renders a shell command's
+/// final screen to zig-out/term-dump.png (Linux, FreeType text system).
+fn addZeronTerminal(
     b: *std.Build,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
 ) void {
+    const vt = @import("vendor/ghostty-vt/module.zig").module(b, .{ .target = target, .optimize = optimize });
+    const term = b.addModule("zeron_terminal", .{
+        .root_source_file = b.path("apps/zeron/src/terminal/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true, // pty.zig (forkpty)
+        .imports = &.{.{ .name = "ghostty-vt", .module = vt }},
+    });
+    const term_tests = b.addRunArtifact(b.addTest(.{ .root_module = term }));
+    term_tests.setCwd(b.path("."));
+    test_step.dependOn(&term_tests.step);
+    b.step("terminal-test", "Run only the zeron_terminal tests").dependOn(&term_tests.step);
+
+    const vt_test_mod = @import("vendor/ghostty-vt/module.zig").module(b, .{ .target = target, .optimize = optimize, .slow_runtime_safety = true });
+    const vt_tests = b.addRunArtifact(b.addTest(.{ .root_module = vt_test_mod }));
+    vt_tests.setCwd(b.path("vendor/ghostty-vt")); // snapshot golden files are cwd-relative
+    b.step("ghostty-vt-test", "Run the vendored Ghostty terminal test suite").dependOn(&vt_tests.step);
+
     if (target.result.os.tag != .linux) return;
-    const assets = b.modules.get("zeron_assets") orelse return;
-    const exe = b.addExecutable(.{
-        .name = "list-demo",
+    const theme = b.modules.get("zeron_theme") orelse return;
+    const dump = b.addExecutable(.{
+        .name = "term-dump",
         .root_module = b.createModule(.{
-            .root_source_file = b.path("examples/list_demo.zig"),
+            .root_source_file = b.path("examples/term_dump.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zpui", .module = zpui },
+                .{ .name = "zeron_terminal", .module = term },
+                .{ .name = "zeron_theme", .module = theme },
+            },
+        }),
+    });
+    b.installArtifact(dump);
+    const run = b.addRunArtifact(dump);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    b.step("term-dump", "Run a command under a PTY and render the terminal to zig-out/term-dump.png").dependOn(&run.step);
+}
+
+/// zeron text editor + composer: `zeron_input` (apps/zeron/src/ui/input: the
+/// reusable `TextInput` editor, port of Rust `ComposerInput`) and
+/// `zeron_composer` (apps/zeron/src/ui/composer: `ComposerView`), their tests,
+/// and `zig build composer-demo` (examples/composer_demo.zig, Linux).
+fn addZeronComposer(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
+) void {
+    const theme = b.modules.get("zeron_theme") orelse return;
+    const model = b.modules.get("zeron_model") orelse return;
+    const actions = b.modules.get("zeron_actions") orelse return;
+    const engine = b.modules.get("zeron_engine") orelse return;
+    const assets = b.modules.get("zeron_assets") orelse return;
+    const input = b.addModule("zeron_input", .{
+        .root_source_file = b.path("apps/zeron/src/ui/input/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zpui", .module = zpui },
+            .{ .name = "zeron_theme", .module = theme },
+            .{ .name = "zeron_actions", .module = actions },
+        },
+    });
+    const composer = b.addModule("zeron_composer", .{
+        .root_source_file = b.path("apps/zeron/src/ui/composer/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zpui", .module = zpui },
+            .{ .name = "zeron_theme", .module = theme },
+            .{ .name = "zeron_actions", .module = actions },
+            .{ .name = "zeron_model", .module = model },
+            .{ .name = "zeron_engine", .module = engine },
+            .{ .name = "zeron_assets", .module = assets },
+            .{ .name = "zeron_input", .module = input },
+        },
+    });
+    const run_input = b.addRunArtifact(b.addTest(.{ .name = "zeron_input", .root_module = input }));
+    const run_composer = b.addRunArtifact(b.addTest(.{ .name = "zeron_composer", .root_module = composer }));
+    const step = b.step("composer-test", "Run the zeron editor + composer tests");
+    step.dependOn(&run_input.step);
+    step.dependOn(&run_composer.step);
+    test_step.dependOn(step);
+
+    if (target.result.os.tag != .linux) return;
+    const exe = b.addExecutable(.{
+        .name = "composer-demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("apps/zeron/examples/composer_demo.zig"),
             .target = target,
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "zpui", .module = zpui },
                 .{ .name = "zeron_assets", .module = assets },
+                .{ .name = "zeron_theme", .module = theme },
+                .{ .name = "zeron_actions", .module = actions },
+                .{ .name = "zeron_model", .module = model },
+                .{ .name = "zeron_engine", .module = engine },
+                .{ .name = "zeron_input", .module = input },
+                .{ .name = "zeron_composer", .module = composer },
             },
         }),
     });
-    const install = b.addInstallArtifact(exe, .{});
+    b.installArtifact(exe);
     const run = b.addRunArtifact(exe);
-    run.step.dependOn(&install.step);
     run.addPassthruArgs();
-    const step = b.step("list-demo", "Run the virtualized list demo (examples/list_demo.zig)");
-    step.dependOn(&run.step);
+    b.step("composer-demo", "Run the zeron composer demo window").dependOn(&run.step);
 }
 
 /// zeron transcript + markdown UI: `zeron_ui_markdown` (apps/zeron/src/ui/markdown,
@@ -622,4 +723,80 @@ fn addZeronTranscriptUi(
     run.setCwd(b.path("."));
     run.addPassthruArgs();
     b.step("transcript-demo", "Render transcript fixtures in a window (apps/zeron/fixtures/transcript-*.json)").dependOn(&run.step);
+}
+
+/// The zeron desktop app (apps/zeron/src/main.zig): `zig build zeron` builds it,
+/// `zig build run-zeron -- [--fixtures dir] [--frames n]` runs it. On a non-macOS
+/// host targeting macOS it compiles to an object only (zig-out/zeron-mac-check.o).
+fn addZeronApp(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
+) void {
+    const os = target.result.os.tag;
+    if (os != .linux and os != .macos) return;
+    const names = [_][]const u8{ "zeron_assets", "zeron_theme", "zeron_model", "zeron_engine", "zeron_actions", "zeron_markdown", "zeron_diff", "zeron_syntax", "zeron_terminal", "zeron_input", "zeron_composer", "zeron_ui_markdown", "zeron_ui_transcript" };
+    var imports: std.ArrayList(std.Build.Module.Import) = .empty;
+    imports.append(b.allocator, .{ .name = "zpui", .module = zpui }) catch @panic("OOM");
+    for (names) |n| if (b.modules.get(n)) |m| imports.append(b.allocator, .{ .name = n, .module = m }) catch @panic("OOM");
+    const root = b.createModule(.{
+        .root_source_file = b.path("apps/zeron/src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = imports.items,
+    });
+    const step = b.step("zeron", "Build the zeron desktop app");
+    if (os == .macos and @import("builtin").os.tag != .macos) {
+        const obj = b.addObject(.{ .name = "zeron-mac-check", .root_module = root });
+        const install = b.addInstallFile(obj.getEmittedBin(), "zeron-mac-check.o");
+        step.dependOn(&install.step);
+        b.getInstallStep().dependOn(&install.step);
+        return;
+    }
+    const exe = b.addExecutable(.{ .name = "zeron", .root_module = root });
+    const install = b.addInstallArtifact(exe, .{});
+    step.dependOn(&install.step);
+    b.getInstallStep().dependOn(&install.step);
+    const run = b.addRunArtifact(exe);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    b.step("run-zeron", "Run the zeron desktop app").dependOn(&run.step);
+
+    // Headless shell/sidebar tests (TestPlatform + checked-in fixtures).
+    const tests = b.addRunArtifact(b.addTest(.{ .name = "zeron_app", .root_module = root }));
+    tests.setCwd(b.path("."));
+    test_step.dependOn(&tests.step);
+    b.step("zeron-app-test", "Run the zeron shell/sidebar tests").dependOn(&tests.step);
+}
+
+/// `zig build list-demo`: examples/list_demo.zig — virtualized chat list (10k rows),
+/// entrance animations, edge fade, overlay scrollbar and a frosted panel (Linux).
+fn addListDemo(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    if (target.result.os.tag != .linux) return;
+    const assets = b.modules.get("zeron_assets") orelse return;
+    const exe = b.addExecutable(.{
+        .name = "list-demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/list_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zpui", .module = zpui },
+                .{ .name = "zeron_assets", .module = assets },
+            },
+        }),
+    });
+    const install = b.addInstallArtifact(exe, .{});
+    const run = b.addRunArtifact(exe);
+    run.step.dependOn(&install.step);
+    run.addPassthruArgs();
+    const step = b.step("list-demo", "Run the virtualized list demo (examples/list_demo.zig)");
+    step.dependOn(&run.step);
 }

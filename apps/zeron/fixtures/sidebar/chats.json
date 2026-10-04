@@ -1,0 +1,215 @@
+[
+ {
+  "id": "browser-fixture",
+  "deviceId": "local",
+  "spaceId": "project",
+  "title": "Build the Fieldnotes workspace",
+  "archived": false,
+  "createdAt": "2026-09-08T00:00:00Z",
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-4-6",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  }
+ },
+ {
+  "id": "chat-0",
+  "deviceId": "local",
+  "spaceId": "project",
+  "title": "Polish the command palette",
+  "archived": false,
+  "createdAt": "2026-09-16T11:43:00Z",
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-4-6",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "branch": "fieldnotes/polish-the-command-palette",
+  "sourceContext": {
+   "checkoutId": "fixture-checkout",
+   "repoRoot": "/tmp/fieldnotes",
+   "cwd": "/tmp/fieldnotes",
+   "branch": "fieldnotes/polish-the-command-palette",
+   "observedAt": "2026-09-16T12:00:00Z"
+  }
+ },
+ {
+  "id": "chat-1",
+  "deviceId": "remote",
+  "spaceId": "backend",
+  "title": "Fix authentication redirects",
+  "archived": false,
+  "createdAt": "2026-09-16T11:26:00Z",
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-4-6",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "branch": "fieldnotes/fix-authentication-redirects",
+  "sourceContext": {
+   "checkoutId": "fixture-checkout",
+   "repoRoot": "/tmp/fieldnotes",
+   "cwd": "/tmp/fieldnotes",
+   "branch": "fieldnotes/fix-authentication-redirects",
+   "observedAt": "2026-09-16T12:00:00Z"
+  }
+ },
+ {
+  "id": "chat-2",
+  "deviceId": "remote",
+  "spaceId": "backend",
+  "title": "Add deployment status",
+  "archived": false,
+  "createdAt": "2026-09-16T11:09:00Z",
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-4-6",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "branch": "fieldnotes/add-deployment-status",
+  "sourceContext": {
+   "checkoutId": "fixture-checkout",
+   "repoRoot": "/tmp/fieldnotes",
+   "cwd": "/tmp/fieldnotes",
+   "branch": "fieldnotes/add-deployment-status",
+   "observedAt": "2026-09-16T12:00:00Z"
+  }
+ },
+ {
+  "id": "chat-3",
+  "deviceId": "local",
+  "spaceId": "project",
+  "title": "Review pull request comments",
+  "archived": false,
+  "createdAt": "2026-09-16T10:52:00Z",
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-4-6",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "branch": "fieldnotes/review-pull-request-comments",
+  "sourceContext": {
+   "checkoutId": "fixture-checkout",
+   "repoRoot": "/tmp/fieldnotes",
+   "cwd": "/tmp/fieldnotes",
+   "branch": "fieldnotes/review-pull-request-comments",
+   "observedAt": "2026-09-16T12:00:00Z"
+  },
+  "lastMessageAt": "2026-09-16T12:00:00Z"
+ },
+ {
+  "id": "chat-4",
+  "deviceId": "remote",
+  "spaceId": "backend",
+  "title": "Improve keyboard navigation",
+  "archived": false,
+  "createdAt": "2026-09-16T10:35:00Z",
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-4-6",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "branch": "fieldnotes/improve-keyboard-navigation",
+  "sourceContext": {
+   "checkoutId": "fixture-checkout",
+   "repoRoot": "/tmp/fieldnotes",
+   "cwd": "/tmp/fieldnotes",
+   "branch": "fieldnotes/improve-keyboard-navigation",
+   "observedAt": "2026-09-16T12:00:00Z"
+  }
+ },
+ {
+  "id": "chat-5",
+  "deviceId": "local",
+  "spaceId": "project",
+  "title": "Update project documentation",
+  "archived": false,
+  "createdAt": "2026-09-16T10:18:00Z",
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-4-6",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "branch": "fieldnotes/update-project-documentation",
+  "sourceContext": {
+   "checkoutId": "fixture-checkout",
+   "repoRoot": "/tmp/fieldnotes",
+   "cwd": "/tmp/fieldnotes",
+   "branch": "fieldnotes/update-project-documentation",
+   "observedAt": "2026-09-16T12:00:00Z"
+  }
+ },
+ {
+  "id": "chat-6",
+  "deviceId": "remote",
+  "spaceId": "backend",
+  "title": "Refine composer spacing",
+  "archived": false,
+  "createdAt": "2026-09-16T10:01:00Z",
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-4-6",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "branch": "fieldnotes/refine-composer-spacing",
+  "sourceContext": {
+   "checkoutId": "fixture-checkout",
+   "repoRoot": "/tmp/fieldnotes",
+   "cwd": "/tmp/fieldnotes",
+   "branch": "fieldnotes/refine-composer-spacing",
+   "observedAt": "2026-09-16T12:00:00Z"
+  }
+ },
+ {
+  "id": "chat-7",
+  "deviceId": "remote",
+  "spaceId": "backend",
+  "title": "Audit chat sync",
+  "archived": true,
+  "createdAt": "2026-09-16T09:44:00Z",
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-4-6",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "branch": "fieldnotes/audit-chat-sync",
+  "sourceContext": {
+   "checkoutId": "fixture-checkout",
+   "repoRoot": "/tmp/fieldnotes",
+   "cwd": "/tmp/fieldnotes",
+   "branch": "fieldnotes/audit-chat-sync",
+   "observedAt": "2026-09-16T12:00:00Z"
+  }
+ },
+ {
+  "id": "chat-8",
+  "deviceId": "local",
+  "spaceId": "project",
+  "title": "Build settings search",
+  "archived": false,
+  "createdAt": "2026-09-16T09:27:00Z",
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-4-6",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "branch": "fieldnotes/build-settings-search",
+  "sourceContext": {
+   "checkoutId": "fixture-checkout",
+   "repoRoot": "/tmp/fieldnotes",
+   "cwd": "/tmp/fieldnotes",
+   "branch": "fieldnotes/build-settings-search",
+   "observedAt": "2026-09-16T12:00:00Z"
+  }
+ }
+]

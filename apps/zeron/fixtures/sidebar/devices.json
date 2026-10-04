@@ -1,0 +1,14 @@
+[
+ {
+  "id": "local",
+  "name": "This device",
+  "platform": "linux",
+  "lastSeenAt": null
+ },
+ {
+  "id": "remote",
+  "name": "Build server",
+  "platform": "linux",
+  "lastSeenAt": "2026-09-16T12:00:00Z"
+ }
+]

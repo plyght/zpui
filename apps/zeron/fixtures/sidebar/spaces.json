@@ -1,0 +1,15 @@
+[
+ {
+  "id": "project",
+  "deviceId": "local",
+  "path": "/home/demo/fieldnotes",
+  "createdAt": "2026-09-08T00:00:00Z"
+ },
+ {
+  "id": "backend",
+  "deviceId": "remote",
+  "name": "API server",
+  "path": "/projects/backend",
+  "createdAt": "2026-09-16T12:00:00Z"
+ }
+]

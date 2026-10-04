@@ -1,0 +1,8 @@
+.{
+    .name = .gen,
+    .version = "0.0.0",
+    .fingerprint = 0x59d70ac3ac08fc,
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{ .uucode = .{ .path = "uucode" } },
+    .paths = .{""},
+}

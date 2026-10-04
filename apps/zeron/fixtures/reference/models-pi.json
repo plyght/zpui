@@ -1,0 +1,56 @@
+[
+  {
+    "id": "anthropic/claude-sonnet-5",
+    "label": "Claude Sonnet 5",
+    "description": "anthropic",
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "options": [
+      {
+        "id": "pi_thinking",
+        "label": "Thinking",
+        "choices": [
+          {
+            "id": "auto",
+            "label": "Use reasoning level"
+          },
+          {
+            "id": "off",
+            "label": "Off"
+          }
+        ],
+        "defaultChoice": "auto"
+      }
+    ]
+  },
+  {
+    "id": "openai/gpt-5.5",
+    "label": "GPT-5.5",
+    "description": "openai",
+    "reasoningLevels": [
+      "low",
+      "medium",
+      "high"
+    ],
+    "options": [
+      {
+        "id": "pi_thinking",
+        "label": "Thinking",
+        "choices": [
+          {
+            "id": "auto",
+            "label": "Use reasoning level"
+          },
+          {
+            "id": "off",
+            "label": "Off"
+          }
+        ],
+        "defaultChoice": "auto"
+      }
+    ]
+  }
+]

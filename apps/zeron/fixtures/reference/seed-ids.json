@@ -1,0 +1,17 @@
+{
+  "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+  "spaces": {
+    "aurora": "a9c4cb5a-7aee-541c-a026-20c5e64cfca1",
+    "lumen-web": "2b090de0-83cd-5618-9076-890a99f2c858",
+    "notes-cli": "a14a052c-9cd4-5b56-8289-35be0aaff354"
+  },
+  "chats": {
+    "backpressure": "75fdc758-a8d5-58bb-a89d-9d5ac5e98425",
+    "retry": "e5ec567d-b9d5-548a-aa21-22071bab8550",
+    "flaky": "10ae39a4-caa6-5efd-ae67-b939b8288656",
+    "arch": "3d082f2f-880f-5326-9b2a-522f20f41db1",
+    "mock": "a1c244f1-dc55-5f4b-b0d1-39d01558acac",
+    "rename": "9bdb72ee-56a2-5645-83b0-2867bb0c6b13",
+    "notes": "7ee7f896-1f63-5c8a-9b9e-87b14cbd6bfd"
+  }
+}

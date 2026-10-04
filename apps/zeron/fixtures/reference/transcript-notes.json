@@ -1,0 +1,53 @@
+{
+  "reset": [
+    {
+      "id": "c66718a3-ceeb-4ef4-b99b-65c58541b644",
+      "role": "user",
+      "parts": [
+        {
+          "kind": "text",
+          "id": "t0",
+          "text": "Look around this repo and tell me what it does"
+        }
+      ],
+      "createdAt": 1791098230868,
+      "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+      "status": "complete"
+    },
+    {
+      "id": "74a72869-d149-4291-b5cd-a277e737ee8c",
+      "role": "assistant",
+      "parts": [
+        {
+          "kind": "reasoning",
+          "id": "r0",
+          "text": "The user typed a message directly into the composer; answer briefly."
+        },
+        {
+          "kind": "text",
+          "id": "t1",
+          "text": "Sure. Here's a quick summary of the current branch:\n\n- `feat/stream-backpressure` is **2 commits** ahead of `main`\n- Working tree has changes in `src/stream.rs`, `src/config.rs` and a new `src/retry.rs`\n\n```sh\ngit log --oneline -2\n```\n"
+        }
+      ],
+      "createdAt": 1791098230889,
+      "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+      "status": "complete",
+      "durationMs": 28
+    }
+  ],
+  "contextUsage": {
+    "tokens": 39200,
+    "window": 200000
+  },
+  "replayBaseline": {
+    "entries": {
+      "c66718a3-ceeb-4ef4-b99b-65c58541b644": {
+        "t0": 46
+      },
+      "74a72869-d149-4291-b5cd-a277e737ee8c": {
+        "t1": 235,
+        "r0": 68
+      }
+    }
+  }
+}

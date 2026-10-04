@@ -1,0 +1,47 @@
+{
+  "reset": [
+    {
+      "id": "02ef1da6-910f-4e8e-b1ba-aba25bd9564f",
+      "role": "user",
+      "parts": [
+        {
+          "kind": "text",
+          "id": "t0",
+          "text": "Explain the architecture of the event stream in this repo"
+        }
+      ],
+      "createdAt": 1791098227826,
+      "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+      "status": "complete"
+    },
+    {
+      "id": "c4a6ccbb-bb74-48e3-be55-e9bbab41a6d6",
+      "role": "assistant",
+      "parts": [
+        {
+          "kind": "text",
+          "id": "t0",
+          "text": "# How Aurora streams events\n\nAurora is a small pipeline with three stages. Each stage owns one buffer and hands batches to the next over a bounded channel.\n\n## Stages\n\n| Stage | Owns | Hands off | p95 latency |\n|:--|:--|:--|--:|\n| **Ingest** | socket reader | raw frames | 0.4ms |\n| **Fold** | event → part reducer | parts | 1.8ms |\n| **Paint** | layout cache | display list | 4.2ms |\n\n## Data flow\n\n1. The ingest task reads length-prefixed frames from the socket.\n2. Frames are decoded into `AgentEvent`s and folded into `Part`s:\n   - text deltas append to the last text part\n   - tool calls open a new tool part\n   - tool results close the matching part by id\n3. The paint stage diffs parts against the previous frame and only re-lays out changed blocks.\n\n```rust\npub fn fold(mut parts: Vec<Part>, event: &AgentEvent) -> Vec<Part> {\n    match event {\n        AgentEvent::TextDelta { text } => push_text(&mut parts, text),\n        AgentEvent::ToolCall { id, call } => parts.push(Part::tool(id, call)),\n        _ => {}\n    }\n    parts\n}\n```\n\n## Why bounded channels\n\nUnbounded channels hide slow consumers until memory runs out. With a bound of `64`, a slow paint stage *pushes back* on fold, which pushes back on ingest, which stops reading the socket. See [the tokio docs](https://docs.rs/tokio/latest/tokio/sync/mpsc/) for details.\n\n---\n\n**Tip:** run `cargo run --release -- --trace` to print per-stage timings.\n"
+        }
+      ],
+      "createdAt": 1791098227838,
+      "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+      "status": "complete",
+      "durationMs": 24
+    }
+  ],
+  "contextUsage": {
+    "tokens": 39200,
+    "window": 200000
+  },
+  "replayBaseline": {
+    "entries": {
+      "02ef1da6-910f-4e8e-b1ba-aba25bd9564f": {
+        "t0": 57
+      },
+      "c4a6ccbb-bb74-48e3-be55-e9bbab41a6d6": {
+        "t0": 1417
+      }
+    }
+  }
+}

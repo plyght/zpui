@@ -1,0 +1,184 @@
+[
+ {
+  "id": "chat-retry",
+  "deviceId": "ws",
+  "spaceId": "sp-aurora",
+  "title": "Retry backoff helper",
+  "archived": false,
+  "cwd": "/home/user/research/reference/demo-repos/aurora",
+  "branch": "feat/stream-backpressure",
+  "createdAt": "2026-10-04T07:09:00Z",
+  "lastMessageAt": "2026-10-04T07:12:00Z",
+  "lastSeenAt": "2026-10-04T07:12:00Z",
+  "lastMessagePreview": null,
+  "config": {
+   "harness": "pi",
+   "model": "claude-sonnet-5",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "sourceContext": {
+   "checkoutId": "co-aurora",
+   "repoRoot": "/home/user/research/reference/demo-repos/aurora",
+   "cwd": "/home/user/research/reference/demo-repos/aurora",
+   "branch": "feat/stream-backpressure",
+   "observedAt": "2026-10-04T07:12:00Z"
+  }
+ },
+ {
+  "id": "chat-backpressure",
+  "deviceId": "ws",
+  "spaceId": "sp-aurora",
+  "title": "Add backpressure to stream pipeline",
+  "archived": false,
+  "cwd": "/home/user/research/reference/demo-repos/aurora",
+  "branch": "feat/stream-backpressure",
+  "createdAt": "2026-10-04T07:02:00Z",
+  "lastMessageAt": "2026-10-04T07:05:00Z",
+  "lastSeenAt": "2026-10-04T07:05:00Z",
+  "lastMessagePreview": null,
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-opus-5-5",
+   "reasoning": "high",
+   "sandbox": "workspace-write"
+  },
+  "sourceContext": {
+   "checkoutId": "co-aurora",
+   "repoRoot": "/home/user/research/reference/demo-repos/aurora",
+   "cwd": "/home/user/research/reference/demo-repos/aurora",
+   "branch": "feat/stream-backpressure",
+   "observedAt": "2026-10-04T07:05:00Z"
+  }
+ },
+ {
+  "id": "chat-flaky",
+  "deviceId": "ws",
+  "spaceId": "sp-lumen",
+  "title": "Fix flaky Button snapshot test",
+  "archived": false,
+  "cwd": "/home/user/research/reference/demo-repos/lumen-web",
+  "branch": "main",
+  "createdAt": "2026-10-04T04:17:00Z",
+  "lastMessageAt": "2026-10-04T04:20:00Z",
+  "lastSeenAt": "2026-10-04T04:20:00Z",
+  "lastMessagePreview": null,
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-sonnet-5",
+   "reasoning": "medium",
+   "sandbox": "workspace-write"
+  },
+  "sourceContext": {
+   "checkoutId": "co-lumen-web",
+   "repoRoot": "/home/user/research/reference/demo-repos/lumen-web",
+   "cwd": "/home/user/research/reference/demo-repos/lumen-web",
+   "branch": "main",
+   "observedAt": "2026-10-04T04:20:00Z"
+  }
+ },
+ {
+  "id": "chat-arch",
+  "deviceId": "ws",
+  "spaceId": "sp-aurora",
+  "title": "Explain the event stream architecture",
+  "archived": false,
+  "cwd": "/home/user/research/reference/demo-repos/aurora",
+  "branch": "main",
+  "createdAt": "2026-10-04T02:17:00Z",
+  "lastMessageAt": "2026-10-04T02:20:00Z",
+  "lastSeenAt": "2026-10-04T02:20:00Z",
+  "lastMessagePreview": null,
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-opus-5-5",
+   "reasoning": "high",
+   "sandbox": "workspace-write"
+  },
+  "sourceContext": {
+   "checkoutId": "co-aurora",
+   "repoRoot": "/home/user/research/reference/demo-repos/aurora",
+   "cwd": "/home/user/research/reference/demo-repos/aurora",
+   "branch": "main",
+   "observedAt": "2026-10-04T02:20:00Z"
+  }
+ },
+ {
+  "id": "chat-mock",
+  "deviceId": "ws",
+  "spaceId": "sp-aurora",
+  "title": "Streaming pipeline walkthrough",
+  "archived": false,
+  "cwd": "/home/user/research/reference/demo-repos/aurora",
+  "branch": "main",
+  "createdAt": "2026-10-03T05:17:00Z",
+  "lastMessageAt": "2026-10-03T05:20:00Z",
+  "lastSeenAt": "2026-10-03T05:20:00Z",
+  "lastMessagePreview": null,
+  "config": {
+   "harness": "mock",
+   "model": "fable-5",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "sourceContext": {
+   "checkoutId": "co-aurora",
+   "repoRoot": "/home/user/research/reference/demo-repos/aurora",
+   "cwd": "/home/user/research/reference/demo-repos/aurora",
+   "branch": "main",
+   "observedAt": "2026-10-03T05:20:00Z"
+  }
+ },
+ {
+  "id": "chat-rename",
+  "deviceId": "ws",
+  "spaceId": "sp-lumen",
+  "title": "Rename stream setting",
+  "archived": false,
+  "cwd": "/home/user/research/reference/demo-repos/lumen-web",
+  "branch": "chore/rename-setting",
+  "createdAt": "2026-10-02T05:17:00Z",
+  "lastMessageAt": "2026-10-02T05:20:00Z",
+  "lastSeenAt": "2026-10-02T05:20:00Z",
+  "lastMessagePreview": null,
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-haiku-4-5",
+   "reasoning": null,
+   "sandbox": "workspace-write"
+  },
+  "sourceContext": {
+   "checkoutId": "co-lumen-web",
+   "repoRoot": "/home/user/research/reference/demo-repos/lumen-web",
+   "cwd": "/home/user/research/reference/demo-repos/lumen-web",
+   "branch": "chore/rename-setting",
+   "observedAt": "2026-10-02T05:20:00Z"
+  }
+ },
+ {
+  "id": "chat-notes",
+  "deviceId": "ws",
+  "spaceId": "sp-notes",
+  "title": "Initial context exploration",
+  "archived": false,
+  "cwd": "/home/user/research/reference/demo-repos/notes-cli",
+  "branch": "main",
+  "createdAt": "2026-09-30T07:17:00Z",
+  "lastMessageAt": "2026-09-30T07:20:00Z",
+  "lastSeenAt": "2026-09-30T07:20:00Z",
+  "lastMessagePreview": null,
+  "config": {
+   "harness": "claude-code",
+   "model": "claude-opus-5-5",
+   "reasoning": "high",
+   "sandbox": "workspace-write"
+  },
+  "sourceContext": {
+   "checkoutId": "co-notes-cli",
+   "repoRoot": "/home/user/research/reference/demo-repos/notes-cli",
+   "cwd": "/home/user/research/reference/demo-repos/notes-cli",
+   "branch": "main",
+   "observedAt": "2026-09-30T07:20:00Z"
+  }
+ }
+]

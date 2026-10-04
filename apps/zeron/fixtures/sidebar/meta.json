@@ -1,0 +1,18 @@
+{
+ "now": "2026-09-16T12:00:00Z",
+ "localDeviceId": "local",
+ "workspaceScope": "local",
+ "selectedChat": "browser-fixture",
+ "pins": [
+  "chat-0",
+  "chat-1"
+ ],
+ "pullRequests": {
+  "chat-0": 413,
+  "chat-1": 414,
+  "chat-3": 416,
+  "chat-7": 420
+ },
+ "sidebarWidth": 310,
+ "sidebarCompact": false
+}

@@ -1,0 +1,29 @@
+[
+  {
+    "id": "2b090de0-83cd-5618-9076-890a99f2c858",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "path": "/home/user/research/reference/demo-repos/lumen-web",
+    "gitDetected": true,
+    "gitCheckedAt": "2026-10-04T07:17:05.299Z",
+    "checkoutId": "3c2bcfe9e939d18d847dab09e2ca1f5cd035a847115e9b7880a4abddce807d99",
+    "createdAt": "2026-10-04T07:17:04.789Z"
+  },
+  {
+    "id": "a14a052c-9cd4-5b56-8289-35be0aaff354",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "path": "/home/user/research/reference/demo-repos/notes-cli",
+    "gitDetected": true,
+    "gitCheckedAt": "2026-10-04T07:17:05.299Z",
+    "checkoutId": "ff9caa71ceb3002bafbe3c07ed4f5c28979fe1db4742cf9ed3bf37a122986f2f",
+    "createdAt": "2026-10-04T07:17:04.790Z"
+  },
+  {
+    "id": "a9c4cb5a-7aee-541c-a026-20c5e64cfca1",
+    "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+    "path": "/home/user/research/reference/demo-repos/aurora",
+    "gitDetected": true,
+    "gitCheckedAt": "2026-10-04T07:17:05.302Z",
+    "checkoutId": "2d6870006a62dfad6c8258369c681da3681eb5f3a3d3fbf6a5b997a64b2e4097",
+    "createdAt": "2026-10-04T07:17:04.789Z"
+  }
+]

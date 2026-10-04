@@ -1,0 +1,106 @@
+{
+  "reset": [
+    {
+      "id": "b9edac13-b6c6-4335-bc05-afa29f568c45",
+      "role": "user",
+      "parts": [
+        {
+          "kind": "text",
+          "id": "t0",
+          "text": "Walk me through the streaming pipeline"
+        }
+      ],
+      "createdAt": 1791098228838,
+      "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+      "status": "complete"
+    },
+    {
+      "id": "ff3a941f-2b3e-411e-88ce-ae8d227b3ccf",
+      "role": "assistant",
+      "parts": [
+        {
+          "kind": "text",
+          "id": "t0",
+          "text": "## Streaming pipeline\n\nEvery turn flows through the same path:\n\n1. **Doc command** — the composer queues a durable `run` entry\n2. **Host executor** — the chat's host device marks it processed, then dispatches\n3. **Fold** — events fold into parts and diff into the Loro doc every 120ms\n\n"
+        },
+        {
+          "kind": "tool",
+          "id": "mock-tool-1",
+          "call": {
+            "kind": "exec",
+            "command": "cargo test --workspace"
+          },
+          "isError": false,
+          "resolved": true
+        },
+        {
+          "kind": "tool",
+          "id": "mock-tool-2",
+          "call": {
+            "kind": "exec",
+            "command": "git log -5 --oneline --decorate && git merge-base HEAD origin/main"
+          },
+          "isError": false,
+          "resolved": true
+        },
+        {
+          "kind": "text",
+          "id": "t3",
+          "text": "The `SegmentWriter` appends into `LoroText` so the oplog stays RLE-merged:\n\n```rust\nfolded = fold_event_into_parts(&folded, &event);\nwriter.sync(&folded)?; // 120ms coalesced commits\n```\n\nSynced to every device through the session room. *Mock harness reporting in.*"
+        },
+        {
+          "kind": "reasoning",
+          "id": "r4",
+          "text": "**Planning message rollback helper extraction**\n\nThe `discard_message` helper needs to roll back optimistic sends on error. Three constraints stand out:\n\n1. **Rollback** — remove the user message only when the server never persisted it\n2. **Credit state** — clear the exhaustion flag per workspace on auth changes\n3. **Paywall copy** — resolve icon conflicts, *then* update the tests\n\nChecking call sites before patching:\n\n```rust\nlet rolled_back = ledger.discard(message_id)?;\n```\n\nThe [ledger docs](https://example.com) say discard is idempotent, so re-running the rollback on a retry is safe."
+        },
+        {
+          "kind": "tool",
+          "id": "mock-think-tool",
+          "call": {
+            "kind": "exec",
+            "command": "rg -n walletInsufficient apps/word/src | wc -l"
+          },
+          "isError": false,
+          "resolved": true
+        },
+        {
+          "kind": "tool",
+          "id": "mock-code-tool",
+          "call": {
+            "kind": "exec",
+            "command": "set -e\nfixture_in_original=0\ngrep -rn \"veil\" crates/ui/src | wc -l"
+          },
+          "isError": false,
+          "resolved": true
+        },
+        {
+          "kind": "text",
+          "id": "t7",
+          "text": "\n### Code check\n\nThe `fold_event_into_parts` helper feeds `writer.sync` on a `120ms` cadence:\n\n```rust\n// Fold one event into the accumulated parts.\npub fn fold(mut acc: Vec<Part>, event: &AgentEvent) -> Vec<Part> {\n    let label = \"delta\";\n    if acc.len() > 128 {\n        acc.truncate(64); // keep the tail hot\n    }\n    acc\n}\n```\n\n```ts\n// Subscribe and fold on the client.\nconst room = await connect(\"wss://mesh.local\", { retries: 3 });\nexport function fold(parts: Part[], event: AgentEvent): Part[] {\n    return event.kind === \"delta\" ? [...parts, event] : parts;\n}\n```\n\n\n### Table check\n\n| Column A | Column B | Column C |\n|---|---|---|\n| a1 | b1 | c1 |\n| a2 | b2 | c2 |\n\nAnd a wide, uneven one:\n\n| Stage | What happens | p95 |\n|:--|:--|--:|\n| Fold | Events fold into parts and diff into the Loro doc on a 120ms coalesced commit cadence, keeping the oplog RLE-merged across devices | 4.2ms |\n| Sync | Session-room fan-out | 18ms |\n\n"
+        }
+      ],
+      "createdAt": 1791098228852,
+      "deviceId": "780a03e0-b5eb-4d2e-aa76-622dfc55d1ca",
+      "status": "complete",
+      "durationMs": 0
+    }
+  ],
+  "contextUsage": null,
+  "replayBaseline": {
+    "entries": {
+      "ff3a941f-2b3e-411e-88ce-ae8d227b3ccf": {
+        "t7": 938,
+        "t3": 265,
+        "r4": 601,
+        "mock-tool-1": 0,
+        "t0": 292,
+        "mock-think-tool": 0,
+        "mock-tool-2": 0,
+        "mock-code-tool": 0
+      },
+      "b9edac13-b6c6-4335-bc05-afa29f568c45": {
+        "t0": 38
+      }
+    }
+  }
+}
