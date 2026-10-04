@@ -25,6 +25,10 @@ pub const bounds_tree = @import("bounds_tree.zig");
 pub const scene = @import("scene.zig");
 pub const Scene = scene.Scene;
 
+pub const input = @import("input.zig");
+pub const platform = @import("platform/platform.zig");
+pub const text = @import("text/types.zig");
+
 test {
     @import("std").testing.refAllDecls(@This());
 }
