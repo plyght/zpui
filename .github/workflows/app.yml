@@ -1,0 +1,47 @@
+name: Build app
+
+# Just the Zeron.app (universal, ReleaseSafe) as the Zeron-macos-app artifact: no tests.
+# Run from the Actions tab (or `workflow_dispatch` via the API).
+on:
+  workflow_dispatch:
+
+jobs:
+  zeron-bundle:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Build Zeron.app (x86_64, then aarch64 + lipo → universal)
+        run: |
+          # [liquid-glass] minos 12.0 = Info.plist LSMinimumSystemVersion (the Rust app's);
+          # Zig 0.17 stamps sdk 27.0 (its bundled SDKSettings.json): the full 26/27 design.
+          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=x86_64-macos.12.0 -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
+          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=aarch64-macos.12.0 -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
+      - name: Verify bundle
+        run: |
+          app=zig-out/Zeron.app
+          plutil -lint "$app/Contents/Info.plist"
+          echo "bundle id: $(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")"
+          echo "version:   $(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")"
+          test -s "$app/Contents/Resources/zeron.icns" || { echo "FAIL: zeron.icns missing"; exit 1; }
+          lipo -info "$app/Contents/MacOS/zeron"
+          for a in arm64 x86_64; do
+            lipo "$app/Contents/MacOS/zeron" -verify_arch "$a" || { echo "FAIL: universal binary lacks $a"; exit 1; }
+          done
+          codesign --verify --verbose=2 "$app"
+          vtool -show-build "$app/Contents/MacOS/zeron" || true
+          python3 apps/zeron/scripts/macho-build-version.py --expect-sdk 27.0 --expect-minos 12.0 "$app/Contents/MacOS/zeron"
+          set +e
+          "$app/Contents/MacOS/zeron" headless; code=$?
+          set -e
+          if [ "$code" != 2 ]; then echo "FAIL: bundled zeron did not start (exit $code; expected the 'not the engine' refusal, 2)"; exit 1; fi
+          echo "bundled binary starts (refused 'headless' as expected)"
+      - name: Zip Zeron.app
+        run: ditto -c -k --keepParent zig-out/Zeron.app zig-out/Zeron-macos-app.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Zeron-macos-app
+          path: zig-out/Zeron-macos-app.zip
+          if-no-files-found: error
