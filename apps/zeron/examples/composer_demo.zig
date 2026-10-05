@@ -13,7 +13,7 @@
 //!   --field "..."     prefill the single-line field
 //!   --new-thread      the new-thread canvas (no selected chat)
 //!   --queue           seed two queued messages
-//!   --mic             show the dictation button
+//!   --mic             (ignored: the mic follows the voice service availability)
 //!   --picker          open the model picker
 //!   --light           Zeron Light
 //!   --fixtures DIR    seed from the reference fixtures (harnesses, models, spaces, chats)
@@ -84,7 +84,6 @@ const Demo = struct {
         const composer = try cx.newWith(ComposerView, ComposerView.init, .{state});
         composer.update(cx, ComposerView.setTheme, .{theme});
         composer.update(cx, ComposerView.setAvailableWidth, .{@as(?f32, 768)});
-        composer.update(cx, ComposerView.setDictationAvailable, .{launch.mic});
         const field = try cx.newWith(TextInput, TextInput.init, .{input_mod.Options{
             .placeholder = "Session title",
             .single_line = true,
