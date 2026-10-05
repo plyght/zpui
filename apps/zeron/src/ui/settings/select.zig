@@ -487,9 +487,40 @@ pub fn flip(v: *SettingsView, which: Toggle, cx: *Context(SettingsView)) void {
 // Rendering
 // ---------------------------------------------------------------------------
 
-/// The trigger for `id` (+ its floating menu while open).
-pub fn render(v: *SettingsView, id: SelectId, t: *const Theme, cx: *Context(SettingsView)) zpui.StatefulDiv {
+/// Plain-text selects become an NSPopUpButton on macOS; the theme pickers
+/// (palette swatches), the device list (icons, read-only) and thread naming
+/// (harness marks) keep the drawn menu.
+pub fn nativeEligible(id: SelectId) bool {
+    return switch (id) {
+        .light_theme, .dark_theme, .provider_device, .thread_naming => false,
+        else => true,
+    };
+}
+
+/// `sp` as a native pop-up button around `fallback` (the drawn trigger).
+pub fn nativePopup(id: SelectId, sp: Spec, element_id: anytype, cx: *Context(SettingsView), fallback: anytype) zpui.native_control.NativeControl {
+    const a = zpui.window.arena_mod.frameAllocator();
+    const labels = a.alloc([]const u8, sp.options.len) catch @panic("OOM");
+    for (sp.options, labels) |o, *l| l.* = if (o.detail) |d| zpui.fmt("{s} ({s})", .{ o.label, d }) else o.label;
+    const width: ?zpui.Pixels = if (sp.width) |wd| px(wd) else null;
+    return zpui.nativePopup(element_id, .{
+        .items = labels,
+        .selected = if (sp.selected < sp.options.len) @intCast(sp.selected) else null,
+        .label = sp.label,
+        .width = width,
+    }, cx.listenerWith(id, SettingsView.onNativeSelect), fallback);
+}
+
+/// The trigger for `id` (+ its floating menu while open); a native pop-up
+/// button instead on macOS for the plain-text selects.
+pub fn render(v: *SettingsView, id: SelectId, t: *const Theme, cx: *Context(SettingsView)) zpui.AnyElement {
     const sp = spec(v, id, cx);
+    const trigger = drawnTrigger(v, id, sp, t, cx);
+    if (!nativeEligible(id)) return zpui.intoAnyElement(trigger);
+    return zpui.intoAnyElement(nativePopup(id, sp, .{ "settings-native-select", @intFromEnum(id) }, cx, trigger));
+}
+
+fn drawnTrigger(v: *SettingsView, id: SelectId, sp: Spec, t: *const Theme, cx: *Context(SettingsView)) zpui.StatefulDiv {
     const open = v.open_select == id;
     const key = hoverKey(id);
     const fill = if (open) w.selectFill(t, true) else ui.hover.blend(cx, key, w.selectFill(t, false), w.selectFill(t, true));

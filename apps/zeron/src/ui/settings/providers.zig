@@ -195,13 +195,13 @@ pub fn render(v: *SettingsView, t: *const Theme, _: *zpui.Window, cx: *zpui.Cont
     return page;
 }
 
-fn harnessSwitch(v: *SettingsView, ix: usize, h: HarnessId, name: []const u8, enabled: bool, interactive: bool, t: *const Theme, cx: *zpui.Context(SettingsView)) zpui.StatefulDiv {
+fn harnessSwitch(v: *SettingsView, ix: usize, h: HarnessId, name: []const u8, enabled: bool, interactive: bool, t: *const Theme, cx: *zpui.Context(SettingsView)) zpui.native_control.NativeControl {
     const pos = v.travel(cx, 0x40000 | @as(u32, @intFromEnum(h)), if (enabled) 1 else 0, 180);
     var d = div().id(.{ "harness-toggle", ix }).role(.@"switch").ariaLabel(name).ariaToggled(enabled).flexNone().w(px(w.switch_width)).h(px(w.switch_height))
         .child(w.switchVisual(t, pos));
     if (!interactive and !enabled) d = d.opacity(0.55);
     if (interactive) d = d.cursorPointer().onClick(cx.listenerWith(ix, SettingsView.onHarnessToggle));
-    return d;
+    return zpui.nativeSwitch(.{ "harness-native-toggle", ix }, .{ .on = enabled, .enabled = interactive, .label = name, .size = .mini }, cx.listenerWith(SettingsView.NativeIndex{ .ix = @intCast(ix), .shown = enabled }, SettingsView.onNativeHarnessToggle), d);
 }
 
 /// Expanded agent preferences (`render_agent_details`): no box of its own,
@@ -221,7 +221,7 @@ fn details(v: *SettingsView, ix: usize, t: *const Theme, d: *const protocol.Harn
             .flex().flexRow().itemsCenter().gap(px(16)).cursorPointer()
             .onClick(cx.listenerWith(SettingsView.CompletionKey{ .ix = @intCast(ix), .dollar = r[0] }, SettingsView.onCompletionToggle))
             .child(div().flex1().minW0().child(w.rowTitle(t, r[1])).child(w.metaLine(t, &.{.{ .text = r[2] }})))
-            .child(w.switchVisual(t, pos));
+            .child(zpui.nativeSwitch(.{ "completion-native", ix * 2 + i }, .{ .on = r[3], .label = zpui.fmt("{s}: {s}", .{ d.name, r[1] }), .size = .mini }, cx.listenerWith(SettingsView.NativeCompletion{ .key = .{ .ix = @intCast(ix), .dollar = r[0] }, .shown = r[3] }, SettingsView.onNativeCompletionToggle), w.switchVisual(t, pos)));
         if (i > 0) row = row.borderT1().borderColor(w.rowDivider(t));
         completion = completion.child(row);
     }
@@ -249,7 +249,21 @@ fn detailsLabel(t: *const Theme, label: []const u8) zpui.Div {
 }
 
 /// The policy select trigger for row `ix` (the menu is shared via `.update_policy`).
-fn policyTrigger(v: *SettingsView, ix: usize, policy: types.HarnessUpdatePolicy, t: *const Theme, cx: *zpui.Context(SettingsView)) zpui.StatefulDiv {
+fn policyTrigger(v: *SettingsView, ix: usize, policy: types.HarnessUpdatePolicy, t: *const Theme, cx: *zpui.Context(SettingsView)) zpui.native_control.NativeControl {
+    const labels = comptime blk: {
+        var l: [select.update_policies.len][]const u8 = undefined;
+        for (select.update_policies, 0..) |e, i| l[i] = e[1];
+        break :blk l;
+    };
+    return zpui.nativePopup(.{ "harness-native-policy", ix }, .{
+        .items = &labels,
+        .selected = @intCast(select.policyIndex(policy)),
+        .label = "Update policy",
+        .width = px(136),
+    }, cx.listenerWith(ix, SettingsView.onNativePolicy), drawnPolicyTrigger(v, ix, policy, t, cx));
+}
+
+fn drawnPolicyTrigger(v: *SettingsView, ix: usize, policy: types.HarnessUpdatePolicy, t: *const Theme, cx: *zpui.Context(SettingsView)) zpui.StatefulDiv {
     const open = v.open_select == .update_policy and v.policy_harness != null and v.policy_harness.? == visibleHarnesses(v, cx)[ix].id;
     var trigger = w.selectTrigger(t, if (open) w.selectFill(t, true) else w.selectFill(t, false)).id(.{ "harness-update-policy", ix }).w(px(136))
         .hover(sb.bg(w.selectFill(t, true)))

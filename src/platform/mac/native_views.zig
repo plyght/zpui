@@ -77,6 +77,8 @@ const Child = struct {
     glass: ?platform.LiquidGlassKind = null,
     /// [liquid-glass] The container this glass is a member of.
     member_of: ?*Child = null,
+    /// A native form control (native_controls.zig): its kind.
+    control: ?platform.NativeControlKind = null,
     /// Visible region in content-view coordinates (bottom-left origin).
     region: NSRect = .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 0, .height = 0 } },
     last: ?platform.NativeViewPlacement = null,
@@ -99,6 +101,8 @@ pub const Host = struct {
     /// and the geometry its current mask image was built for.
     backdrop_hole: ?platform.BackdropHole = null,
     backdrop_mask: ?MaskKey = null,
+    /// The target of every native form control's action (native_controls.zig).
+    control_target: ?id = null,
 
     pub fn enabled(self: *const Host) bool {
         return self.overlay_view != null;
@@ -119,6 +123,11 @@ pub const Host = struct {
             v.release();
         }
         self.top_view = null;
+        if (self.control_target) |t| {
+            objc.setIvar(t, state_ivar, null);
+            t.release();
+        }
+        self.control_target = null;
         self.base.deinit(w.gpa);
         self.overlay.deinit(w.gpa);
         self.top.deinit(w.gpa);
@@ -170,9 +179,20 @@ fn overlayWindow(this: id) ?*MacWindow {
     return @ptrCast(@alignCast(objc.getIvar(this, state_ivar)));
 }
 
-fn overlayHitTest(this: id, _: SEL, _: NSPoint) callconv(.c) ?id {
+fn overlayHitTest(this: id, _: SEL, point: NSPoint) callconv(.c) ?id {
     const w = overlayWindow(this) orelse return null;
-    if (w.natives.top_view != null and w.natives.top_view.? == this) return if (w.natives.top_capture) this else null;
+    if (w.natives.top_view != null and w.natives.top_view.? == this) {
+        if (!w.natives.top_capture) return null;
+        // A native control floating in a dialog (between the overlay and the top
+        // plane) keeps its clicks while the dialog's foreground holds the top plane.
+        for (w.natives.children.items) |c| {
+            if (c.control == null or c.options.z != .above_overlay or c.last == null) continue;
+            const r = c.region;
+            if (point.x >= r.origin.x and point.x < r.origin.x + r.size.width and
+                point.y >= r.origin.y and point.y < r.origin.y + r.size.height) return null;
+        }
+        return this;
+    }
     return if (w.natives.overlay_capture) this else null;
 }
 
@@ -257,6 +277,27 @@ fn attachHosted(w: *MacWindow, native: *anyopaque, options: platform.NativeViewO
     clip.msg(void, "addSubview:", .{view});
     w.natives.children.appendAssumeCapacity(c);
     return ident;
+}
+
+/// Attach a native form control (native_controls.zig) like `attach`, remembering its kind.
+pub fn attachControl(w: *MacWindow, view: id, options: platform.NativeViewOptions, kind: platform.NativeControlKind) !platform.NativeViewId {
+    const ident = try attachHosted(w, @ptrCast(view), options, null);
+    w.natives.children.items[find(w, ident).?].control = kind;
+    return ident;
+}
+
+/// The attached view `ident` (null when unknown).
+pub fn viewOf(w: *MacWindow, ident: platform.NativeViewId) ?id {
+    const i = find(w, ident) orelse return null;
+    return w.natives.children.items[i].view;
+}
+
+/// The native control whose view is `view` (an action's sender).
+pub fn controlOf(w: *MacWindow, view: id) ?struct { platform.NativeViewId, platform.NativeControlKind } {
+    for (w.natives.children.items) |c| if (c.view == view) {
+        return .{ c.id, c.control orelse return null };
+    };
+    return null;
 }
 
 fn find(w: *MacWindow, ident: platform.NativeViewId) ?usize {

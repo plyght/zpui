@@ -534,6 +534,13 @@ pub const TestWindow = struct {
     /// and the last `configureLiquidGlass` config.
     glass_attach: [32]?pf.LiquidGlassAttach = @splat(null),
     glass_config: [32]?pf.LiquidGlassConfig = @splat(null),
+    /// Native form controls (`attachNativeControl`): off by default, so `zpui.native*`
+    /// elements render their fallbacks; set true to exercise the native path. Per
+    /// native id: the control's state as last attached / updated (strings point into
+    /// the window's copy, valid until the control's next update) and the update count.
+    native_controls: bool = false,
+    control_state: [32]?pf.NativeControlState = @splat(null),
+    control_updates: [32]u32 = @splat(0),
     /// Overlay ranges / capture flag of the last `drawLayered`.
     last_overlay: [8]pf.OverlayRange = undefined,
     last_overlay_len: usize = 0,
@@ -692,7 +699,73 @@ pub const TestWindow = struct {
         .configureLiquidGlass = vConfigureGlass,
         .setBackdropHole = vSetBackdropHole,
         .a11yUpdate = vA11yUpdate,
+        .measureNativeControl = vMeasureControl,
+        .attachNativeControl = vAttachControl,
+        .updateNativeControl = vUpdateControl,
     };
+
+    /// Fixed fake frame sizes (logical px) standing in for AppKit's intrinsic sizes.
+    fn vMeasureControl(ptr: *anyopaque, state: pf.NativeControlState) ?pf.Size {
+        if (!c(ptr).native_controls) return null;
+        return switch (state.kind) {
+            .switch_ => .{ .width = 40, .height = 24 },
+            .checkbox => .{ .width = 18 + if (state.title.len > 0) 6 + 7 * @as(f32, @floatFromInt(state.title.len)) else 0, .height = 18 },
+            .slider => .{ .width = 0, .height = 22 },
+            .segmented => .{ .width = 60 * @as(f32, @floatFromInt(@max(state.items.len, 1))), .height = 24 },
+            .popup => blk: {
+                var longest: usize = 0;
+                for (state.items) |it| longest = @max(longest, it.len);
+                break :blk .{ .width = 36 + 7 * @as(f32, @floatFromInt(longest)), .height = 24 };
+            },
+            .stepper => .{ .width = 19, .height = 27 },
+        };
+    }
+    fn vAttachControl(ptr: *anyopaque, state: pf.NativeControlState, z: pf.NativeViewZ) anyerror!pf.NativeViewId {
+        const self = c(ptr);
+        if (!self.native_controls) return error.NativeControlsUnsupported;
+        var dummy: u8 = 0;
+        const id = try vAttachNative(ptr, @ptrCast(&dummy), .{ .z = z });
+        self.control_state[@intFromEnum(id)] = state;
+        self.control_updates[@intFromEnum(id)] = 0;
+        return id;
+    }
+    fn vUpdateControl(ptr: *anyopaque, id: pf.NativeViewId, state: pf.NativeControlState) void {
+        const self = c(ptr);
+        const i = @intFromEnum(id);
+        std.debug.assert(self.native_attached[i] and self.control_state[i] != null);
+        self.control_state[i] = state;
+        self.control_updates[i] += 1;
+    }
+
+    /// The attached native control of `kind` whose accessible label is `label`.
+    pub fn findNativeControl(self: *const TestWindow, kind: pf.NativeControlKind, label: []const u8) ?pf.NativeViewId {
+        for (self.control_state, self.native_attached, 0..) |st, a, i| {
+            const s = st orelse continue;
+            if (a and s.kind == kind and std.mem.eql(u8, s.label, label)) return @enumFromInt(i);
+        }
+        return null;
+    }
+
+    /// Number of attached native controls.
+    pub fn nativeControlCount(self: *const TestWindow) usize {
+        var n: usize = 0;
+        for (self.control_state, self.native_attached) |st, a| {
+            if (st != null and a) n += 1;
+        }
+        return n;
+    }
+
+    /// Act like the user changing native control `id` (AppKit's target/action): the
+    /// control shows the new value and the window is told, like the real backend.
+    pub fn simulateNativeControl(self: *TestWindow, id: pf.NativeViewId, event: pf.NativeControlEvent) void {
+        const i = @intFromEnum(id);
+        if (self.control_state[i]) |*st| switch (event.kind) {
+            .switch_, .checkbox => st.on = event.on,
+            .slider, .stepper => st.value = event.value,
+            .segmented, .popup => st.selected = event.index,
+        };
+        if (self.callbacks.native_control) |f| f(self.callbacks.ctx, id, event);
+    }
 
     fn vA11yUpdate(ptr: *anyopaque, update: pf.a11y.Update) void {
         const self = c(ptr);
@@ -718,6 +791,7 @@ pub const TestWindow = struct {
         self.native_attached[i] = true;
         self.glass_attach[i] = null;
         self.glass_config[i] = null;
+        self.control_state[i] = null;
         return @enumFromInt(i);
     }
     fn vAttachGlass(ptr: *anyopaque, options: pf.LiquidGlassAttach) anyerror!pf.NativeViewId {
@@ -750,6 +824,7 @@ pub const TestWindow = struct {
         const self = c(ptr);
         self.native_attached[@intFromEnum(id)] = false;
         self.native_placement[@intFromEnum(id)] = null;
+        self.control_state[@intFromEnum(id)] = null;
     }
     fn vDrawLayered(ptr: *anyopaque, scene: *const scene_mod.Scene, overlay: []const pf.OverlayRange, capture: bool) anyerror!void {
         const self = c(ptr);

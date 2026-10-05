@@ -1013,6 +1013,12 @@ fn onToggleSetup(shell: *Shell, _: *const zpui.ClickEvent, _: *Window, cx: *Ctx)
     cx.notify();
 }
 
+/// The native checkbox (macOS) reports its new state.
+fn onNativeSetup(shell: *Shell, ev: *const zpui.NativeControlEvent, _: *Window, cx: *Ctx) void {
+    if (ctl(shell).editor) |*e| e.run_on_worktree_create = ev.on;
+    cx.notify();
+}
+
 fn onAskDelete(shell: *Shell, confirm: bool, _: *const zpui.ClickEvent, _: *Window, cx: *Ctx) void {
     if (ctl(shell).editor) |*e| e.confirm_delete = confirm;
     cx.notify();
@@ -1078,9 +1084,9 @@ pub fn overlay(shell: *Shell, window: *Window, theme_in: *const Theme, cx: *Ctx)
         .child(field(theme, div().h(px(88)).overflowHidden().child(e.command)).fontFamily(theme.font_mono))
         .child(fieldLabel(theme, "Icon"))
         .child(icons)
-        .child(div().id("action-setup-toggle").role(.check_box).ariaToggled(setup).mt(px(14)).flex().itemsCenter().gap(px(9)).cursorPointer()
+        .child(div().mt(px(14)).child(zpui.nativeCheckbox("action-setup-native", .{ .on = setup, .title = "Run automatically on worktree creation" }, cx.listener(onNativeSetup), div().id("action-setup-toggle").role(.check_box).ariaToggled(setup).flex().itemsCenter().gap(px(9)).cursorPointer()
         .onClick(cx.listener(onToggleSetup))
-        .child(check).child("Run automatically on worktree creation"));
+        .child(check).child("Run automatically on worktree creation"))));
     if (e.err) |msg| card = card.child(div().mt(px(10)).textSize(px(12)).textColor(theme.danger).child(msg));
     var left = div();
     if (editing) left = left.child(dialog.btnGhost(theme, "Delete action").id("action-delete").role(.button).textColor(theme.danger).onClick(cx.listenerWith(true, onAskDelete)));

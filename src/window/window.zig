@@ -50,6 +50,7 @@ pub const view = @import("view.zig");
 pub const input_handler = @import("input_handler.zig");
 pub const image = @import("image.zig");
 pub const liquid_glass_mod = @import("liquid_glass.zig"); // [liquid-glass]
+pub const native_controls_mod = @import("native_controls.zig");
 /// Accessibility tree (src/a11y.zig).
 pub const a11y = @import("../a11y.zig");
 
@@ -496,6 +497,8 @@ pub const Window = struct {
     top_open_start: usize = 0,
     /// [liquid-glass] Native glass views of this window (liquid_glass.zig).
     liquid_glass: liquid_glass_mod.Pool = .{},
+    /// Native form controls of this window (native_controls.zig).
+    native_controls: native_controls_mod.Pool = .{},
     /// [liquid-glass] The backdrop hole last handed to the platform window.
     applied_backdrop_hole: ?platform.BackdropHole = null,
     /// Native views placed by the last present (hidden when a frame omits them).
@@ -588,6 +591,7 @@ pub const Window = struct {
             .appearance_changed = cbAppearance,
             .a11y_action = cbA11yAction,
             .a11y_activation = cbA11yActivation,
+            .native_control = cbNativeControl,
         });
         return self;
     }
@@ -623,6 +627,7 @@ pub const Window = struct {
         self.presented_native_views.deinit(gpa);
         self.present_overlay.deinit(gpa);
         self.liquid_glass.deinit(gpa); // [liquid-glass] (views went with the platform window)
+        self.native_controls.deinit(gpa);
         self.dirty_views.deinit(gpa);
         self.pending_dirty_views.deinit(gpa);
         self.mouse_hit_test.ids.deinit(gpa);
@@ -785,6 +790,12 @@ pub const Window = struct {
         const self = fromCtx(ctx);
         if (self.removed) return;
         self.handleA11yAction(request);
+    }
+
+    fn cbNativeControl(ctx: ?*anyopaque, control: platform.NativeViewId, event: platform.NativeControlEvent) void {
+        const self = fromCtx(ctx);
+        if (self.removed) return;
+        native_controls_mod.handleEvent(self, control, event);
     }
 
     fn cbA11yActivation(ctx: ?*anyopaque, active: bool) void {
@@ -1163,6 +1174,7 @@ pub const Window = struct {
         const prev_arena = arena_mod.enter(&self.element_arena);
         defer arena_mod.exit(prev_arena);
         self.liquid_glass.frame_keys.clearRetainingCapacity(); // [liquid-glass]
+        self.native_controls.frame_keys.clearRetainingCapacity();
 
         // Dirty views → mark their ancestor views dirty too.
         {
@@ -1403,6 +1415,7 @@ pub const Window = struct {
     pub fn present(self: *Window) void {
         self.applyNativeViews();
         liquid_glass_mod.sweep(self); // [liquid-glass]
+        native_controls_mod.sweep(self);
         self.applyBackdropHole(); // [liquid-glass]
         const drawn = if (self.platform_window.vtable.drawLayered) |draw_layered| blk: {
             // Planes only matter above native views: without one placed this frame,
@@ -2080,6 +2093,24 @@ pub const Window = struct {
         if (std.meta.eql(hole, self.applied_backdrop_hole)) return;
         self.applied_backdrop_hole = hole;
         self.platform_window.setBackdropHole(hole);
+    }
+
+    /// The frame size of the native control for `state`, or null when this window
+    /// shows no native controls (Linux, tests by default, `setNativeControlsEnabled(false)`).
+    pub fn measureNativeControl(self: *Window, state: platform.NativeControlState) ?Size {
+        return native_controls_mod.measure(self, state);
+    }
+
+    /// Place native control `gid` this frame (paint phase); see native_controls.zig.
+    pub fn paintNativeControl(self: *Window, gid: GlobalElementId, state: platform.NativeControlState, view_bounds: Bounds, listener: ?native_controls_mod.Listener) bool {
+        return native_controls_mod.paint(self, gid.toKey(), state, view_bounds, listener);
+    }
+
+    /// Show the zpui-drawn fallbacks instead of native controls in this window.
+    pub fn setNativeControlsEnabled(self: *Window, enabled: bool) void {
+        if (self.native_controls.disabled == !enabled) return;
+        self.native_controls.disabled = !enabled;
+        self.refresh();
     }
 
     /// [liquid-glass] Whether `paintLiquidGlass` can place native glass in this window.

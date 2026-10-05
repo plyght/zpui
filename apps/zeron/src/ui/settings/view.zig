@@ -503,26 +503,61 @@ pub const SettingsView = struct {
         cx.notify();
     }
 
+    /// A native pop-up button (macOS) picked option `ev.index`.
+    pub fn onNativeSelect(self: *SettingsView, id: SelectId, ev: *const zpui.NativeControlEvent, _: *Window, cx: *Context(SettingsView)) void {
+        var sc = scratch(self.gpa);
+        sc.begin();
+        defer sc.end();
+        self.closeSelect();
+        select_mod.commit(self, id, ev.index, cx);
+        cx.notify();
+    }
+
+    /// The native update-policy pop-up of provider row `ix`.
+    pub fn onNativePolicy(self: *SettingsView, ix: usize, ev: *const zpui.NativeControlEvent, _: *Window, cx: *Context(SettingsView)) void {
+        var sc = scratch(self.gpa);
+        sc.begin();
+        defer sc.end();
+        const list = providers.visibleHarnesses(self, cx);
+        if (ix >= list.len) return;
+        self.closeSelect();
+        self.policy_harness = list[ix].id;
+        select_mod.commit(self, .update_policy, ev.index, cx);
+        cx.notify();
+    }
+
     pub fn onSelectHover(_: *SettingsView, id: SelectId, hovered: *const bool, _: *Window, cx: *Context(SettingsView)) void {
         ui.hover.set(cx, select_mod.hoverKey(id), hovered.*);
     }
 
     // ---- toggles -----------------------------------------------------------------------
 
-    /// A switch bound to a settings bool: the animated visual inside its
+    /// A switch bound to a settings bool: a native NSSwitch on macOS (disabled
+    /// when not `interactive`), elsewhere the animated visual inside its
     /// activation target, clickable when `interactive`.
-    pub fn toggle(self: *SettingsView, which: Toggle, on: bool, interactive: bool, theme_: *const Theme, cx: *Context(SettingsView)) zpui.StatefulDiv {
+    pub fn toggle(self: *SettingsView, which: Toggle, on: bool, interactive: bool, theme_: *const Theme, cx: *Context(SettingsView)) zpui.native_control.NativeControl {
         const pos = self.travel(cx, 0x10000 | @as(u32, @intFromEnum(which)), if (on) 1 else 0, 180);
         var d = div().id(.{ "settings-toggle", @intFromEnum(which) }).flexNone()
             .role(.@"switch").ariaLabel(select_mod.toggleLabel(which)).ariaToggled(on)
             .w(px(w.switch_width)).h(px(w.switch_height)).child(w.switchVisual(theme_, pos));
-        if (interactive) d = d.cursorPointer().onClick(cx.listenerWith(which, SettingsView.onToggle)) else d = d.ariaDescription("Unavailable while its parent setting is off");
-        return d;
+        if (interactive) d = d.cursorPointer().onClick(cx.listenerWith(which, SettingsView.onToggle)) else d = d.ariaDescription(w.unavailable_help);
+        return w.nativeSwitch(.{ "settings-native-toggle", @intFromEnum(which) }, on, interactive, select_mod.toggleLabel(which), cx.listenerWith(NativeToggle{ .which = which, .shown = on }, SettingsView.onNativeToggle), d);
     }
 
     fn onToggle(self: *SettingsView, which: Toggle, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
         self.closeSelect();
         select_mod.flip(self, which, cx);
+        cx.notify();
+    }
+
+    const NativeToggle = struct { which: Toggle, shown: bool };
+
+    /// The native switch reports its new state: flip only when it differs from
+    /// what the page showed.
+    fn onNativeToggle(self: *SettingsView, t: NativeToggle, ev: *const zpui.NativeControlEvent, _: *Window, cx: *Context(SettingsView)) void {
+        if (ev.on == t.shown) return;
+        self.closeSelect();
+        select_mod.flip(self, t.which, cx);
         cx.notify();
     }
 
@@ -726,6 +761,13 @@ pub const SettingsView = struct {
         cx.notify();
     }
 
+    pub const NativeIndex = struct { ix: u16, shown: bool };
+
+    pub fn onNativeHarnessToggle(self: *SettingsView, d: NativeIndex, ev: *const zpui.NativeControlEvent, window: *Window, cx: *Context(SettingsView)) void {
+        if (ev.on == d.shown) return;
+        self.onHarnessToggle(d.ix, &.{ .keyboard = .{} }, window, cx);
+    }
+
     pub fn onHarnessDetails(self: *SettingsView, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
         var sc = scratch(self.gpa);
         sc.begin();
@@ -891,6 +933,13 @@ pub const SettingsView = struct {
 
     pub const CompletionKey = struct { ix: u16, dollar: bool };
 
+    pub const NativeCompletion = struct { key: CompletionKey, shown: bool };
+
+    pub fn onNativeCompletionToggle(self: *SettingsView, d: NativeCompletion, ev: *const zpui.NativeControlEvent, window: *Window, cx: *Context(SettingsView)) void {
+        if (ev.on == d.shown) return;
+        self.onCompletionToggle(d.key, &.{ .keyboard = .{} }, window, cx);
+    }
+
     pub fn onCompletionToggle(self: *SettingsView, key: CompletionKey, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
         var sc = scratch(self.gpa);
         sc.begin();
@@ -977,6 +1026,11 @@ pub const SettingsView = struct {
         const lay = zt.layout;
         const width = settings.normalizeTranscriptWidth(lay.transcript_width_min + frac * (lay.transcript_width_max - lay.transcript_width_min));
         setTranscriptWidth(cx, width);
+    }
+
+    /// The native slider (macOS) moved.
+    pub fn onWidthNative(_: *SettingsView, ev: *const zpui.NativeControlEvent, _: *Window, cx: *Context(SettingsView)) void {
+        setTranscriptWidth(cx, settings.normalizeTranscriptWidth(@floatCast(ev.value)));
     }
 
     pub fn onWidthReset(_: *SettingsView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {

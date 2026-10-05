@@ -152,6 +152,11 @@ fn onPreviewDown(v: *SettingsView, ev: *const zpui.input.MouseDownEvent, _: *Win
     cx.notify();
 }
 
+/// The native slider (macOS) moved.
+fn onZoomNative(v: *SettingsView, ev: *const zpui.NativeControlEvent, _: *Window, cx: *Context(SettingsView)) void {
+    setZoom(v, @floatCast(ev.value), cx);
+}
+
 fn onZoomDown(v: *SettingsView, ev: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(SettingsView)) void {
     const d = if (v.adjust) |*x| x else return;
     d.zoom_drag = true;
@@ -323,7 +328,14 @@ pub fn render(v: *SettingsView, window: *Window, cx: *Context(SettingsView)) ?zp
         .child(compactAction(t, "Reset", "new-thread-background-adjustment-reset").onClick(cx.listener(onReset)))
         .child(div().flex().itemsCenter().gap(px(6))
         .child(compactAction(t, "−", "new-thread-background-adjustment-zoom-out").ariaLabel("Zoom out").onClick(cx.listener(onZoomOut)))
-        .child(slider)
+        .child(zpui.nativeSlider("new-thread-background-adjustment-zoom-native", .{
+        .value = d.draft.zoom,
+        .min = Adjustment.min_zoom,
+        .max = Adjustment.max_zoom,
+        .enabled = ready,
+        .label = "Background zoom",
+        .width = px(168),
+    }, cx.listener(onZoomNative), slider))
         .child(div().w(px(52)).textCenter().textSize(rems(11.5)).textColor(t.text_muted).child(zpui.fmt("{d:.0}%", .{d.draft.zoom * 100})))
         .child(compactAction(t, "+", "new-thread-background-adjustment-zoom-in").ariaLabel("Zoom in").onClick(cx.listener(onZoomIn))));
 

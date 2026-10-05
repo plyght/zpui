@@ -411,6 +411,14 @@ fn onToggleVariant(v: *SettingsView, ix: usize, _: *const zpui.ClickEvent, _: *W
     cx.notify();
 }
 
+const NativeVariant = struct { ix: u32, shown: bool };
+
+/// The native checkbox (macOS) reports its new state.
+fn onNativeVariant(v: *SettingsView, d: NativeVariant, ev: *const zpui.NativeControlEvent, window: *Window, cx: *Context(SettingsView)) void {
+    if (ev.on == d.shown) return;
+    onToggleVariant(v, d.ix, &.{ .keyboard = .{} }, window, cx);
+}
+
 fn onReviewVariant(v: *SettingsView, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
     const variant = variantAt(v, ix) orelse return;
     const d = &v.import.?;
@@ -600,7 +608,7 @@ pub fn importDialog(v: *SettingsView, window: *Window, cx: *Context(SettingsView
                 .bg(if (selected_now) t.accent_wash.opacity(0.42) else t.surface_raised.opacity(0.22))
                 .flex().flexCol()
                 .child(div().flex().itemsCenter().gap(px(9))
-                .child(check)
+                .child(zpui.nativeCheckbox(.{ "theme-import-select-native", ix }, .{ .on = selected_now, .label = variant.name }, cx.listenerWith(NativeVariant{ .ix = @intCast(ix), .shown = selected_now }, onNativeVariant), check))
                 .child(paletteOf(sample))
                 .child(div().flex1().minW0()
                 .child(div().textSize(rems(12.5)).fontWeight(500).textColor(t.text).child(variant.name))

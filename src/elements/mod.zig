@@ -16,6 +16,7 @@ pub const effects = @import("effects.zig");
 pub const native_view_mod = @import("native_view.zig");
 pub const nativeView = native_view_mod.nativeView;
 pub const nativeViewWith = native_view_mod.nativeViewWith;
+pub const native_control = @import("native_control.zig");
 // [liquid-glass] native Liquid Glass (liquid_glass.zig)
 pub const liquid_glass = @import("liquid_glass.zig");
 pub const liquidGlass = liquid_glass.liquidGlass;
@@ -102,5 +103,6 @@ test {
     _ = effects;
     _ = liquid_glass;
     _ = @import("liquid_glass_tests.zig"); // [liquid-glass]
+    _ = @import("native_control_tests.zig");
     _ = @import("list_tests.zig");
 }

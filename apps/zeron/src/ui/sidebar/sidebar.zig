@@ -753,6 +753,14 @@ pub const Sidebar = struct {
         cx.notify();
     }
 
+    /// The native Compact switch (macOS) reports its new state.
+    fn onNativeCompact(_: *Sidebar, ev: *const zpui.NativeControlEvent, _: *Window, cx: *Context(Sidebar)) void {
+        const p = prefs_mod.mut(cx);
+        if (p.sidebar_compact == ev.on) return;
+        p.sidebar_compact = ev.on;
+        cx.notify();
+    }
+
     fn onCreateSection(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
         sections_ui.openDialog(self, null, cx);
     }
@@ -1458,7 +1466,7 @@ pub const Sidebar = struct {
             .onHover(cx.listenerWith(@as(u8, 3), Sidebar.onViewGroupHover))
             .onClick(cx.listenerWith(@as(u8, 10), Sidebar.onToggleView))
             .child(div().flex1().child("Compact"))
-            .child(ui.switch_.toggle(theme, prefs.sidebar_compact)));
+            .child(zpui.nativeSwitch("sidebar-view-compact-switch", .{ .on = prefs.sidebar_compact, .label = "Compact", .size = .mini }, cx.listener(Sidebar.onNativeCompact), ui.switch_.toggle(theme, prefs.sidebar_compact))));
         card = card.child(ui.popover.separator(theme));
         card = card.child(ui.popover.menuRow(theme, false).id("sidebar-create-section").role(.menu_item)
             .onHover(cx.listenerWith(@as(u8, 4), Sidebar.onViewGroupHover))

@@ -230,7 +230,15 @@ fn widthRow(v: *SettingsView, t: *const Theme, s: *const UiSettings, cx: *Contex
         .child(w.textBlock(t, "Conversation width", &.{.{ .text = "Maximum width for messages and the composer." }}).minW(px(200)))
         .child(div().id("transcript-width-control").onHover(cx.listener(SettingsView.onWidthHover))
         .my(px(-12)).flexNone().flex().flexCol().gap(px(4))
-        .child(value_row).child(slider).child(range_row));
+        .child(value_row)
+        .child(zpui.nativeSlider("transcript-width-native", .{
+        .value = width,
+        .min = lay.transcript_width_min,
+        .max = lay.transcript_width_max,
+        .label = "Conversation width",
+        .width = px(240),
+    }, cx.listener(SettingsView.onWidthNative), slider))
+        .child(range_row));
 }
 
 fn recordBounds(v: *SettingsView, bounds: zpui.Bounds(f32), _: *zpui.Window, _: *zpui.App) void {

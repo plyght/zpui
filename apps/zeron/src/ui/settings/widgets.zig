@@ -249,6 +249,15 @@ pub fn switchVisual(theme: *const Theme, position: f32) Div {
     return div().relative().flexNone().w(px(switch_width)).h(px(switch_height)).child(track_el).child(thumb_el);
 }
 
+/// Why a dimmed switch does nothing (its accessible help / tooltip).
+pub const unavailable_help = "Unavailable while its parent setting is off";
+
+/// The settings switch on macOS: a mini NSSwitch (like System Settings), disabled
+/// when not `enabled`; `fallback` (the drawn switch) everywhere else.
+pub fn nativeSwitch(id: anytype, on: bool, enabled: bool, label: []const u8, listener: anytype, fallback: anytype) zpui.native_control.NativeControl {
+    return zpui.nativeSwitch(id, .{ .on = on, .enabled = enabled, .label = label, .help = if (enabled) "" else unavailable_help, .size = .mini }, listener, fallback);
+}
+
 // ---------------------------------------------------------------------------
 // Select
 // ---------------------------------------------------------------------------

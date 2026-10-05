@@ -152,6 +152,16 @@ jobs:
           sleep 1
           ZERON_SMOKE_MENU=1 ZERON_SMOKE_BROWSER_URL=http://127.0.0.1:8765/ ZERON_SMOKE_OUT=zig-out/zeron-macos-menu-browser.png \
             ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
+      # Settings pages with native AppKit controls (NSSwitch, NSPopUpButton, NSSlider)
+      # hosted as native child views; captured for a visual check.
+      - name: Smoke test zeron Settings with native controls (General, Appearance)
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          for page in general appearance; do
+            ZERON_SMOKE_SETTINGS=$page ZERON_SMOKE_OUT=zig-out/zeron-macos-settings-$page.png \
+              ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
+          done
       # [liquid-glass] macOS 15 has no NSGlassEffectView: forcing the Liquid Glass setting
       # must take the frosted fallback (no native glass views) and still render.
       - name: Smoke test zeron, Liquid Glass forced → frosted fallback (macOS 15)

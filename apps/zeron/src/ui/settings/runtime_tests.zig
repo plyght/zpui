@@ -588,3 +588,47 @@ test "General: thread naming loads and saves through Get/SetTitleSettings; Escap
     v.update(h.app, flipToggle, .{select.Toggle.escape_stops});
     try testing.expect(h.settings().escapeStopsActiveAgent);
 }
+
+test "native controls (the macOS path): Appearance switch, pop-up and width slider drive the settings" {
+    var h = try Harness.init();
+    defer h.deinit();
+    const tw = h.tw();
+    tw.native_controls = true; // TestPlatform stands in for AppKit
+    _ = h.openSettings(.appearance);
+    h.window().refresh();
+    h.frames(2);
+    // Nothing is deferred on the page, so the overlay plane leaves the mouse to the controls.
+    try testing.expect(!h.window().rendered_frame.overlay_capture_input);
+
+    const pause = tw.findNativeControl(.switch_, "Pause animations in background") orelse return error.NoNativeSwitch;
+    const before = h.settings().theme.pause_animations_in_background;
+    try testing.expectEqual(before, tw.control_state[@intFromEnum(pause)].?.on);
+    try testing.expectEqual(zpui.platform.NativeControlSize.mini, tw.control_state[@intFromEnum(pause)].?.size);
+    tw.simulateNativeControl(pause, .{ .kind = .switch_, .on = !before });
+    h.app.runUntilParked();
+    h.frames(1);
+    try testing.expectEqual(!before, h.settings().theme.pause_animations_in_background);
+    try testing.expectEqual(!before, tw.control_state[@intFromEnum(pause)].?.on);
+    // Reporting the state it already shows changes nothing.
+    tw.simulateNativeControl(pause, .{ .kind = .switch_, .on = !before });
+    h.app.runUntilParked();
+    try testing.expectEqual(!before, h.settings().theme.pause_animations_in_background);
+
+    const rm = tw.findNativeControl(.popup, "Reduce motion") orelse return error.NoNativePopup;
+    try testing.expectEqual(@as(usize, zt.motion.ReduceMotion.all.len), tw.control_state[@intFromEnum(rm)].?.items.len);
+    tw.simulateNativeControl(rm, .{ .kind = .popup, .index = 1 });
+    h.app.runUntilParked();
+    h.frames(1);
+    try testing.expectEqual(zt.motion.ReduceMotion.all[1], h.settings().theme.reduce_motion);
+
+    // The theme pickers keep the drawn menu (palette swatches).
+    try testing.expect(tw.findNativeControl(.popup, "Dark theme") == null);
+
+    const width = tw.findNativeControl(.slider, "Conversation width") orelse return error.NoNativeSlider;
+    tw.simulateNativeControl(width, .{ .kind = .slider, .value = 803 });
+    h.app.runUntilParked();
+    h.frames(1);
+    const expected = model.settings.normalizeTranscriptWidth(803);
+    try testing.expectEqual(expected, prefs_mod.get(h.app).transcript_width);
+    try testing.expectEqual(@as(f64, expected), tw.control_state[@intFromEnum(width)].?.value);
+}

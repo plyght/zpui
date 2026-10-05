@@ -30,6 +30,10 @@
 //! there to be opaque (it was transparent when the blur sampled its own plane).
 //! When the GPU has no MetalPerformanceShaders (blurs draw unblurred), the energy
 //! check is skipped with a `SKIP:` line; the overlay-plane check still runs.
+//!
+//! `ZERON_SMOKE_SETTINGS=<section>` (`general`, `appearance`, ...): after the frames,
+//! open Settings on that page, render 30 more frames and capture it (on macOS the
+//! page's switches, pop-ups and sliders are native AppKit controls).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -54,6 +58,9 @@ pub const Options = struct {
     diag: bool = false,
     /// ZERON_SMOKE_MENU=1: the frosted-menu blur check (see the file comment).
     menu: bool = false,
+    /// ZERON_SMOKE_SETTINGS=<section> (e.g. `appearance`): open Settings on that page
+    /// before capturing (shows the native AppKit controls on macOS).
+    settings: ?[]const u8 = null,
 };
 
 const shell_mod = @import("ui/shell/shell.zig");
@@ -99,6 +106,7 @@ const Tick = struct {
         _ = frames_seen.fetchAdd(1, .monotonic);
         if (self.left > 0) return win.onNextFrame(Tick{ .left = self.left - 1 }, tick);
         const s = &state.?;
+        if (s.opts.settings) |section| if (self.waited == 0) return openSettings(s, win, app, section);
         if (s.opts.browser_url) |url| return openBrowser(s, win, app, url);
         if (s.opts.menu and self.waited == 0) return MenuProbe.begin(s, win, app);
         if (builtin.os.tag == .macos and s.opts.diag) {
@@ -121,6 +129,31 @@ const Tick = struct {
         };
         s.done.store(true, .release);
         app.quit();
+    }
+};
+
+const settings_ui = @import("ui/settings/root.zig");
+
+/// ZERON_SMOKE_SETTINGS: open Settings on `section`, let it settle, then capture.
+fn openSettings(s: *State, win: *Window, app: *App, section: []const u8) void {
+    const root = win.root orelse return failNow(s, app, "no root view");
+    const shell = root.entity.downcast(shell_mod.Shell) orelse return failNow(s, app, "root view is not the shell");
+    const which = std.meta.stringToEnum(settings_ui.view.Section, section) orelse return failNow(s, app, "unknown ZERON_SMOKE_SETTINGS section");
+    shell.update(app, shell_mod.Shell.openSettings, .{win});
+    const v = shell.read(app).settings_view orelse return failNow(s, app, "settings did not open");
+    v.update(app, settings_ui.SettingsView.openSection, .{which});
+    std.debug.print("zeron smoke: Settings → {s}\n", .{section});
+    win.onNextFrame(SettingsWait{ .left = 30 }, SettingsWait.tick);
+}
+
+const SettingsWait = struct {
+    left: u64,
+    fn tick(self: *const SettingsWait, win: *Window, app: *App) void {
+        _ = frames_seen.fetchAdd(1, .monotonic);
+        const s = &state.?;
+        if (self.left == 0) return Tick.finish(s, win, app);
+        win.refresh();
+        win.onNextFrame(SettingsWait{ .left = self.left - 1 }, tick);
     }
 };
 

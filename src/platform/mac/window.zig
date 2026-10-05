@@ -32,6 +32,7 @@ const scene_mod = @import("../../scene.zig");
 const atlas_mod = @import("../../atlas.zig");
 const Renderer = @import("../../renderer/renderer.zig").Renderer;
 const native_views = @import("native_views.zig");
+const native_controls = @import("native_controls.zig");
 const mac_a11y = @import("a11y.zig");
 
 const log = std.log.scoped(.mac_window);
@@ -619,7 +620,23 @@ pub const MacWindow = struct {
         .configureLiquidGlass = vConfigureLiquidGlass,
         .setBackdropHole = vSetBackdropHole,
         .a11yUpdate = vA11yUpdate,
+        .measureNativeControl = vMeasureNativeControl,
+        .attachNativeControl = vAttachNativeControl,
+        .updateNativeControl = vUpdateNativeControl,
     };
+
+    // Native form controls (native_controls.zig).
+    fn vMeasureNativeControl(_: *anyopaque, cs: platform.NativeControlState) ?platform.Size {
+        return native_controls.measure(cs);
+    }
+    fn vAttachNativeControl(ptr: *anyopaque, cs: platform.NativeControlState, z: platform.NativeViewZ) anyerror!platform.NativeViewId {
+        return native_controls.attach(cast(ptr), cs, z);
+    }
+    fn vUpdateNativeControl(ptr: *anyopaque, view: platform.NativeViewId, cs: platform.NativeControlState) void {
+        const self = cast(ptr);
+        if (self.closed) return;
+        native_controls.update(self, view, cs);
+    }
 
     fn vA11yUpdate(ptr: *anyopaque, update: platform.a11y.Update) void {
         mac_a11y.update(cast(ptr), update);

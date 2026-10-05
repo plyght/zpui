@@ -136,6 +136,18 @@ pub const ContainerQuery = elements.ContainerQuery;
 /// Host a native child view at an element's bounds (`platform.NativeViewId`).
 pub const nativeView = elements.nativeView;
 pub const nativeViewWith = elements.nativeViewWith;
+
+/// Native form controls (macOS AppKit controls; zpui-drawn fallbacks elsewhere;
+/// src/elements/native_control.zig).
+pub const native_control = elements.native_control;
+pub const nativeSwitch = elements.native_control.nativeSwitch;
+pub const nativeCheckbox = elements.native_control.nativeCheckbox;
+pub const nativeSlider = elements.native_control.nativeSlider;
+pub const nativeSegmented = elements.native_control.nativeSegmented;
+pub const nativePopup = elements.native_control.nativePopup;
+pub const nativeStepper = elements.native_control.nativeStepper;
+pub const nativeControlsAvailable = elements.native_control.nativeControlsAvailable;
+pub const NativeControlEvent = elements.native_control.Event;
 pub const NativeViewId = platform.NativeViewId;
 /// [liquid-glass] Native Liquid Glass (macOS 26+; src/elements/liquid_glass.zig).
 pub const liquid_glass = elements.liquid_glass;

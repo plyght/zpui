@@ -189,6 +189,8 @@ pub const WindowCallbacks = struct {
     /// Assistive technology started (true) or stopped (false) using this window: the
     /// core builds the tree only while active and redraws on activation.
     a11y_activation: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
+    /// The user changed a native control (`attachNativeControl`): its new value.
+    native_control: ?*const fn (ctx: ?*anyopaque, view: NativeViewId, event: NativeControlEvent) void = null,
 };
 
 /// gpui `PlatformWindow`. Owned by the platform; destroyed via `close` + the `close` callback.
@@ -272,6 +274,19 @@ pub const Window = struct {
         /// rather than the app's blurred backdrop. null = no hole.
         setBackdropHole: ?*const fn (ptr: *anyopaque, hole: ?BackdropHole) void = null,
 
+        // -- native form controls (optional; see `NativeControlState`) ---------------------
+        /// The frame size (logical px) the platform control for `state` wants; a 0 width
+        /// or height means "no preference" (the layout decides). null: this window shows
+        /// no native control for `state` (the caller renders its own fallback).
+        measureNativeControl: ?*const fn (ptr: *anyopaque, state: NativeControlState) ?Size = null,
+        /// Create the platform control for `state` (macOS: NSSwitch, NSSlider, ...) and
+        /// attach it like `attachNativeView` (hidden until placed). User changes come
+        /// back through `WindowCallbacks.native_control`.
+        attachNativeControl: ?*const fn (ptr: *anyopaque, state: NativeControlState, z: NativeViewZ) anyerror!NativeViewId = null,
+        /// Apply a new state (value, items, enabled, appearance, ...). Never reports
+        /// back through `native_control` (programmatic changes are not user changes).
+        updateNativeControl: ?*const fn (ptr: *anyopaque, view: NativeViewId, state: NativeControlState) void = null,
+
         // -- accessibility (optional; see `a11y.zig`) ----------------------------------------
         /// A frame's finalized accessibility tree and what changed since the last one. The
         /// tree stays valid (the backend may keep the pointer and answer queries from it)
@@ -313,6 +328,22 @@ pub const Window = struct {
     }
     pub fn setBackdropHole(w: Window, hole: ?BackdropHole) void {
         if (w.vtable.setBackdropHole) |f| f(w.ptr, hole);
+    }
+    /// Whether this backend can host native form controls at all.
+    pub fn hasNativeControls(w: Window) bool {
+        return w.vtable.measureNativeControl != null and w.vtable.attachNativeControl != null and
+            w.vtable.updateNativeControl != null and w.supportsNativeViews();
+    }
+    pub fn measureNativeControl(w: Window, state: NativeControlState) ?Size {
+        const f = w.vtable.measureNativeControl orelse return null;
+        return f(w.ptr, state);
+    }
+    pub fn attachNativeControl(w: Window, state: NativeControlState, z: NativeViewZ) !NativeViewId {
+        const f = w.vtable.attachNativeControl orelse return error.NativeControlsUnsupported;
+        return f(w.ptr, state, z);
+    }
+    pub fn updateNativeControl(w: Window, view: NativeViewId, state: NativeControlState) void {
+        if (w.vtable.updateNativeControl) |f| f(w.ptr, view, state);
     }
     pub fn supportsA11y(w: Window) bool {
         return w.vtable.a11yUpdate != null;
@@ -468,6 +499,53 @@ pub const LiquidGlassConfig = struct {
     /// Place the glass under the main surface (Ghostty's window glass): zpui paints its
     /// translucent content on top of it instead of on the overlay plane.
     behind_content: bool = false,
+};
+
+// ---- native form controls (macOS: AppKit controls as native child views) ----------------
+
+/// The platform control behind `zpui.nativeSwitch` & co. (macOS: NSSwitch, NSButton
+/// checkbox, NSSlider, NSSegmentedControl, NSPopUpButton, NSStepper).
+pub const NativeControlKind = enum(u8) { switch_, checkbox, slider, segmented, popup, stepper };
+
+/// AppKit `NSControlSize` (raw values match: regular 0, small 1, mini 2, large 3).
+pub const NativeControlSize = enum(u8) { regular = 0, small = 1, mini = 2, large = 3 };
+
+/// Everything a native control shows. Slices are borrowed for the duration of the call
+/// (backends copy what they keep).
+pub const NativeControlState = struct {
+    kind: NativeControlKind,
+    enabled: bool = true,
+    size: NativeControlSize = .regular,
+    /// Pin the control's appearance to dark / light (the app theme); null = system.
+    dark: ?bool = null,
+    /// Accessible name (and a checkbox's title when `title` is null).
+    label: []const u8 = "",
+    /// A checkbox's visible title ("" = a bare box).
+    title: []const u8 = "",
+    /// Accessibility help / tooltip (e.g. why the control is unavailable).
+    help: []const u8 = "",
+    /// switch / checkbox.
+    on: bool = false,
+    /// slider / stepper.
+    value: f64 = 0,
+    min: f64 = 0,
+    max: f64 = 1,
+    /// stepper: increment; slider: > 0 snaps to tick marks every `step`.
+    step: f64 = 0,
+    /// segmented / popup: the option labels and the selected index.
+    items: []const []const u8 = &.{},
+    selected: ?u32 = null,
+};
+
+/// A user change reported by a native control (`WindowCallbacks.native_control`).
+pub const NativeControlEvent = struct {
+    kind: NativeControlKind,
+    /// switch / checkbox: the new state.
+    on: bool = false,
+    /// slider / stepper: the new value.
+    value: f64 = 0,
+    /// segmented / popup: the newly selected index.
+    index: u32 = 0,
 };
 
 pub const NativeViewPlacement = struct {
