@@ -284,9 +284,18 @@ test "audit: every interactive element of the shell has a role and a name" {
     a.key(mod ++ "-n");
     a.check("new session");
 
-    // Settings, every section.
+    // Settings, every section. Close anything the coordinate clicks above may have left
+    // open first (layout, and so what a fixed point hits, depends on the installed fonts).
+    a.key("escape");
+    a.key("escape");
     a.key(mod ++ "-,");
-    const v = h.handle.rootView(h.app).?.read(h.app).settings_view.?;
+    const v = h.handle.rootView(h.app).?.read(h.app).settings_view orelse {
+        var out: std.Io.Writer.Allocating = .init(testing.allocator);
+        defer out.deinit();
+        h.tree().dump(&out.writer) catch {};
+        std.debug.print("settings did not open on {s}-,; tree:\n{s}\n", .{ mod, out.written() });
+        return error.SettingsDidNotOpen;
+    };
     inline for (@typeInfo(view_mod.Section).@"enum".field_names) |name| {
         v.update(h.app, openSection, .{@field(view_mod.Section, name)});
         a.check("settings " ++ name);
