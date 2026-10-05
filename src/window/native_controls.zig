@@ -62,6 +62,8 @@ pub const Pool = struct {
     disabled: bool = false,
     /// Total attaches (diagnostics / tests).
     attach_count: u32 = 0,
+    /// User changes received from the backend (diagnostics / tests).
+    event_count: u32 = 0,
 
     pub fn deinit(self: *Pool, gpa: std.mem.Allocator) void {
         for (self.entries.items) |e| freeEntry(gpa, e);
@@ -216,6 +218,7 @@ pub fn sweep(w: *Window) void {
 pub fn handleEvent(w: *Window, view: platform.NativeViewId, event: platform.NativeControlEvent) void {
     const e = w.native_controls.findView(view) orelse return;
     if (e.kind != event.kind) return;
+    w.native_controls.event_count +%= 1;
     switch (event.kind) {
         .switch_, .checkbox => e.state.on = event.on,
         .slider, .stepper => e.state.value = event.value,

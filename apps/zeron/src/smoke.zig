@@ -196,7 +196,22 @@ const SettingsStress = struct {
         win.refresh();
         // Like an accessibility client (window managers, launchers, password managers
         // on real Macs): walk the window's AX tree between frames.
-        if (builtin.os.tag == .macos) next.ax_nodes +%= mac_poke.axWalk(win, next.cycle *% 131 +% next.wait +% @as(u32, @truncate(next.pokes)));
+        const seed = next.cycle *% 131 +% next.wait +% @as(u32, @truncate(next.pokes)) +% @as(u32, @truncate(next.ax_nodes));
+        if (builtin.os.tag == .macos) next.ax_nodes +%= mac_poke.axWalk(win, seed);
+        // Like a user moving the mouse and scrolling the page: the controls move, clip
+        // and hide under the pointer every frame.
+        if (MenuProbe.shellOf(win, app)) |sh| if (sh.read(app).settings_view) |v| {
+            var prng = std.Random.DefaultPrng.init(seed);
+            const rng = prng.random();
+            if (rng.uintLessThan(u8, 3) == 0) {
+                var l = v.lease(app);
+                l.value.page_scroll.setOffset(.{ .x = 0, .y = -rng.float(f32) * 1500 });
+                l.cx.notify();
+                l.end();
+            }
+            if (builtin.os.tag == .macos) mac_poke.moveMouse(win, rng);
+        };
+        if (builtin.os.tag == .macos and next.step == .visit and next.cycle % 7 == 6 and next.section % 3 == 0) mac_poke.resize(win, next.section);
         if (next.wait > 0) {
             next.wait -= 1;
             return win.onNextFrame(next, tick);
@@ -237,7 +252,7 @@ const SettingsStress = struct {
                 shell.update(app, shell_mod.Shell.closeSettings, .{win});
                 next.cycle += 1;
                 if (next.cycle >= next.cycles) {
-                    std.debug.print("PASS: zeron smoke: settings stress ({d} cycles, {d} control pokes, {d} attaches, {d} AX nodes read)\n", .{ next.cycles, next.pokes, win.native_controls.attach_count, next.ax_nodes });
+                    std.debug.print("PASS: zeron smoke: settings stress ({d} cycles, {d} control pokes, {d} control events, {d} attaches, {d} AX nodes read)\n", .{ next.cycles, next.pokes, win.native_controls.event_count, win.native_controls.attach_count, next.ax_nodes });
                     s.done.store(true, .release);
                     s.exit_code = 0;
                     return app.quit();
@@ -386,6 +401,29 @@ const mac_poke = if (builtin.os.tag == .macos) struct {
         while (i < n) : (i += 1) visit(kids.msg(id, "objectAtIndex:", .{i}), depth + 1, budget);
     }
 
+    /// Queue a mouse move to a random point of the window.
+    fn moveMouse(win: *Window, rng: std.Random) void {
+        const mw = mac.MacWindow.fromWindow(win.platform_window);
+        const b = ak.bounds(mw.native_view);
+        const p: ak.NSPoint = .{ .x = rng.float(f64) * b.size.width, .y = rng.float(f64) * b.size.height };
+        const num = mw.native_window.msg(NSInteger, "windowNumber", .{});
+        const now = ak.class("NSProcessInfo").msg(id, "processInfo", .{}).msg(f64, "systemUptime", .{});
+        const ev = ak.class("NSEvent").msg(?id, "mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:", .{
+            @as(NSUInteger, 5), p, @as(NSUInteger, 0), now, num, @as(?id, null), @as(NSInteger, 0), @as(NSInteger, 0), @as(f32, 0),
+        }) orelse return;
+        ak.sharedApp().msg(void, "postEvent:atStart:", .{ ev, objc.NO });
+    }
+
+    /// Resize the window (alternating sizes): live geometry changes under the controls.
+    fn resize(win: *Window, k: usize) void {
+        const mw = mac.MacWindow.fromWindow(win.platform_window);
+        var f = ak.frame(mw.native_window);
+        f.size.width = if (k % 2 == 0) 900 else 1280;
+        f.size.height = if (k % 2 == 0) 640 else 820;
+        std.debug.print("zeron smoke: stress: resize window to {d}x{d}\n", .{ f.size.width, f.size.height });
+        mw.native_window.msg(void, "setFrame:display:", .{ f, objc.YES });
+    }
+
     fn log(t: Target, what: []const u8) void {
         std.debug.print("zeron smoke: stress: {t} \"{s}\": {s}\n", .{ t.kind, t.label, what });
     }
@@ -424,6 +462,8 @@ const mac_poke = if (builtin.os.tag == .macos) struct {
     fn axWalk(_: *Window, _: u64) u64 {
         return 0;
     }
+    fn moveMouse(_: *Window, _: std.Random) void {}
+    fn resize(_: *Window, _: usize) void {}
 };
 
 /// Browser smoke: open the tab, then poll every frame until the page loaded.
