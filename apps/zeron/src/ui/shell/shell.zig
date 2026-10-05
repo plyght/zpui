@@ -896,7 +896,8 @@ pub const SidebarLayout = enum { floating, flush };
 pub var sidebar_glass_mode: SidebarGlassMode = .glass;
 /// `ZERON_SIDEBAR_LAYOUT=floating|flush` (main.zig); null = flush.
 pub var sidebar_layout_override: ?SidebarLayout = null;
-/// Opacity of the theme-colored layer under the sidebar glass (`ZERON_SIDEBAR_OPACITY`,
+/// Opacity of the theme background drawn inside the sidebar glass (Ghostty's
+/// `background-opacity`) (`ZERON_SIDEBAR_OPACITY`,
 /// 0 = glass straight on the desktop). Keeps `.regular` glass, just less see-through.
 pub var sidebar_opacity: f32 = 0.55;
 
@@ -959,14 +960,18 @@ fn liquidSidebar(theme: *const Theme, sidebar_now: f32, window: *Window, cx: any
     // Regular (translucent) glass in both recipes: Apple's `.clear` is the permanently
     // transparent variant for media, and over the sidebar material it reads as plain blur.
     const style: zpui.LiquidGlassStyle = .regular;
-    const backing: ?zpui.Div = if (mode == .glass and sidebar_opacity > 0)
-        div().absolute().inset0().rounded(px(g.r)).bg(tint.alpha(@min(sidebar_opacity, 1)))
+    // Ghostty's `macos-glass-regular` recipe: one regular glass straight on the desktop
+    // (no window blur under it: see the backdrop hole below), with the theme background
+    // at `sidebar_opacity` drawn INSIDE the glass as its content, not under it (a layer
+    // under the glass gets blurred by it and reads as a second blur).
+    const content: zpui.Div = if (mode == .glass and sidebar_opacity > 0)
+        div().sizeFull().rounded(px(g.r)).bg(tint.alpha(@min(sidebar_opacity, 1)))
     else
-        null;
+        div().sizeFull();
+    const glass_tint: ?zpui.Hsla = if (mode == .glass) null else theme.glassTint();
     const pane = div().absolute().left(px(g.x)).top(px(g.y)).w(px(glass_w)).h(px(g.h))
-        .child(backing)
         .child(if (mode == .vev) zpui.sidebarMaterial("sidebar-material", .{ .corner_radius = if (lay == .floating) g.r else 0 }, div().sizeFull()) else null)
-        .child(zpui.liquidGlass("sidebar-glass", .{ .style = style, .shape = .{ .rounded = g.r }, .tint = theme.glassTint() }, div().sizeFull()));
+        .child(zpui.liquidGlass("sidebar-glass", .{ .style = style, .shape = .{ .rounded = g.r }, .tint = glass_tint }, content));
     column = column.child(pane);
     // Cut the pane out of the window's behind-window blur (glass mode).
     const radii: [4]f32 = if (lay == .floating) .{ g.r, g.r, g.r, g.r } else .{ g.r, 0, 0, g.r };
