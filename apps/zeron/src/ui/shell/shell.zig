@@ -985,8 +985,8 @@ fn liquidSidebar(theme: *const Theme, sidebar_now: f32, window: *Window, cx: any
 /// Ghostty's `background-blur = macos-glass-regular`: no window blur at all (the
 /// window is transparent, see `Shell.render`), one regular glass under the whole window
 /// with the window's own corner radius, and the theme background painted on top of it
-/// with its opacity: `sidebar_opacity` in the sidebar column, the theme's shell tint in
-/// the main area. Nothing sits under the glass for it to blur.
+/// with its opacity: `sidebar_opacity` in the sidebar column; the main (content) area
+/// is solid, so the glass shows only in the sidebar. Nothing sits under the glass to blur.
 fn ghosttyGlass(theme: *const Theme, sidebar_now: f32, lay: SidebarLayout) zpui.Div {
     const tint = theme.glass();
     var fill = div().absolute().inset0();
@@ -994,7 +994,8 @@ fn ghosttyGlass(theme: *const Theme, sidebar_now: f32, lay: SidebarLayout) zpui.
         fill = fill.child(div().absolute().top(px(0)).bottom(px(0)).left(px(0)).w(px(sidebar_now))
             .bg(tint.alpha(@min(@max(sidebar_opacity, 0), 1))));
     }
-    var main_fill = div().absolute().top(px(0)).bottom(px(0)).left(px(sidebar_now)).right(px(0)).bg(tint);
+    // The content area is solid (Apple: glass is for the navigation layer, not content).
+    var main_fill = div().absolute().top(px(0)).bottom(px(0)).left(px(sidebar_now)).right(px(0)).bg(theme.surface.alpha(1));
     if (lay == .flush and sidebar_now > 1) main_fill = main_fill.borderL1().borderColor(theme.border);
     fill = fill.child(main_fill);
     return div().absolute().inset0()
