@@ -1267,13 +1267,16 @@ pub const FilesPanel = struct {
         }
         if (self.query.items.len > 0) return col.child(self.renderSearchResults(theme, cx));
         if (self.root_error) |e| if (!self.tree.rootLoaded()) {
-            return col.child(div().flex1().flex().flexCol().itemsCenter().justifyCenter().gap(px(10)).px(px(28))
+            // Keep the tree's focus target in the frame while the error replaces the tree,
+            // so focusing the explorer (mod-e) doesn't strand focus outside the shell's key
+            // context and swallow every shortcut.
+            return col.child(div().id("files-root-error").role(.tree).ariaLabel("Workspace file tree").trackFocus(self.tree_focus).flex1().flex().flexCol().itemsCenter().justifyCenter().gap(px(10)).px(px(28))
                 .child(div().textCenter().textSize(px(12)).textColor(theme.text_muted).child(e))
                 .child(div().id("files-retry-root").role(.button).h(px(28)).px(px(12)).rounded(px(7)).border1().borderColor(theme.border)
                 .bg(theme.wash(0.04)).hover(sb.bg(theme.wash(0.09))).cursorPointer().flex().itemsCenter()
                 .textSize(px(11.5)).textColor(theme.text).child("Retry").onClick(cx.listener(retryRoot))));
         };
-        if (!self.tree.rootLoaded()) return col.child(div().flex1());
+        if (!self.tree.rootLoaded()) return col.child(div().id("files-root-loading").role(.tree).ariaLabel("Workspace file tree").trackFocus(self.tree_focus).flex1());
         return col.child(self.renderTree(theme, cx));
     }
 
