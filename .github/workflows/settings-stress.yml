@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15-intel, macos-26-intel]
+        os: [macos-15-intel, macos-26-intel, macos-26]
         data: [fixtures, live]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -33,8 +33,11 @@ jobs:
           version: 0.17.0
       - name: macOS version
         run: sw_vers
-      - name: Build Zeron.app (ReleaseSafe, x86_64, minos 12.0 like the shipped bundle)
-        run: zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=x86_64-macos.12.0 -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
+      # The runner's own arch (macos-26 is Apple Silicon: the aarch64 slice most users run).
+      - name: Build Zeron.app (ReleaseSafe, native arch, minos 12.0 like the shipped bundle)
+        run: |
+          arch=$(uname -m); [ "$arch" = arm64 ] && arch=aarch64
+          zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=$arch-macos.12.0 -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
       - name: Disable Reduce Transparency (real Liquid Glass)
         continue-on-error: true
         run: |
