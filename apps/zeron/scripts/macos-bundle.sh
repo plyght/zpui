@@ -9,12 +9,18 @@
 #
 #   Zeron.app/Contents/Info.plist          apps/zeron/dist/macos/Info.plist (__VERSION__ filled in)
 #   Zeron.app/Contents/MacOS/zeron         the client (fonts + icons are @embedFile'd, no resources needed)
+#   Zeron.app/Contents/Helpers/zeron-engine the engine (`zeron-engine headless`), so the app needs no
+#                                          Rust Zeron install (universal like the client)
 #   Zeron.app/Contents/Resources/zeron.icns
 #   Zeron.app/Contents/Resources/licenses/ font + third-party notices
 #
-# The engine is found at runtime from Contents/MacOS/zeron-engine, $ZERON_BIN,
-# $PATH or the usual install locations (apps/zeron/src/engine_bin.zig); a
-# packager can drop the engine binary in as Contents/MacOS/zeron-engine.
+# The engine: ZERON_ENGINE=/path/to/zeron-engine (prebuilt for this arch, or universal),
+# else ZERON_SRC=<zeron checkout at the tools/upstream pin> builds it for this run's arch
+# (apps/zeron/scripts/build-engine.sh; cargo + the rustup target for <arch>-apple-darwin).
+# Each arch's engine is kept in <prefix>/zeron-macos-<arch>/zeron-engine and lipo'd like
+# the client. Without either the bundle has no engine and the app falls back to
+# $ZERON_BIN / $PATH / an installed Rust Zeron (apps/zeron/src/engine_bin.zig);
+# ZERON_REQUIRE_ENGINE=1 makes that an error.
 # Dictation's native runtime is optional: ZERON_ONNXRUNTIME=/path/libonnxruntime.dylib
 # (ONNX Runtime 1.28, as Rust zeron links) is copied to Contents/Frameworks, where
 # apps/zeron/src/voice/ort.zig loads it; without it the microphone reports
@@ -37,6 +43,17 @@ fi
 
 mkdir -p "$prefix/zeron-macos-$arch"
 cp -f "$bin" "$prefix/zeron-macos-$arch/zeron"
+if [[ -n ${ZERON_ENGINE:-} ]]; then
+  cp -f "$ZERON_ENGINE" "$prefix/zeron-macos-$arch/zeron-engine"
+elif [[ -n ${ZERON_SRC:-} ]]; then
+  rtarget=$arch-apple-darwin
+  command -v rustup >/dev/null && rustup target add "$rtarget" >/dev/null
+  bash "$root/apps/zeron/scripts/build-engine.sh" "$ZERON_SRC" "$prefix/zeron-macos-$arch/zeron-engine" "$rtarget"
+fi
+if [[ ! -f $prefix/zeron-macos-$arch/zeron-engine ]]; then
+  [[ ${ZERON_REQUIRE_ENGINE:-} == 1 ]] && { echo "error: no engine for $arch (set ZERON_SRC or ZERON_ENGINE)" >&2; exit 1; }
+  echo "warning: no bundled engine (set ZERON_SRC or ZERON_ENGINE); Zeron.app will need an installed zeron" >&2
+fi
 
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/licenses/fonts"
@@ -49,6 +66,17 @@ else
   cp "$prefix/zeron-macos-$arch/zeron" "$app/Contents/MacOS/zeron"
 fi
 chmod 755 "$app/Contents/MacOS/zeron"
+earm=$prefix/zeron-macos-aarch64/zeron-engine ex86=$prefix/zeron-macos-x86_64/zeron-engine
+if [[ -f $prefix/zeron-macos-$arch/zeron-engine ]]; then
+  mkdir -p "$app/Contents/Helpers"
+  if [[ -f $earm && -f $ex86 ]] && command -v lipo >/dev/null && ! lipo -info "$earm" | grep -q x86_64; then
+    echo "zeron-app-bundle: universal engine (lipo aarch64 + x86_64)"
+    lipo -create -output "$app/Contents/Helpers/zeron-engine" "$earm" "$ex86"
+  else
+    cp "$prefix/zeron-macos-$arch/zeron-engine" "$app/Contents/Helpers/zeron-engine"
+  fi
+  chmod 755 "$app/Contents/Helpers/zeron-engine"
+fi
 sed "s/__VERSION__/$version/g" "$dist/Info.plist" >"$app/Contents/Info.plist"
 printf 'APPL????' >"$app/Contents/PkgInfo"
 cp "$dist/zeron.icns" "$app/Contents/Resources/zeron.icns"
@@ -66,6 +94,10 @@ if command -v codesign >/dev/null; then
   if [[ -f $app/Contents/Frameworks/libonnxruntime.dylib ]]; then
     codesign --force ${CODESIGN_IDENTITY:+--options runtime --timestamp} --sign "${CODESIGN_IDENTITY:--}" "$app/Contents/Frameworks/libonnxruntime.dylib"
   fi
+  # The engine helper: its own identifier, hardened runtime when Developer ID signed.
+  if [[ -f $app/Contents/Helpers/zeron-engine ]]; then
+    codesign --force --identifier sh.zeron.app.engine ${CODESIGN_IDENTITY:+--options runtime --timestamp} --sign "${CODESIGN_IDENTITY:--}" "$app/Contents/Helpers/zeron-engine"
+  fi
   if [[ -n ${CODESIGN_IDENTITY:-} ]]; then
     codesign --force --options runtime --timestamp --entitlements "$dist/zeron.entitlements" --sign "$CODESIGN_IDENTITY" "$app"
   else
@@ -73,7 +105,10 @@ if command -v codesign >/dev/null; then
     codesign --force --sign - "$app"
   fi
 fi
-if command -v lipo >/dev/null; then lipo -info "$app/Contents/MacOS/zeron"; fi
+if command -v lipo >/dev/null; then
+  lipo -info "$app/Contents/MacOS/zeron"
+  [[ -f $app/Contents/Helpers/zeron-engine ]] && lipo -info "$app/Contents/Helpers/zeron-engine"
+fi
 # Self-update payload (apps/zeron/src/lifecycle/update.zig, same name as the Rust
 # release's): zeron-<ver>-macos-<arm64|x86_64>-app.tar.gz with Zeron.app at its root.
 tarch=$arch; [[ $arch == aarch64 ]] && tarch=arm64

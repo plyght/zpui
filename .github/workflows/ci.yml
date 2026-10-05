@@ -374,8 +374,38 @@ jobs:
       - name: Smoke test zeron frosted menu blur (Xvfb + lavapipe)
         timeout-minutes: 5
         run: ZERON_SMOKE_MENU=1 ZERON_SMOKE_OUT=zig-out/zeron-linux-menu.png xvfb-run -a -s "-screen 0 1600x1000x24 -nolisten tcp" ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
-      - name: Package Linux tarball (zig build zeron-dist)
+      - name: zeron engine pin (tools/upstream/map.json)
+        id: pin
+        run: echo "sha=$(python3 -c 'import json; print(json.load(open("tools/upstream/map.json"))["upstreams"]["zeron"]["pinned"])')" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: zeronsh/zeron
+          ref: ${{ steps.pin.outputs.sha }}
+          path: zeron-src
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zeron-src -> target
+          shared-key: zeron-engine-linux
+          cache-on-failure: true
+      - name: Package Linux tarball (zig build zeron-dist; engine included)
+        env:
+          ZERON_SRC: ${{ github.workspace }}/zeron-src
+          ZERON_REQUIRE_ENGINE: "1"
+          CARGO_TARGET_DIR: ${{ github.workspace }}/zeron-src/target
         run: zig build zeron-dist -Doptimize=ReleaseSafe --summary all
+      - name: Verify the tarball's engine (spawned by the client's discovery, serves it)
+        timeout-minutes: 5
+        run: |
+          tgz=$(ls zig-out/zeron-*-linux-*.tar.gz)
+          dir=$(mktemp -d); tar -xzf "$tgz" -C "$dir"; eng=$(ls "$dir"/*/zeron-engine)
+          "$eng" --version
+          data=$(mktemp -d)
+          zig build probe -- --zeron "$eng" --data-dir "$data" --port 27991 --seconds 2 2>&1 | tee "$RUNNER_TEMP/probe.log"
+          grep -q "spawned=true" "$RUNNER_TEMP/probe.log" || { echo "FAIL: probe did not spawn and reach the engine"; exit 1; }
+          grep -q "chat(s)" "$RUNNER_TEMP/probe.log" || { echo "FAIL: WatchChats did not answer"; exit 1; }
+          test -f "$data/engine.lock" || { echo "FAIL: engine never took its data dir lock"; exit 1; }
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -400,7 +430,30 @@ jobs:
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
-      - name: Build Zeron.app (x86_64, then aarch64 + lipo → universal)
+      - name: zeron engine pin (tools/upstream/map.json)
+        id: pin
+        run: echo "sha=$(python3 -c 'import json; print(json.load(open("tools/upstream/map.json"))["upstreams"]["zeron"]["pinned"])')" >> "$GITHUB_OUTPUT"
+      # The engine bundled as Zeron.app/Contents/Helpers/zeron-engine is built from the
+      # exact zeron commit the client was ported against (bumping the pin bumps it).
+      - uses: actions/checkout@v4
+        with:
+          repository: zeronsh/zeron
+          ref: ${{ steps.pin.outputs.sha }}
+          path: zeron-src
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Rust targets (aarch64 + x86_64 macOS)
+        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zeron-src -> target
+          shared-key: zeron-engine-macos
+          cache-on-failure: true
+      - name: Build Zeron.app (x86_64, then aarch64 + lipo → universal; engine included)
+        env:
+          ZERON_SRC: ${{ github.workspace }}/zeron-src
+          ZERON_REQUIRE_ENGINE: "1"
+          CARGO_TARGET_DIR: ${{ github.workspace }}/zeron-src/target
         run: |
           # [liquid-glass] minos 12.0 = Info.plist LSMinimumSystemVersion (the Rust app's);
           # Zig 0.17 stamps sdk 27.0 (its bundled SDKSettings.json): the full 26/27 design.
@@ -425,6 +478,36 @@ jobs:
           set -e
           if [ "$code" != 2 ]; then echo "FAIL: bundled zeron did not start (exit $code; expected the 'not the engine' refusal, 2)"; exit 1; fi
           echo "bundled binary starts (refused 'headless' as expected)"
+      - name: Verify bundled engine (universal, minos 12.0, signed, starts and serves the client)
+        timeout-minutes: 5
+        run: |
+          app=zig-out/Zeron.app
+          eng=$app/Contents/Helpers/zeron-engine
+          test -x "$eng" || { echo "FAIL: $eng missing"; exit 1; }
+          lipo -info "$eng"
+          for a in arm64 x86_64; do
+            lipo "$eng" -verify_arch "$a" || { echo "FAIL: engine lacks $a"; exit 1; }
+          done
+          python3 apps/zeron/scripts/macho-build-version.py --expect-minos 12.0 "$eng"
+          codesign --verify --strict --verbose=2 "$eng"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          "$eng" --version
+          "$eng" --noop-browser https://example.invalid
+          # x86_64 slice under Rosetta when available (informational).
+          arch -x86_64 "$eng" --version || echo "(no Rosetta: x86_64 slice not run)"
+          # The client's discovery + spawn path: zeron-probe resolves nothing itself, so
+          # point it at the bundled engine, on a temp data dir and a private port, and
+          # let it spawn `zeron-engine headless`, bootstrap (EngineInfo → EngineReady),
+          # list chats, then stop the engine it started.
+          data=$(mktemp -d)
+          zig build probe -- --zeron "$PWD/$eng" --data-dir "$data" --port 27991 --seconds 2 2>&1 | tee "$RUNNER_TEMP/probe.log"
+          grep -q "spawned=true" "$RUNNER_TEMP/probe.log" || { echo "FAIL: probe did not spawn and reach the bundled engine"; exit 1; }
+          grep -q "chat(s)" "$RUNNER_TEMP/probe.log" || { echo "FAIL: WatchChats did not answer"; exit 1; }
+          sleep 1
+          if lsof -nP -iTCP:27991 -sTCP:LISTEN; then echo "FAIL: engine still listening after the probe stopped it"; exit 1; fi
+          test -f "$data/engine.lock" || { echo "FAIL: engine never took its data dir lock"; exit 1; }
+          ls "$data" "$data/logs" || true
+          echo "bundled engine OK"
       - name: Zip Zeron.app
         run: ditto -c -k --keepParent zig-out/Zeron.app zig-out/Zeron-macos-app.zip
       - uses: actions/upload-artifact@v4

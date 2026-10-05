@@ -64,7 +64,39 @@ pub const ConnectOptions = struct {
     wake: ?Wake = null,
     /// Forward the spawned engine's stdout/stderr (otherwise discarded).
     inherit_child_output: bool = false,
+    /// The engine's data dir (`ZERON_DATA_DIR`, else `~/.zeron`). When set, an engine
+    /// that holds `{data_dir}/engine.lock` but does not answer yet (still starting, or a
+    /// Rust Zeron.app embedding it) is waited for instead of spawning a second one that
+    /// would only fail on the lock; and a spawned child that lost the lock race is not
+    /// treated as ours (so quitting never stops someone else's engine).
+    data_dir: ?[]const u8 = null,
 };
+
+/// Who holds `{data_dir}/engine.lock` (the engine's `InstanceLock`, an exclusive
+/// `flock` held for the engine's lifetime with its pid written in).
+pub const LockHolder = struct {
+    /// The pid stamped in the file (null when unreadable).
+    pid: ?i32,
+};
+
+/// Non-blocking probe of the data dir lock (zeron `InstanceLock::holder`): null when no
+/// engine holds it (or the file does not exist). Takes a shared lock for an instant,
+/// which a starting engine's exclusive `flock` rides out with its 1s retry budget.
+pub fn lockHolder(io: Io, data_dir: []const u8) ?LockHolder {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const path = std.fmt.bufPrint(&path_buf, "{s}/engine.lock", .{data_dir}) catch return null;
+    const file = Io.Dir.cwd().openFile(io, path, .{}) catch return null;
+    defer file.close(io);
+    const free = file.tryLock(io, .shared) catch return null;
+    if (free) {
+        file.unlock(io);
+        return null;
+    }
+    var buf: [32]u8 = undefined;
+    const n = file.readPositionalAll(io, &buf, 0) catch 0;
+    const pid = std.fmt.parseInt(i32, std.mem.trim(u8, buf[0..n], " \t\r\n"), 10) catch null;
+    return .{ .pid = pid };
+}
 
 /// A connected, ready engine and (if we started it) its child process.
 pub const Engine = struct {
@@ -77,7 +109,9 @@ pub const Engine = struct {
 
     /// `EngineBinaryNotFound`: nothing answered and the `zeron` binary to spawn does
     /// not exist (or is not executable).
-    pub const Error = error{ EngineUnavailable, EngineBinaryNotFound, NotAnEngine } || Allocator.Error;
+    /// `EngineDataDirBusy`: another engine holds the data dir lock but never answered on
+    /// `port` (a Rust Zeron.app or daemon on another `ZERON_IPC_PORT`).
+    pub const Error = error{ EngineUnavailable, EngineBinaryNotFound, NotAnEngine, EngineDataDirBusy } || Allocator.Error;
 
     /// Probe 127.0.0.1:`port`; if no engine answers, spawn `zeron headless`
     /// (when configured) and retry with backoff. Completes the bootstrap
@@ -89,6 +123,9 @@ pub const Engine = struct {
             error.ConnectionRefused => {},
             else => |e| return e,
         }
+        // Something already owns the data dir (starting up, or embedded in a Rust
+        // Zeron.app): attach to it when it starts answering, never spawn a rival.
+        if (options.data_dir) |dir| if (lockHolder(io, dir) != null) return waitForOther(gpa, io, address, options, dir);
         const path = options.zeron_path orelse return error.EngineUnavailable;
         var child = std.process.spawn(io, .{
             .argv = &.{ path, "headless" },
@@ -107,7 +144,13 @@ pub const Engine = struct {
         while (true) {
             if (tryAttach(gpa, io, address, options)) |engine_const| {
                 var engine = engine_const;
-                engine.child = child;
+                if (ownsDataDir(io, options.data_dir, child.id)) {
+                    engine.child = child;
+                } else {
+                    // Another engine won the lock (two clients raced); ours exits on
+                    // its own. Reap it and attach without owning the answerer.
+                    child.kill(io);
+                }
                 return engine;
             } else |err| switch (err) {
                 // Not listening yet, or listening but mid-handshake setup.
@@ -116,6 +159,36 @@ pub const Engine = struct {
             }
             if (deadline.toDurationFromNow(io)) |left| {
                 if (left.raw.nanoseconds <= 0) return error.EngineUnavailable;
+            }
+            try io.sleep(.fromMilliseconds(backoff), .awake);
+            backoff = @min(backoff * 2, 1000);
+        }
+    }
+
+    /// Whether our spawned `child` is the engine holding the data dir lock (true when
+    /// that cannot be told: no data dir, or an unreadable pid stamp).
+    fn ownsDataDir(io: Io, data_dir: ?[]const u8, child_id: ?std.process.Child.Id) bool {
+        const dir = data_dir orelse return true;
+        const holder = lockHolder(io, dir) orelse return true;
+        const pid = holder.pid orelse return true;
+        const id = child_id orelse return true;
+        if (@TypeOf(id) != i32) return true; // non-posix
+        return pid == id;
+    }
+
+    /// The data dir is locked by an engine we did not start: poll the port until it
+    /// answers. Gives up early when the lock is released (the next attempt may spawn).
+    fn waitForOther(gpa: Allocator, io: Io, address: Io.net.IpAddress, options: ConnectOptions, dir: []const u8) !Engine {
+        const deadline: Io.Timeout = (Io.Timeout{ .duration = .{ .raw = options.spawn_timeout, .clock = .awake } }).toDeadline(io);
+        var backoff: i64 = 50;
+        while (true) {
+            if (tryAttach(gpa, io, address, options)) |engine| return engine else |err| switch (err) {
+                error.ConnectionRefused, error.ConnectionResetByPeer, error.EndOfStream, error.Closed => {},
+                else => |e| return e,
+            }
+            if (lockHolder(io, dir) == null) return error.EngineUnavailable;
+            if (deadline.toDurationFromNow(io)) |left| {
+                if (left.raw.nanoseconds <= 0) return error.EngineDataDirBusy;
             }
             try io.sleep(.fromMilliseconds(backoff), .awake);
             backoff = @min(backoff * 2, 1000);
@@ -173,6 +246,36 @@ pub const Engine = struct {
                 if (watchdog) |*w| w.cancel(e.io);
             }
         }
+    }
+
+    /// Take ownership of the engine we spawned (if any): the connection stops treating
+    /// it as its own (no `StopEngine` / reap on deinit). Pair with `terminateChild`.
+    pub fn takeChild(e: *Engine) ?std.process.Child {
+        const child = e.child orelse return null;
+        e.child = null;
+        return child;
+    }
+
+    /// Ask a spawned engine to shut down gracefully (SIGTERM: the engine's
+    /// `shutdown_signal` drains like `StopEngine`). Returns at once.
+    pub fn signalStop(child: *const std.process.Child) void {
+        if (comptime @TypeOf(child.id) != ?std.posix.pid_t) return;
+        const pid = child.id orelse return;
+        std.posix.kill(pid, .TERM) catch {};
+    }
+
+    /// Reap a child after `signalStop`; SIGKILLs it if it is still alive after
+    /// `grace` (an engine that ignores the request).
+    pub fn reapChild(io: Io, child: *std.process.Child, grace: Io.Duration) void {
+        const id = child.id orelse return;
+        var watchdog = io.concurrent(killAfterGrace, .{ io, id, grace }) catch null;
+        _ = child.wait(io) catch child.kill(io);
+        if (watchdog) |*w| w.cancel(io);
+    }
+
+    fn killAfterGrace(io: Io, pid: std.process.Child.Id, grace: Io.Duration) void {
+        io.sleep(grace, .awake) catch return;
+        std.posix.kill(pid, .KILL) catch {};
     }
 
     fn killAfter(io: Io, pid: std.process.Child.Id) void {

@@ -5,17 +5,18 @@
 //!
 //! Order:
 //!   1. `$ZERON_BIN` (taken as is)
-//!   2. next to this executable: `zeron-engine`, then `zeron`
-//!      (inside a macOS bundle that is `Zeron.app/Contents/MacOS/`; packagers
-//!      drop the engine there as `zeron-engine`), and
-//!      `../Resources/bin/zeron` (bundle resources)
-//!   3. every `$PATH` entry: `zeron-engine`, then `zeron`
-//!   4. well-known install locations, since a Finder/launcher-started app
+//!   2. the engine we ship (`zig build zeron-app-bundle` / `zeron-dist` with
+//!      ZERON_SRC; apps/zeron/engine-host): `../Helpers/zeron-engine` (inside
+//!      Zeron.app: `Contents/Helpers/`), then `zeron-engine` next to this
+//!      executable (the Linux tarball)
+//!   3. other siblings: `zeron`, `../Resources/bin/zeron` (bundle resources)
+//!   4. every `$PATH` entry: `zeron-engine`, then `zeron`
+//!   5. well-known install locations, since a Finder/launcher-started app
 //!      gets a minimal PATH: `~/.zeron/app/current/zeron` (the Rust
 //!      installer layout), `~/.local/bin/zeron`, `/opt/homebrew/bin/zeron`,
 //!      `/usr/local/bin/zeron`, and on macOS
 //!      `/Applications/Zeron.app/Contents/MacOS/zeron`
-//!   5. plain `zeron` (spawn resolves it via PATH; fails with a clear error)
+//!   6. plain `zeron` (spawn resolves it via PATH; fails with a clear error)
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -23,6 +24,12 @@ const builtin = @import("builtin");
 pub fn resolve(arena: std.mem.Allocator, io: std.Io, environ: *const std.process.Environ.Map) []const u8 {
     if (environ.get("ZERON_BIN")) |b| return b;
     const exe = std.process.executablePathAlloc(io, arena) catch return "zeron";
+    return resolveFrom(arena, io, environ, exe);
+}
+
+/// `resolve` for the executable at `exe` (tests fake a bundle layout).
+pub fn resolveFrom(arena: std.mem.Allocator, io: std.Io, environ: *const std.process.Environ.Map, exe: []const u8) []const u8 {
+    if (environ.get("ZERON_BIN")) |b| return b;
     const self_real = std.Io.Dir.realPathFileAbsoluteAlloc(io, exe, arena) catch exe;
     const list = candidates(arena, std.fs.path.dirname(exe) orelse ".", environ.get("PATH") orelse "", environ.get("HOME"), builtin.os.tag) catch return "zeron";
     for (list) |c| {
@@ -34,7 +41,7 @@ pub fn resolve(arena: std.mem.Allocator, io: std.Io, environ: *const std.process
     return "zeron";
 }
 
-/// Absolute candidate paths in lookup order (steps 2–4 above).
+/// Absolute candidate paths in lookup order (steps 2–5 above).
 pub fn candidates(
     arena: std.mem.Allocator,
     exe_dir: []const u8,
@@ -44,6 +51,7 @@ pub fn candidates(
 ) ![]const []const u8 {
     var out: std.ArrayList([]const u8) = .empty;
     const j = std.fs.path.join;
+    try out.append(arena, try j(arena, &.{ exe_dir, "..", "Helpers", "zeron-engine" }));
     try out.append(arena, try j(arena, &.{ exe_dir, "zeron-engine" }));
     try out.append(arena, try j(arena, &.{ exe_dir, "zeron" }));
     try out.append(arena, try j(arena, &.{ exe_dir, "..", "Resources", "bin", "zeron" }));
@@ -63,11 +71,12 @@ pub fn candidates(
     return out.items;
 }
 
-test "candidate order: bundle siblings, PATH, install locations" {
+test "candidate order: bundled engine first, then siblings, PATH, install locations" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const list = try candidates(arena_state.allocator(), "/Applications/Zeron.app/Contents/MacOS", "/usr/bin:rel:/bin", "/Users/me", .macos);
     const want = [_][]const u8{
+        "/Applications/Zeron.app/Contents/MacOS/../Helpers/zeron-engine",
         "/Applications/Zeron.app/Contents/MacOS/zeron-engine",
         "/Applications/Zeron.app/Contents/MacOS/zeron",
         "/Applications/Zeron.app/Contents/MacOS/../Resources/bin/zeron",
@@ -94,4 +103,35 @@ test "resolve skips our own executable" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     try std.testing.expectEqualStrings("/x/zeron", resolve(arena_state.allocator(), std.testing.io, &env));
+}
+
+test "resolveFrom: the bundled engine wins over PATH and installed apps; never ourselves" {
+    const io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const base = try tmp.dir.realPathFileAlloc(io, ".", arena);
+    const script = "#!/bin/sh\nexit 0\n";
+    for ([_][]const u8{ "App/Contents/MacOS/zeron", "App/Contents/Helpers/zeron-engine", "bin/zeron" }) |rel| {
+        if (std.fs.path.dirname(rel)) |d| try tmp.dir.createDirPath(io, d);
+        try tmp.dir.writeFile(io, .{ .sub_path = rel, .data = script, .flags = .{ .permissions = .executable_file } });
+    }
+    const exe = try std.fs.path.join(arena, &.{ base, "App/Contents/MacOS/zeron" });
+    var env: std.process.Environ.Map = .init(std.testing.allocator);
+    defer env.deinit();
+    try env.put("PATH", try std.fs.path.join(arena, &.{ base, "bin" }));
+    try env.put("HOME", base);
+    const got = resolveFrom(arena, io, &env, exe);
+    try std.testing.expectEqualStrings(try std.fs.path.join(arena, &.{ base, "App/Contents/MacOS/../Helpers/zeron-engine" }), got);
+
+    // Without the bundled engine: our own `zeron` sibling is skipped, PATH wins.
+    try tmp.dir.deleteFile(io, "App/Contents/Helpers/zeron-engine");
+    const fallback = resolveFrom(arena, io, &env, exe);
+    try std.testing.expectEqualStrings(try std.fs.path.join(arena, &.{ base, "bin/zeron" }), fallback);
+
+    // ZERON_BIN still overrides everything.
+    try env.put("ZERON_BIN", "/x/zeron");
+    try std.testing.expectEqualStrings("/x/zeron", resolveFrom(arena, io, &env, exe));
 }

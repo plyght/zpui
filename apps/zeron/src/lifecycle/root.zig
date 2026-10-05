@@ -174,6 +174,15 @@ pub fn install(app: *App, opts: Options) !void {
             log.info("quit", .{});
         }
     }.f);
+    // Stop the engine this client spawned (the bundled `zeron-engine headless`) on every
+    // platform; macOS `terminate:` never reaches the entity teardown that used to do it.
+    try app.onQuitAsync({}, struct {
+        fn f(_: void, a: *App) zpui.QuitTeardown {
+            const l = get(a) orelse return .none;
+            const engine = l.state.read(a).engine;
+            return model.EngineState.quitTeardown(engine, a);
+        }
+    }.f);
     try app.onSystemWake({}, struct {
         fn f(_: void, a: *App) void {
             if (app_update.AppUpdate.global(a)) |u| u.update(a, app_update.AppUpdate.poke, .{});
@@ -463,4 +472,5 @@ test {
     _ = window_state;
     _ = log_file;
     _ = @import("lifecycle_test.zig");
+    _ = @import("engine_lifecycle_test.zig");
 }

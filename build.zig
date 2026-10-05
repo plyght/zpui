@@ -895,6 +895,9 @@ fn addZeronRightPane(
 ///   `zig build zeron-dist` (Linux) → zig-out/zeron-<version>-linux-<arch>.tar.gz
 ///     (apps/zeron/scripts/linux-dist.sh: binary + desktop entry + icon + licenses).
 /// `-Dzeron-version=` sets the bundle/tarball version (default: the Rust app's).
+/// `-Dzeron-src=<zeron checkout>` (or env ZERON_SRC / ZERON_ENGINE) bundles the engine
+/// (`zeron-engine`, apps/zeron/engine-host via apps/zeron/scripts/build-engine.sh) so the
+/// app needs no Rust Zeron install; pass the commit tools/upstream/map.json pins.
 fn addZeronPackaging(b: *std.Build, target: std.Build.ResolvedTarget) void {
     const os = target.result.os.tag;
     if (os != .linux and os != .macos) return;
@@ -911,6 +914,8 @@ fn addZeronPackaging(b: *std.Build, target: std.Build.ResolvedTarget) void {
     run.addDirectoryArg(b.graph.path(.install_prefix, ""));
     run.addArgs(&.{ arch, version });
     run.has_side_effects = true;
+    if (b.option([]const u8, "zeron-src", "zeron checkout to build the bundled engine from (default: env ZERON_SRC)")) |src|
+        run.setEnvironmentVariable("ZERON_SRC", src);
     run.step.dependOn(&zeron_step.step);
     b.step(name, desc).dependOn(&run.step);
 }

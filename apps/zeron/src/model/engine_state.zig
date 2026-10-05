@@ -11,7 +11,16 @@
 //! (`500ms << min(attempt, 4)`, capped at 8s — the terminal panel's curve).
 //! Rust has no whole-connection reconnect (only per-watch resubscribe); a
 //! Zig viewport always talks to an out-of-process engine, so a restarted
-//! daemon must be picked up again.
+//! (or crashed and respawned) engine must be picked up again.
+//!
+//! The engine binary is the one Zeron.app / the Linux tarball ships
+//! (`engine_bin.zig`). An engine that already answers on the port (a Rust
+//! Zeron.app, a daemon, another window's spawn) is attached to, never
+//! replaced; one that holds the data dir lock but is still starting is waited
+//! for (`ConnectOptions.data_dir`). On quit, `quitTeardown` (an
+//! `App.onQuitAsync` listener, lifecycle/root.zig) stops the engine *we*
+//! spawned on every platform: SIGTERM (the engine's graceful
+//! `shutdown_signal`) right away, then a bounded reap.
 //!
 //! ## Threading
 //! The RPC client's reader thread fires `Waker.onWake` after delivering
@@ -302,6 +311,9 @@ pub const Config = struct {
     wake_mode: WakeMode = .dispatch,
     spawn_timeout_ms: i64 = 30_000,
     ready_timeout_ms: i64 = 60_000,
+    /// The engine's data dir, for the `engine.lock` probe (borrowed). Null: derived
+    /// from `spawn_environ` (`ZERON_DATA_DIR`, else `$HOME/.zeron`) when spawning.
+    data_dir: ?[]const u8 = null,
 };
 
 pub const EngineEvent = union(enum) {
@@ -328,11 +340,22 @@ pub const EngineState = struct {
     retry_task: Task(void) = .none,
     pending: std.ArrayList(PendingCall) = .empty,
     self_id: EntityId,
+    /// `config.data_dir` when derived from `spawn_environ` (owned).
+    owned_data_dir: ?[]u8 = null,
+    /// Quit has begun: no more connects / reconnects.
+    quitting: bool = false,
 
     pub const Events = .{EngineEvent};
 
     pub fn init(io: Io, config: Config, cx: *Context(EngineState)) !EngineState {
         var self: EngineState = .{ .gpa = cx.gpa(), .io = io, .config = config, .self_id = cx.entityId() };
+        if (config.data_dir == null and config.zeron_path != null) if (config.spawn_environ) |env| {
+            if (@import("settings.zig").dataDir(self.gpa, env, null)) |dir| {
+                self.owned_data_dir = dir;
+                self.config.data_dir = dir;
+            } else |_| {}
+        };
+        errdefer if (self.owned_data_dir) |d| self.gpa.free(d);
         if (config.autoconnect) try self.startConnect(cx);
         return self;
     }
@@ -343,6 +366,43 @@ pub const EngineState = struct {
         self.dropConnection();
         self.pending.deinit(self.gpa);
         if (self.failed_message) |m| self.gpa.free(m);
+        if (self.owned_data_dir) |d| self.gpa.free(d);
+    }
+
+    // ---- quit -----------------------------------------------------------------------
+
+    /// Reaps the engine we spawned in the background (the quit teardown's task).
+    const Reap = struct {
+        io: Io,
+        child: std.process.Child,
+        pub fn run(r: *Reap) void {
+            engine_mod.Engine.reapChild(r.io, &r.child, .fromSeconds(5));
+        }
+    };
+
+    /// `App.onQuitAsync` listener: stop connecting, and stop the engine this client
+    /// spawned (never one it merely attached to). The SIGTERM goes out here, on the
+    /// main thread, so it is delivered even when the exit does not wait for the reap
+    /// (gpui's 200 ms `SHUTDOWN_TIMEOUT`); the reap runs on the background executor.
+    pub fn quitTeardown(entity: Entity(EngineState), app: *App) zpui.lifecycle.QuitTeardown {
+        var child: ?std.process.Child = null;
+        {
+            var l = entity.lease(app);
+            defer l.end();
+            const self = l.value;
+            self.quitting = true;
+            self.connect_task.cancel();
+            self.retry_task.cancel();
+            if (self.conn) |c| if (c.stop_spawned) {
+                child = c.engine.takeChild();
+            };
+        }
+        var ch = child orelse return .none;
+        engine_mod.Engine.signalStop(&ch);
+        log.info("stopping the engine we started (pid {any})", .{ch.id});
+        const io = entity.read(app).io;
+        const task = app.backgroundExecutor().spawn(Reap{ .io = io, .child = ch }) catch return .none;
+        return .of(task);
     }
 
     // ---- queries --------------------------------------------------------------------
@@ -393,6 +453,7 @@ pub const EngineState = struct {
         inherit_child_output: bool,
         waker: *Waker,
         stop_spawned: bool,
+        data_dir: ?[]const u8,
 
         pub fn run(j: *ConnectJob) ConnectResult {
             const options: engine_mod.ConnectOptions = .{
@@ -403,6 +464,7 @@ pub const EngineState = struct {
                 .ready_timeout = .fromMilliseconds(j.ready_timeout_ms),
                 .inherit_child_output = j.inherit_child_output,
                 .wake = j.waker.hook(),
+                .data_dir = j.data_dir,
             };
             const engine = engine_mod.Engine.connect(j.gpa, j.io, options) catch |err| {
                 return .{ .err = err };
@@ -430,6 +492,7 @@ pub const EngineState = struct {
     };
 
     fn startConnect(self: *EngineState, cx: *Context(EngineState)) !void {
+        if (self.quitting) return;
         self.connect_task.cancel();
         const waker = try Waker.create(self.gpa, cx.app, self.self_id, self.config.wake_mode);
         errdefer waker.release();
@@ -444,6 +507,7 @@ pub const EngineState = struct {
             .spawn_timeout_ms = self.config.spawn_timeout_ms,
             .ready_timeout_ms = self.config.ready_timeout_ms,
             .inherit_child_output = self.config.inherit_child_output,
+            .data_dir = self.config.data_dir,
         }, onConnected);
     }
 
@@ -478,6 +542,8 @@ pub const EngineState = struct {
     pub fn failureMessage(gpa: Allocator, err: anyerror, zeron_path: ?[]const u8) ?[]u8 {
         if (err == error.EngineBinaryNotFound)
             return std.fmt.allocPrint(gpa, "The zeron engine is not running and `{s} headless` could not be started (binary not found). Install zeron or set ZERON_BIN.", .{zeron_path orelse "zeron"}) catch null;
+        if (err == error.EngineDataDirBusy)
+            return gpa.dupe(u8, "Another zeron engine holds this data dir but is not answering on the IPC port (a Zeron app or daemon using a different ZERON_IPC_PORT?). Quit it or use the same port.") catch null;
         return std.fmt.allocPrint(gpa, "{t}", .{err}) catch null;
     }
 
@@ -491,7 +557,7 @@ pub const EngineState = struct {
     }
 
     fn scheduleReconnect(self: *EngineState, cx: *Context(EngineState)) void {
-        if (!self.config.reconnect) return;
+        if (!self.config.reconnect or self.quitting) return;
         self.retry_task.cancel();
         const delay = backoffMs(self.attempt) * std.time.ns_per_ms;
         self.attempt +|= 1;
