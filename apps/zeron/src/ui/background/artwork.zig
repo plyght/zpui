@@ -20,6 +20,10 @@ pub const all_effects = [_]Effect{ .none, .dither, .ascii, .halftone, .scanlines
 
 /// Longest proxy side (`image.thumbnail(2048, 2048)`).
 pub const proxy_side: u32 = 2048;
+/// Longest proxy side of a moving background's frames (zpui-only: each
+/// frame is proxied and rendered on a worker, so it stays cheap; stills keep
+/// Rust's 2048).
+pub const motion_proxy_side: u32 = 1024;
 
 /// An RGBA image (straight alpha, row-major).
 pub const Rgba = struct {
@@ -202,7 +206,12 @@ pub const Proxy = struct {
 
     /// `source_from_image`.
     pub fn fromImage(gpa: Allocator, image: Rgba) Allocator.Error!Proxy {
-        const thumb = try thumbnail(gpa, image, proxy_side, proxy_side);
+        return fromImageSized(gpa, image, proxy_side);
+    }
+
+    /// `fromImage` with another longest side (moving backgrounds' frames).
+    pub fn fromImageSized(gpa: Allocator, image: Rgba, side: u32) Allocator.Error!Proxy {
+        const thumb = try thumbnail(gpa, image, side, side);
         errdefer gpa.free(thumb.pixels);
         const l = try gpa.alloc(u8, thumb.pixels.len);
         for (l, thumb.pixels) |*o, p| o.* = luma(p);

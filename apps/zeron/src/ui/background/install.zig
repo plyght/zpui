@@ -23,6 +23,9 @@ const model = @import("zeron_model");
 const zt = @import("zeron_theme");
 const artwork = @import("artwork.zig");
 const cache = @import("cache.zig");
+const anim = @import("anim_decode.zig");
+const video = @import("video.zig");
+const player = @import("player.zig");
 const store = @import("../settings/store.zig");
 
 const App = zpui.App;
@@ -108,15 +111,21 @@ pub const Prepared = struct {
     name: []u8,
     /// False in fixture mode: `path` is the source itself.
     managed: bool,
+    /// A moving background's managed copy (`path` is then its poster still).
+    motion: ?[]u8 = null,
 
     pub fn discard(self: *Prepared, gpa: Allocator, io: std.Io) void {
-        if (self.managed) std.Io.Dir.cwd().deleteFile(io, self.path) catch {};
+        if (self.managed) {
+            std.Io.Dir.cwd().deleteFile(io, self.path) catch {};
+            if (self.motion) |m| std.Io.Dir.cwd().deleteFile(io, m) catch {};
+        }
         self.free(gpa);
     }
 
     pub fn free(self: *Prepared, gpa: Allocator) void {
         gpa.free(self.path);
         gpa.free(self.name);
+        if (self.motion) |m| gpa.free(m);
         self.* = undefined;
     }
 };
@@ -166,6 +175,190 @@ pub fn prepareFile(gpa: Allocator, io: std.Io, data_dir: ?[]const u8, source: []
     return .{ .path = dest, .name = name, .managed = true };
 }
 
+// ---- moving backgrounds (zpui-only) --------------------------------------------
+
+/// Videos are copied, not read into memory; this caps the managed copy.
+pub const max_video_bytes: u64 = 512 * 1024 * 1024;
+
+/// A background file ready to install: a still (exactly Rust's staging and
+/// decoding), or a moving one with its poster (first frame).
+pub const Loaded = struct {
+    /// Verbatim bytes (empty for a video, which is copied from the source).
+    staged: Staged,
+    /// The still, or the moving file's poster frame.
+    image: artwork.Rgba,
+    motion: ?anim.Kind = null,
+
+    pub fn deinit(self: *Loaded, gpa: Allocator) void {
+        gpa.free(self.staged.bytes);
+        gpa.free(self.staged.name);
+        self.image.deinit(gpa);
+    }
+};
+
+pub const LoadOutcome = union(enum) { ok: Loaded, err: []u8 };
+
+fn headIsVideo(io: std.Io, path: []const u8) bool {
+    const file = std.Io.Dir.cwd().openFile(io, path, .{}) catch return false;
+    defer file.close(io);
+    var buf: [16]u8 = undefined;
+    const n = file.readPositionalAll(io, &buf, 0) catch return false;
+    return anim.looksLikeVideo(buf[0..n]);
+}
+
+fn isAnimatableImage(path: []const u8) bool {
+    const ext = std.fs.path.extension(path);
+    if (ext.len < 2) return false;
+    for (anim.image_extensions) |e| if (std.ascii.eqlIgnoreCase(ext[1..], e)) return true;
+    return false;
+}
+
+fn errOut(gpa: Allocator, comptime f: []const u8, args: anytype) Allocator.Error!LoadOutcome {
+    return .{ .err = try std.fmt.allocPrint(gpa, f, args) };
+}
+
+/// Stage and decode `source` (worker-safe). Stills follow Rust exactly
+/// (`stage_file_verbatim` + `decode`); GIF / APNG / animated WebP / video
+/// become moving backgrounds.
+pub fn load(gpa: Allocator, io: std.Io, source: []const u8) Allocator.Error!LoadOutcome {
+    const display = att.nameFromPath(source);
+    if (anim.isVideoExtension(source) or (att.Format.fromPath(source) == null and headIsVideo(io, source))) {
+        const st = std.Io.Dir.cwd().statFile(io, source, .{}) catch return errOut(gpa, "{s} could not be read.", .{display});
+        if (st.kind != .file) return errOut(gpa, "{s} could not be read.", .{display});
+        if (st.size > max_video_bytes) return errOut(gpa, "{s} is too large (512 MB max).", .{display});
+        const poster = video.firstFrame(gpa, source) catch |err| return switch (err) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.Unsupported => .{ .err = try gpa.dupe(u8, video.msg_unsupported) },
+            error.InvalidVideo => .{ .err = try gpa.dupe(u8, video.msg_undecodable) },
+        };
+        return .{ .ok = .{ .staged = .{ .bytes = &.{}, .name = try gpa.dupe(u8, display) }, .image = poster, .motion = .video } };
+    }
+    // An animated image above the attachment cap (a still that size keeps Rust's error).
+    if (isAnimatableImage(source)) big: {
+        const st = std.Io.Dir.cwd().statFile(io, source, .{}) catch break :big;
+        if (st.size <= att.max_attachment_bytes or st.size > player.max_image_bytes) break :big;
+        const bytes = std.Io.Dir.cwd().readFileAlloc(io, source, gpa, .limited(player.max_image_bytes)) catch break :big;
+        const kind = anim.classify(bytes);
+        if (!kind.isMotion() or kind == .video) {
+            gpa.free(bytes);
+            break :big;
+        }
+        const poster = anim.firstFrame(gpa, bytes, kind) catch {
+            gpa.free(bytes);
+            return .{ .err = try gpa.dupe(u8, msg_unsupported) };
+        };
+        const name = gpa.dupe(u8, display) catch |e| {
+            gpa.free(bytes);
+            return e;
+        };
+        return .{ .ok = .{ .staged = .{ .bytes = bytes, .name = name }, .image = poster, .motion = kind } };
+    }
+    const staged = switch (stageVerbatim(gpa, io, source) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.Failed => return .{ .err = try gpa.dupe(u8, msg_unsupported) },
+    }) {
+        .ok => |v| v,
+        .err => |m| return .{ .err = m },
+    };
+    const kind = anim.classify(staged.bytes);
+    const still = artwork.decode(gpa, staged.bytes);
+    if (kind == .gif or kind == .apng or kind == .webp) {
+        // Moving: the poster is the animation's first composited frame.
+        if (anim.firstFrame(gpa, staged.bytes, kind)) |poster| {
+            if (still) |img| {
+                var i = img;
+                i.deinit(gpa);
+            } else |_| {}
+            return .{ .ok = .{ .staged = staged, .image = poster, .motion = kind } };
+        } else |_| {}
+    }
+    const image = still catch {
+        gpa.free(staged.bytes);
+        gpa.free(staged.name);
+        return .{ .err = try gpa.dupe(u8, msg_unsupported) };
+    };
+    return .{ .ok = .{ .staged = staged, .image = image } };
+}
+
+fn motionExtension(kind: anim.Kind, name: []const u8) []const u8 {
+    const raw = std.fs.path.extension(name);
+    const ext = if (raw.len > 1) raw[1..] else "";
+    return switch (kind) {
+        .gif => "gif",
+        // Never `.png`: that is the poster's name.
+        .apng => "apng",
+        .webp => "webp",
+        .video => if (ext.len > 0 and ext.len <= 5) ext else "mp4",
+        .still => "png",
+    };
+}
+
+fn writeAtomic(io: std.Io, dest: []const u8, tmp: []const u8, data: ?[]const u8, copy_from: ?[]const u8) bool {
+    const cwd = std.Io.Dir.cwd();
+    if (data) |d| {
+        cwd.writeFile(io, .{ .sub_path = tmp, .data = d }) catch {
+            cwd.deleteFile(io, tmp) catch {};
+            return false;
+        };
+    } else {
+        std.Io.Dir.copyFile(cwd, copy_from.?, cwd, tmp, io, .{}) catch {
+            cwd.deleteFile(io, tmp) catch {};
+            return false;
+        };
+    }
+    std.Io.Dir.rename(cwd, tmp, cwd, dest, io) catch {
+        cwd.deleteFile(io, tmp) catch {};
+        return false;
+    };
+    return true;
+}
+
+/// `prepareFile` for any loaded background: a moving one gets two managed
+/// files sharing one id: `<id>.png` (the poster, the setting's `path`, which
+/// Rust shows) and `<id>.<gif|apng|webp|mp4|…>` (`motionPath`).
+pub fn prepareLoaded(gpa: Allocator, io: std.Io, data_dir: ?[]const u8, source: []const u8, loaded: *const Loaded) error{ OutOfMemory, Failed }!Prepared {
+    const kind = loaded.motion orelse return prepareFile(gpa, io, data_dir, source, loaded.staged);
+    const name = try gpa.dupe(u8, loaded.staged.name);
+    errdefer gpa.free(name);
+    const dir = data_dir orelse {
+        const path = try gpa.dupe(u8, source);
+        errdefer gpa.free(path);
+        return .{ .path = path, .name = name, .managed = false, .motion = try gpa.dupe(u8, source) };
+    };
+    const folder = try std.fs.path.join(gpa, &.{ dir, backgrounds_dir });
+    defer gpa.free(folder);
+    std.Io.Dir.cwd().createDirPath(io, folder) catch return error.Failed;
+    var id: [36]u8 = undefined;
+    att.uuidV4(io, &id);
+    const motion_file = try std.fmt.allocPrint(gpa, "{s}{s}.{s}", .{ managed_prefix, &id, motionExtension(kind, loaded.staged.name) });
+    defer gpa.free(motion_file);
+    const motion = try std.fs.path.join(gpa, &.{ folder, motion_file });
+    errdefer gpa.free(motion);
+    const poster_file = try std.fmt.allocPrint(gpa, "{s}{s}.png", .{ managed_prefix, &id });
+    defer gpa.free(poster_file);
+    const poster = try std.fs.path.join(gpa, &.{ folder, poster_file });
+    errdefer gpa.free(poster);
+    const tmp = try std.fmt.allocPrint(gpa, "{s}.tmp", .{motion});
+    defer gpa.free(tmp);
+    if (!writeAtomic(io, motion, tmp, if (kind == .video) null else loaded.staged.bytes, source)) return error.Failed;
+    const img = loaded.image;
+    const bgra = try gpa.alloc(u8, img.pixels.len * 4);
+    defer gpa.free(bgra);
+    for (img.pixels, 0..) |p, i| bgra[i * 4 ..][0..4].* = .{ p[2], p[1], p[0], p[3] };
+    const png = zpui.image.encodePng(gpa, bgra, img.width, img.height, .bgra) catch {
+        std.Io.Dir.cwd().deleteFile(io, motion) catch {};
+        return error.Failed;
+    };
+    defer gpa.free(png);
+    const ptmp = try std.fmt.allocPrint(gpa, "{s}.tmp", .{poster});
+    defer gpa.free(ptmp);
+    if (!writeAtomic(io, poster, ptmp, png, null)) {
+        std.Io.Dir.cwd().deleteFile(io, motion) catch {};
+        return error.Failed;
+    }
+    return .{ .path = poster, .name = name, .managed = true, .motion = motion };
+}
+
 /// Only copies directly inside `{data_dir}/new-thread-backgrounds` are disposable.
 pub fn isManaged(data_dir: []const u8, path: []const u8) bool {
     const parent = std.fs.path.dirname(path) orelse return false;
@@ -176,8 +369,11 @@ pub fn isManaged(data_dir: []const u8, path: []const u8) bool {
 fn removeManaged(app: *App, bg: ?model.settings.NewThreadComposerBackground) void {
     const b = bg orelse return;
     cache.forget(app, b.path);
+    player.forget(app, b.path);
+    if (b.motionPath) |m| player.forget(app, m);
     const dir = dataDir(app) orelse return;
     if (isManaged(dir, b.path)) std.Io.Dir.cwd().deleteFile(ioOf(app), b.path) catch {};
+    if (b.motionPath) |m| if (isManaged(dir, m)) std.Io.Dir.cwd().deleteFile(ioOf(app), m) catch {};
 }
 
 /// Write `next` to disk now (no-op for an in-memory store).
@@ -190,7 +386,7 @@ fn persist(app: *App, next: *const UiSettings) bool {
 
 // ---- commit / remove ----------------------------------------------------------
 
-const CommitCtx = struct { source: []const u8, path: []const u8, name: []const u8, color: ?zt.Color };
+const CommitCtx = struct { source: []const u8, path: []const u8, name: []const u8, color: ?zt.Color, motion: ?[]const u8 = null };
 
 fn commitMut(c: CommitCtx, s: *UiSettings, a: Allocator) void {
     var history = s.wallpaperHistory;
@@ -203,6 +399,7 @@ fn commitMut(c: CommitCtx, s: *UiSettings, a: Allocator) void {
         .path = a.dupe(u8, c.path) catch return,
         .name = a.dupe(u8, c.name) catch return,
         .adjustment = .{},
+        .motionPath = if (c.motion) |m| (a.dupe(u8, m) catch return) else null,
     };
 }
 
@@ -216,7 +413,7 @@ pub fn commit(app: *App, source: []const u8, prepared: *Prepared, color: ?zt.Col
     var arena = std.heap.ArenaAllocator.init(gpa);
     defer arena.deinit();
     var next = current.*;
-    const ctx: CommitCtx = .{ .source = source, .path = prepared.path, .name = prepared.name, .color = color };
+    const ctx: CommitCtx = .{ .source = source, .path = prepared.path, .name = prepared.name, .color = color, .motion = prepared.motion };
     commitMut(ctx, &next, arena.allocator());
     if (!persist(app, &next)) {
         prepared.discard(gpa, io);
@@ -225,8 +422,16 @@ pub fn commit(app: *App, source: []const u8, prepared: *Prepared, color: ?zt.Col
     }
     const previous = current.newThreadComposerBackground;
     var prev_copy: ?model.settings.NewThreadComposerBackground = null;
-    if (previous) |p| prev_copy = .{ .path = gpa.dupe(u8, p.path) catch "", .name = "", .adjustment = .{} };
-    defer if (prev_copy) |p| if (p.path.len > 0) gpa.free(p.path);
+    if (previous) |p| prev_copy = .{
+        .path = gpa.dupe(u8, p.path) catch "",
+        .name = "",
+        .adjustment = .{},
+        .motionPath = if (p.motionPath) |m| (gpa.dupe(u8, m) catch null) else null,
+    };
+    defer if (prev_copy) |p| {
+        if (p.path.len > 0) gpa.free(p.path);
+        if (p.motionPath) |m| gpa.free(m);
+    };
     store.update(app, .immediate, ctx, commitMut);
     if (preloaded) |p| cache.install(app, io, prepared.path, p);
     prepared.free(gpa);
@@ -250,6 +455,8 @@ pub fn remove(app: *App) ?[]const u8 {
     if (!persist(app, &next)) return msg_remove_permissions;
     const prev_path = app.gpa.dupe(u8, previous.path) catch return msg_remove_permissions;
     defer app.gpa.free(prev_path);
+    const prev_motion: ?[]u8 = if (previous.motionPath) |m| (app.gpa.dupe(u8, m) catch return msg_remove_permissions) else null;
+    defer if (prev_motion) |m| app.gpa.free(m);
     const Clear = struct {
         fn f(_: void, s: *UiSettings, _: Allocator) void {
             s.newThreadComposerBackground = null;
@@ -258,7 +465,7 @@ pub fn remove(app: *App) ?[]const u8 {
         }
     };
     store.update(app, .immediate, {}, Clear.f);
-    removeManaged(app, .{ .path = prev_path, .name = "" });
+    removeManaged(app, .{ .path = prev_path, .name = "", .motionPath = prev_motion });
     if (store.current(app).theme.wallpaper_theme_colors) store.applyTheme(app);
     app.refreshWindows();
     return null;
@@ -327,24 +534,20 @@ pub fn installWork(gpa: Allocator, io: std.Io, data_dir: ?[]const u8, source: []
             return .{ .err = g.dupe(u8, m) catch @constCast("") };
         }
     }.f;
-    const staged = switch (stageVerbatim(gpa, io, source) catch return dup(gpa, msg_unsupported)) {
-        .ok => |s| s,
+    // Do not persist the candidate until the renderer's decoder accepts these exact bytes.
+    var loaded = switch (load(gpa, io, source) catch return dup(gpa, msg_unsupported)) {
+        .ok => |l| l,
         .err => |m| return .{ .err = m },
     };
-    defer {
-        gpa.free(staged.bytes);
-        gpa.free(staged.name);
-    }
-    // Do not persist the candidate until the renderer's decoder accepts these exact bytes.
-    var image = artwork.decode(gpa, staged.bytes) catch return dup(gpa, msg_unsupported);
-    defer image.deinit(gpa);
+    defer loaded.deinit(gpa);
+    const image = loaded.image;
     const color = artwork.colorOf(gpa, image);
     const src: ?*cache.Source = if (artwork.Proxy.fromImage(gpa, image)) |p| (cache.Source.create(gpa, p) catch blk: {
         var pp = p;
         pp.deinit(gpa);
         break :blk null;
     }) else |_| null;
-    const prepared = prepareFile(gpa, io, data_dir, source, staged) catch {
+    const prepared = prepareLoaded(gpa, io, data_dir, source, &loaded) catch {
         if (src) |s| s.release();
         return dup(gpa, msg_permissions);
     };
@@ -418,9 +621,7 @@ const ColorJob = struct {
     path: []u8,
 
     pub fn run(self: *ColorJob) ?zt.Color {
-        const bytes = std.Io.Dir.cwd().readFileAlloc(self.io, self.path, self.gpa, .limited(256 << 20)) catch return null;
-        defer self.gpa.free(bytes);
-        var image = artwork.decode(self.gpa, bytes) catch return null;
+        var image = cache.decodeStill(self.gpa, self.io, self.path) orelse return null;
         defer image.deinit(self.gpa);
         return artwork.colorOf(self.gpa, image);
     }

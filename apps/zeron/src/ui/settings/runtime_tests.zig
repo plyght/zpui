@@ -632,3 +632,115 @@ test "native controls (the macOS path): Appearance switch, pop-up and width slid
     try testing.expectEqual(expected, prefs_mod.get(h.app).transcript_width);
     try testing.expectEqual(@as(f64, expected), tw.control_state[@intFromEnum(width)].?.value);
 }
+
+// ---- moving backgrounds (zpui-only) ------------------------------------------
+
+fn setReduceMotion(_: void, s: *model.UiSettings, _: std.mem.Allocator) void {
+    s.theme.reduce_motion = .on;
+}
+
+fn setPauseInBackground(_: void, s: *model.UiSettings, _: std.mem.Allocator) void {
+    s.theme.pause_animations_in_background = true;
+}
+
+test "Choose image with a GIF animates the new-thread hero; reduce motion shows the still; inactive windows pause" {
+    var h = try Harness.init();
+    defer h.deinit();
+    const bytes = try background.anim_decode.fixtures.gif(gpa, 32, 16, &.{ .{ 255, 0, 0 }, .{ 0, 0, 255 }, .{ 0, 255, 0 } }, &.{ 0, 1, 2 }, 30, 0);
+    defer gpa.free(bytes);
+    try h.tmp.dir.writeFile(io, .{ .sub_path = "loop.gif", .data = bytes });
+    const src = try std.fs.path.join(gpa, &.{ h.root, "loop.gif" });
+    defer gpa.free(src);
+    answer_image = src;
+    prompts.override = answer;
+    _ = h.openSettings(.appearance);
+    act(&h, appearance.chooseBackground);
+    h.frames(3);
+    const bg = h.settings().newThreadComposerBackground orelse return error.NotInstalled;
+    try testing.expectEqualStrings("loop.gif", bg.name);
+    // In-memory store (no data dir): both paths reference the source.
+    try testing.expectEqualStrings(src, bg.motionPath.?);
+    try testing.expect(background.install.available(h.app, h.settings()));
+
+    h.tw().typeKey("escape");
+    h.frames(6);
+    const panel = h.handle.rootView(h.app).?.read(h.app).main;
+    const stream = panel.read(h.app).artwork_ready.current_stream;
+    try testing.expect(stream != 0);
+    // 300 ms frames, 400 ms per harness frame: the hero keeps changing image.
+    var seen: usize = 0;
+    var last = panel.read(h.app).artwork_ready.current;
+    for (0..6) |_| {
+        h.frames(1);
+        const cur = panel.read(h.app).artwork_ready.current;
+        if (cur != last) seen += 1;
+        last = cur;
+        try testing.expectEqual(stream, panel.read(h.app).artwork_ready.current_stream);
+    }
+    try testing.expect(seen >= 3);
+
+    // Pause animations in background + an inactive window: the frame holds.
+    store.update(h.app, .immediate, {}, setPauseInBackground);
+    h.tw().simulateActive(false);
+    h.frames(2);
+    const held = panel.read(h.app).artwork_ready.current;
+    h.frames(3);
+    try testing.expect(panel.read(h.app).artwork_ready.current == held);
+    h.tw().simulateActive(true);
+    h.frames(4);
+    try testing.expect(panel.read(h.app).artwork_ready.current != held);
+
+    // Reduce motion: the still (the GIF's first frame, as Rust shows it).
+    store.update(h.app, .immediate, {}, setReduceMotion);
+    motion.applyAll(h.app);
+    h.frames(4);
+    try testing.expectEqual(@as(u64, 0), panel.read(h.app).artwork_ready.current_stream);
+    try testing.expect(panel.read(h.app).artwork_ready.current != null);
+}
+
+fn imageTiles(window: *zpui.Window) usize {
+    var n: usize = 0;
+    var it = window.sprite_atlas.tiles.keyIterator();
+    while (it.next()) |k| if (k.* == .image) {
+        n += 1;
+    };
+    return n;
+}
+
+test "a streamed animation playing for many loops keeps the atlas bounded" {
+    var h = try Harness.init();
+    defer h.deinit();
+    // Stream (no replay cache): every shown frame is a fresh image.
+    const saved = background.player.loop_budget_bytes;
+    defer background.player.loop_budget_bytes = saved;
+    background.player.loop_budget_bytes = 0;
+    const bytes = try background.anim_decode.fixtures.gif(gpa, 32, 16, &.{ .{ 255, 0, 0 }, .{ 0, 0, 255 }, .{ 0, 255, 0 } }, &.{ 0, 1, 2 }, 30, 0);
+    defer gpa.free(bytes);
+    try h.tmp.dir.writeFile(io, .{ .sub_path = "long.gif", .data = bytes });
+    const src = try std.fs.path.join(gpa, &.{ h.root, "long.gif" });
+    defer gpa.free(src);
+    answer_image = src;
+    prompts.override = answer;
+    _ = h.openSettings(.appearance);
+    act(&h, appearance.chooseBackground);
+    h.frames(3);
+    h.tw().typeKey("escape");
+    h.frames(6);
+    const window = h.window();
+    const motion_path = h.settings().newThreadComposerBackground.?.motionPath.?;
+    const shown0 = background.player.framesShown(h.app, motion_path);
+    var peak_tiles: usize = 0;
+    var peak_slots: u32 = 0;
+    for (0..120) |_| {
+        h.frames(1);
+        peak_tiles = @max(peak_tiles, imageTiles(window));
+        peak_slots = @max(peak_slots, window.sprite_atlas.textureSlots(.polychrome));
+    }
+    // ~100 frames (≈ 33 loops) went by…
+    try testing.expect(background.player.framesShown(h.app, motion_path) - shown0 >= 90);
+    // …yet only the frames on screen (current + crossfade partner + the
+    // settings thumbnail and a few icons) hold tiles, and textures don't grow.
+    const final_tiles = imageTiles(window);
+    try testing.expect(peak_tiles >= 1 and final_tiles <= peak_tiles and peak_tiles <= 12);
+    try testing.expect(peak_slots <= 3);
+}

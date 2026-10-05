@@ -291,11 +291,13 @@ fn materialCard(v: *SettingsView, t: *const Theme, s: *const UiSettings, cx: *Co
         if (thumb) |img| tile = tile.child(zpui.img(img).size(px(34)).rounded(px(9)).objectFit(.cover));
         row = row.child(tile);
     };
-    var name_meta = [_]w.Fragment{.{ .text = if (current) |bg| bg.name else "" }};
+    // zpui-only: a moving file that can't play here (e.g. a video without a decoder) shows its poster.
+    const motion_failure: ?[]const u8 = if (current) |bg| background.player.failure(app, background.player.motionPath(bg)) else null;
+    var name_meta = [_]w.Fragment{ .{ .text = if (current) |bg| bg.name else "" }, .{ .text = motion_failure orelse "" } };
     const meta: []const w.Fragment = if (current == null)
         &.{.{ .text = "No image selected" }}
     else if (available)
-        &name_meta
+        name_meta[0..if (motion_failure != null) 2 else 1]
     else
         &.{ .{ .text = "Image unavailable" }, .{ .text = "Choose a replacement or remove it." } };
     var bg_actions = div().maxWFull().flex().flexWrap().itemsCenter().gap(px(8));

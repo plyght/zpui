@@ -154,6 +154,9 @@ pub const Readiness = struct {
     has_current_path: bool = false,
     has_previous_path: bool = false,
     started: ?u64 = null,
+    /// zpui-only: the moving background `current` is a frame of (0 = a still).
+    /// Its next frames replace `current` in place instead of crossfading.
+    current_stream: u64 = 0,
 
     pub const Frame = struct {
         current: ?*RenderImage,
@@ -192,6 +195,14 @@ pub const Readiness = struct {
     }
 
     pub fn frame(self: *Readiness, app: ?*App, gpa: std.mem.Allocator, image: ?*RenderImage, path: ?[]const u8, adjustment: Adjustment, enabled: bool, reduced: bool, now: u64) Frame {
+        return self.frameStream(app, gpa, image, path, adjustment, enabled, reduced, now, 0);
+    }
+
+    /// `frame` for an image that may be a frame of the moving background `stream`.
+    pub fn frameStream(self: *Readiness, app: ?*App, gpa: std.mem.Allocator, image: ?*RenderImage, path: ?[]const u8, adjustment: Adjustment, enabled: bool, reduced: bool, now: u64, stream: u64) Frame {
+        if (stream != 0 and enabled and self.current != null and self.current_stream == stream and samePath(&self.current_path, self.has_current_path, path)) {
+            if (image) |img| self.setImage(app, .current, img);
+        }
         const progress: f32 = if (self.started) |s| mixAt(s, now) else 1.0;
         if (reduced or progress >= 1.0) {
             self.setImage(app, .previous, null);
@@ -213,6 +224,7 @@ pub const Readiness = struct {
                 std.mem.swap(std.ArrayList(u8), &self.previous_path, &self.current_path);
                 self.has_previous_path = self.has_current_path;
                 self.setImage(app, .current, target);
+                self.current_stream = if (target != null) stream else 0;
                 self.current_adjustment = adjustment.normalized();
                 self.current_path.clearRetainingCapacity();
                 self.has_current_path = false;

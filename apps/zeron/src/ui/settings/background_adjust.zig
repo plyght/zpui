@@ -285,8 +285,9 @@ pub fn render(v: *SettingsView, window: *Window, cx: *Context(SettingsView)) ?zp
     const s = store.current(cx);
     const same_image = if (s.newThreadComposerBackground) |bg| std.mem.eql(u8, bg.path, d.path) else false;
     const available = same_image and background.install.available(app, s);
+    // A moving background previews its animation (`player.artwork`).
     const image: ?*RenderImage = if (available)
-        background.cache.prepare(app, background.install.ioOf(app), d.path, s.newThreadBackgroundEffect, t.appearance == .light)
+        background.player.artwork(app, background.install.ioOf(app), s.newThreadComposerBackground.?, s.newThreadBackgroundEffect, t.appearance == .light, window, cx.entityId()).image
     else
         null;
     d.source = if (image) |img| blk: {

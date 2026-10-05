@@ -96,6 +96,10 @@ pub const NewThreadComposerBackground = struct {
     /// Original file name shown in Appearance settings.
     name: []const u8,
     adjustment: NewThreadBackgroundAdjustment = .{},
+    /// zpui-only: the managed copy of a moving background (GIF / APNG /
+    /// animated WebP / video) whose poster still is `path`. Rust ignores the
+    /// field (and shows the poster); omitted from the JSON when null.
+    motionPath: ?[]const u8 = null,
 };
 
 pub const NewThreadBackgroundEffect = enum {

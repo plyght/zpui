@@ -42,6 +42,17 @@ const char* zpui_stbi_failure_reason(void);
 uint8_t* zpui_webp_load_rgba(const uint8_t* data, size_t len, int* width, int* height);
 void zpui_decode_free(void* ptr);
 
+/* Frame-at-a-time GIF decoding (stb_image's compositor, bounded memory):
+ * `data` must outlive the stream. `next` returns the composited RGBA8 canvas
+ * (width*height*4, owned by the stream, valid until the next call) and the
+ * frame delay in ms, or NULL at the end (*done = 1) or on error (*done = 0).
+ * `rewind` restarts at the first frame. */
+typedef struct zpui_gif_stream zpui_gif_stream;
+zpui_gif_stream* zpui_gif_stream_open(const uint8_t* data, int len);
+const uint8_t* zpui_gif_stream_next(zpui_gif_stream* s, int* width, int* height, int* delay_ms, int* done);
+void zpui_gif_stream_rewind(zpui_gif_stream* s);
+void zpui_gif_stream_close(zpui_gif_stream* s);
+
 #ifdef __cplusplus
 }
 #endif

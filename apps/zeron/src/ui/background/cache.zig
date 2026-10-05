@@ -16,6 +16,8 @@
 const std = @import("std");
 const zpui = @import("zpui");
 const artwork = @import("artwork.zig");
+const anim = @import("anim_decode.zig");
+const video = @import("video.zig");
 
 const App = zpui.App;
 const Allocator = std.mem.Allocator;
@@ -228,11 +230,25 @@ fn markFailed(app: *App, path: []const u8) void {
     if (c.index(path)) |i| c.entries.items[i].state = .failed;
 }
 
-/// Read + decode + proxy, off the main thread.
-pub fn loadSource(gpa: Allocator, io: std.Io, path: []const u8) ?*Source {
+/// The still of `path` (worker-safe): Rust's decode, else (zpui-only) the
+/// first frame of an animated WebP or a video, so a moving file referenced
+/// directly still shows its poster.
+pub fn decodeStill(gpa: Allocator, io: std.Io, path: []const u8) ?artwork.Rgba {
+    if (anim.isVideoExtension(path)) return video.firstFrame(gpa, path) catch null;
     const bytes = std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(256 << 20)) catch return null;
     defer gpa.free(bytes);
-    var image = artwork.decode(gpa, bytes) catch return null;
+    if (artwork.decode(gpa, bytes)) |image| return image else |_| {}
+    const kind = anim.classify(bytes);
+    return switch (kind) {
+        .gif, .apng, .webp => anim.firstFrame(gpa, bytes, kind) catch null,
+        .video => video.firstFrame(gpa, path) catch null,
+        .still => null,
+    };
+}
+
+/// Read + decode + proxy, off the main thread.
+pub fn loadSource(gpa: Allocator, io: std.Io, path: []const u8) ?*Source {
+    var image = decodeStill(gpa, io, path) orelse return null;
     defer image.deinit(gpa);
     const proxy = artwork.Proxy.fromImage(gpa, image) catch return null;
     return Source.create(gpa, proxy) catch {

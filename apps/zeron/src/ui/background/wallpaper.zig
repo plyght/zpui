@@ -22,6 +22,7 @@ const ui = @import("../components/root.zig");
 const artwork = @import("artwork.zig");
 const cache = @import("cache.zig");
 const install = @import("install.zig");
+const anim = @import("anim_decode.zig");
 const store = @import("../settings/store.zig");
 
 const App = zpui.App;
@@ -43,7 +44,9 @@ fn supported(name: []const u8) bool {
     if (ext.len < 2) return false;
     const exts = [_][]const u8{ "png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff" };
     for (exts) |e| if (std.ascii.eqlIgnoreCase(ext[1..], e)) return true;
-    return false;
+    // zpui-only: moving backgrounds (APNG, video).
+    if (std.ascii.eqlIgnoreCase(ext[1..], "apng")) return true;
+    return anim.isVideoExtension(name);
 }
 
 const Ranked = struct { recency: usize, rank: u64, path: []u8 };
@@ -64,7 +67,16 @@ pub fn recency(history: []const []const u8, cool: usize, path: []const u8) usize
     return 0;
 }
 
-pub const Chosen = struct { source: []u8, staged: install.Staged, image: artwork.Rgba };
+pub const Chosen = struct {
+    source: []u8,
+    /// Staged bytes and the still (or a moving file's poster).
+    loaded: install.Loaded,
+
+    pub fn deinit(self: *Chosen, gpa: Allocator) void {
+        gpa.free(self.source);
+        self.loaded.deinit(gpa);
+    }
+};
 
 pub const ChooseError = error{ OutOfMemory, Unreadable, NoImages };
 
@@ -101,21 +113,16 @@ pub fn choose(gpa: Allocator, io: std.Io, folder: []const u8, history: []const [
     for (list.items) |*r| r.recency = recency(history, cool, r.path);
     std.mem.sort(Ranked, list.items, {}, rankedLess);
     for (list.items) |*r| {
-        const staged = switch (install.stageVerbatim(gpa, io, r.path) catch continue) {
-            .ok => |s| s,
+        const loaded = switch (try install.load(gpa, io, r.path)) {
+            .ok => |l| l,
             .err => |m| {
                 gpa.free(m);
                 continue;
             },
         };
-        const image = artwork.decode(gpa, staged.bytes) catch {
-            gpa.free(staged.bytes);
-            gpa.free(staged.name);
-            continue;
-        };
         const source = r.path;
         r.path = try gpa.dupe(u8, ""); // keep the deferred free balanced
-        return .{ .source = source, .staged = staged, .image = image };
+        return .{ .source = source, .loaded = loaded };
     }
     return error.NoImages;
 }
@@ -233,6 +240,7 @@ fn removeOrphanedPreloads(app: *App, key: Key) void {
     var dir = std.Io.Dir.cwd().openDir(io, folder, .{ .iterate = true }) catch return;
     defer dir.close(io);
     const active: ?[]const u8 = if (key.background) |b| std.fs.path.basename(b) else null;
+    const active_motion: ?[]const u8 = if (store.current(app).newThreadComposerBackground) |b| (if (b.motionPath) |m| std.fs.path.basename(m) else null) else null;
     var names: std.ArrayList([]u8) = .empty;
     defer {
         for (names.items) |n| app.gpa.free(n);
@@ -242,6 +250,7 @@ fn removeOrphanedPreloads(app: *App, key: Key) void {
     while (it.next(io) catch null) |e| {
         if (!std.mem.startsWith(u8, e.name, install.managed_prefix)) continue;
         if (active) |a| if (std.mem.eql(u8, a, e.name)) continue;
+        if (active_motion) |a| if (std.mem.eql(u8, a, e.name)) continue;
         names.append(app.gpa, app.gpa.dupe(u8, e.name) catch continue) catch {};
     }
     for (names.items) |n| dir.deleteFile(io, n) catch {};
@@ -341,12 +350,8 @@ fn loadCandidate(gpa: Allocator, io: std.Io, key: Key, history: []const []const 
         error.Unreadable => msg_unreadable_folder,
         else => msg_no_images,
     } };
-    defer {
-        chosen.image.deinit(gpa);
-        gpa.free(chosen.staged.bytes);
-        gpa.free(chosen.staged.name);
-    }
-    const proxy = artwork.Proxy.fromImage(gpa, chosen.image) catch {
+    defer chosen.loaded.deinit(gpa);
+    const proxy = artwork.Proxy.fromImage(gpa, chosen.loaded.image) catch {
         gpa.free(chosen.source);
         return .{ .err = msg_no_images };
     };
@@ -360,7 +365,7 @@ fn loadCandidate(gpa: Allocator, io: std.Io, key: Key, history: []const []const 
         src.adopt(key.effect, key.light, img) catch img.release();
     }
     const color = src.proxy.color();
-    const prepared = install.prepareFile(gpa, io, key.data_dir, chosen.source, chosen.staged) catch {
+    const prepared = install.prepareLoaded(gpa, io, key.data_dir, chosen.source, &chosen.loaded) catch {
         src.release();
         gpa.free(chosen.source);
         return .{ .err = install.msg_permissions };
@@ -478,12 +483,7 @@ test "choose skips unreadable files and recent picks" {
     // With "a" most recent and a cooldown of 1, "b" always wins.
     for (0..4) |_| {
         var c = try choose(gpa, testing.io, folder, &.{a_path});
-        defer {
-            gpa.free(c.source);
-            gpa.free(c.staged.bytes);
-            gpa.free(c.staged.name);
-            c.image.deinit(gpa);
-        }
+        defer c.deinit(gpa);
         try testing.expectEqualStrings("b.png", std.fs.path.basename(c.source));
     }
     try testing.expectError(error.Unreadable, choose(gpa, testing.io, "/nonexistent/zeron-wallpapers", &.{}));

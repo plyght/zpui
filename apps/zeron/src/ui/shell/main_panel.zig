@@ -266,10 +266,11 @@ pub const MainPanel = struct {
         background.wallpaper.preload(app);
         const bg = s.newThreadComposerBackground;
         const light = theme.appearance == .light;
-        const img = if (bg) |b| background.cache.prepare(app, background.install.ioOf(app), b.path, s.newThreadBackgroundEffect, light) else null;
+        // A moving background yields its current frame (`stream` keeps frames from crossfading).
+        const art: background.player.Artwork = if (bg) |b| background.player.artwork(app, background.install.ioOf(app), b, s.newThreadBackgroundEffect, light, window, cx.entityId()) else .{ .image = null };
         const now = app.executor.now();
         const reduced = window.prefersReducedMotion();
-        const frame = self.artwork_ready.frame(app, self.gpa, img, if (bg) |b| b.path else null, if (bg) |b| b.adjustment else .{}, bg != null, reduced, now);
+        const frame = self.artwork_ready.frameStream(app, self.gpa, art.image, if (bg) |b| b.path else null, if (bg) |b| b.adjustment else .{}, bg != null, reduced, now, art.stream);
         if (frame.current == null and frame.previous == null) return null;
         if (frame.active) window.requestAnimationFrame();
         const composer = self.slots.composer_view.read(cx);
