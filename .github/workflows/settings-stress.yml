@@ -23,7 +23,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [macos-15-intel, macos-26-intel, macos-26]
-        data: [fixtures, live]
+        # `live` (no engine) shows no Settings controls; kept selectable via the matrix.
+        data: [fixtures]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:

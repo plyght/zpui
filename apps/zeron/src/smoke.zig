@@ -177,6 +177,7 @@ const SettingsStress = struct {
     step: Step = .open,
     wait: u32 = 0,
     pokes: u64 = 0,
+    ax_nodes: u64 = 0,
 
     const Step = enum { open, visit, poke, unpoke, close };
     const sections = settings_ui.view.Section.all;
@@ -193,6 +194,9 @@ const SettingsStress = struct {
         const s = &state.?;
         var next = self.*;
         win.refresh();
+        // Like an accessibility client (window managers, launchers, password managers
+        // on real Macs): walk the window's AX tree between frames.
+        if (builtin.os.tag == .macos) next.ax_nodes +%= mac_poke.axWalk(win, next.cycle *% 131 +% next.wait +% @as(u32, @truncate(next.pokes)));
         if (next.wait > 0) {
             next.wait -= 1;
             return win.onNextFrame(next, tick);
@@ -233,7 +237,7 @@ const SettingsStress = struct {
                 shell.update(app, shell_mod.Shell.closeSettings, .{win});
                 next.cycle += 1;
                 if (next.cycle >= next.cycles) {
-                    std.debug.print("PASS: zeron smoke: settings stress ({d} cycles, {d} control pokes, {d} attaches)\n", .{ next.cycles, next.pokes, win.native_controls.attach_count });
+                    std.debug.print("PASS: zeron smoke: settings stress ({d} cycles, {d} control pokes, {d} attaches, {d} AX nodes read)\n", .{ next.cycles, next.pokes, win.native_controls.attach_count, next.ax_nodes });
                     s.done.store(true, .release);
                     s.exit_code = 0;
                     return app.quit();
@@ -346,6 +350,42 @@ const mac_poke = if (builtin.os.tag == .macos) struct {
         }
     }
 
+    /// Walk the AX tree from the window (roles, labels, values, frames, parents) plus a
+    /// hit test at a random point; returns the number of elements read.
+    fn axWalk(win: *Window, seed: u64) u64 {
+        const mw = mac.MacWindow.fromWindow(win.platform_window);
+        const pool = objc.AutoreleasePool.push();
+        defer pool.pop();
+        var prng = std.Random.DefaultPrng.init(seed);
+        const rng = prng.random();
+        var budget: u32 = 3000;
+        visit(mw.native_window, 0, &budget);
+        const f = ak.frame(mw.native_window);
+        const p: ak.NSPoint = .{ .x = f.origin.x + rng.float(f64) * f.size.width, .y = f.origin.y + rng.float(f64) * f.size.height };
+        if (mw.native_window.msg(?id, "accessibilityHitTest:", .{p})) |hit| visit(hit, 30, &budget);
+        if (mw.native_window.msg(?id, "accessibilityFocusedUIElement", .{})) |foc| visit(foc, 30, &budget);
+        return 3000 - budget;
+    }
+
+    fn responds(obj: id, comptime sel: [:0]const u8) bool {
+        return objc.fromBOOL(obj.msg(objc.BOOL, "respondsToSelector:", .{objc.sel(sel)}));
+    }
+
+    fn visit(el: id, depth: u32, budget: *u32) void {
+        if (budget.* == 0 or depth > 40) return;
+        budget.* -= 1;
+        inline for (.{ "accessibilityRole", "accessibilitySubrole", "accessibilityRoleDescription", "accessibilityLabel", "accessibilityTitle", "accessibilityValue", "accessibilityHelp", "accessibilityParent", "accessibilityWindow" }) |sel| {
+            if (responds(el, sel)) _ = el.msg(?id, sel, .{});
+        }
+        if (responds(el, "accessibilityFrame")) _ = ak.msgStruct(ak.NSRect, el, "accessibilityFrame", .{});
+        if (responds(el, "isAccessibilityElement")) _ = el.msg(objc.BOOL, "isAccessibilityElement", .{});
+        if (!responds(el, "accessibilityChildren")) return;
+        const kids = el.msg(?id, "accessibilityChildren", .{}) orelse return;
+        const n = kids.msg(NSUInteger, "count", .{});
+        var i: NSUInteger = 0;
+        while (i < n) : (i += 1) visit(kids.msg(id, "objectAtIndex:", .{i}), depth + 1, budget);
+    }
+
     fn log(t: Target, what: []const u8) void {
         std.debug.print("zeron smoke: stress: {t} \"{s}\": {s}\n", .{ t.kind, t.label, what });
     }
@@ -381,6 +421,9 @@ const mac_poke = if (builtin.os.tag == .macos) struct {
     }
 } else struct {
     fn activate(_: *Window) void {}
+    fn axWalk(_: *Window, _: u64) u64 {
+        return 0;
+    }
 };
 
 /// Browser smoke: open the tab, then poll every frame until the page loaded.
