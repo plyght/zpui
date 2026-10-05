@@ -378,9 +378,21 @@ fn flipped(parent_height: f64, b: platform.Bounds) NSRect {
     };
 }
 
-pub fn place(w: *MacWindow, ident: platform.NativeViewId, placement: ?platform.NativeViewPlacement) void {
+/// Every coordinate is finite: Core Animation raises `CALayerInvalidGeometry` (an uncaught
+/// NSException: the app aborts) for a NaN or infinite frame, e.g. from a degenerate layout.
+fn finitePlacement(p: platform.NativeViewPlacement) bool {
+    inline for (.{ p.bounds, p.clip }) |b| {
+        if (!std.math.isFinite(b.origin.x) or !std.math.isFinite(b.origin.y) or
+            !std.math.isFinite(b.size.width) or !std.math.isFinite(b.size.height)) return false;
+    }
+    return std.math.isFinite(p.corner_radius);
+}
+
+pub fn place(w: *MacWindow, ident: platform.NativeViewId, placement_in: ?platform.NativeViewPlacement) void {
     const i = find(w, ident) orelse return;
     const c = w.natives.children.items[i];
+    // A non-finite placement hides the view instead of reaching Core Animation.
+    const placement: ?platform.NativeViewPlacement = if (placement_in) |pl| (if (finitePlacement(pl)) pl else null) else null;
     const p = placement orelse {
         if (c.last != null) {
             if (isFirstResponderWithin(w, c.view)) _ = w.native_window.msg(BOOL, "makeFirstResponder:", .{w.native_view});
