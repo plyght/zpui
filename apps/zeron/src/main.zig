@@ -410,6 +410,7 @@ pub fn main(init: std.process.Init) !void {
         const logs = try std.fs.path.join(arena, &.{ dir, "logs" });
         if (lifecycle.log_file.open(logs, "headed") == null) log.warn("cannot open a log file in {s}", .{logs});
     } else |_| {};
+    lifecycle.log_file.installCrashHandlers(); // fatal signals / NSExceptions into the log
     log.info("zeron {s} starting", .{lifecycle.build_info.version});
 
     const plat = if (is_linux)

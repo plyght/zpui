@@ -10,7 +10,9 @@
 //! `logFn` mirrors every `std.log` line to stderr (std's default) and the file. The
 //! level defaults to `info` like zeron's `EnvFilter` default; `ZERON_LOG=debug|info|
 //! warn|err` overrides it. `panic` writes the message (and return address) into the
-//! file before std's default panic handler prints the trace.
+//! file before std's default panic handler prints the trace. `installCrashHandlers` does
+//! the same for fatal signals (segfaults, aborts inside AppKit) and, on macOS, uncaught
+//! Objective-C exceptions, with a symbolized backtrace.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -241,6 +243,137 @@ pub fn panicFn(msg: []const u8, first_trace_addr: ?usize) noreturn {
 }
 
 // ---------------------------------------------------------------------------------------
+// Native crashes: fatal signals and uncaught Objective-C exceptions
+// ---------------------------------------------------------------------------------------
+//
+// A Zig panic reaches the log through `panicFn`; a segfault, an abort inside AppKit or an
+// uncaught NSException did not, so the log ended at the last ordinary line. These write
+// what they know (signal, fault address, image slide, return addresses with symbols via
+// `backtrace_symbols_fd`; the exception's name, reason and call stack) into the log fd,
+// then hand over to the previous handler (std's segfault trace) or the default action.
+
+const posix = std.posix;
+const fatal_signals = [_]posix.SIG{ .SEGV, .BUS, .ILL, .FPE, .ABRT };
+var previous_actions: [fatal_signals.len]posix.Sigaction = undefined;
+var crash_handlers_installed = false;
+var in_crash = std.atomic.Value(bool).init(false);
+
+extern "c" fn backtrace(buffer: [*]?*anyopaque, size: c_int) c_int;
+extern "c" fn backtrace_symbols_fd(buffer: [*]const ?*anyopaque, size: c_int, fd: c_int) void;
+extern "c" fn _dyld_get_image_vmaddr_slide(image_index: u32) isize;
+
+/// Install the fatal-signal (and, on macOS, uncaught-exception) loggers. Call once, after
+/// `open`; std's own segfault handler stays chained behind ours.
+pub fn installCrashHandlers() void {
+    if (builtin.os.tag != .macos and builtin.os.tag != .linux) return;
+    if (crash_handlers_installed) return;
+    crash_handlers_installed = true;
+    const act: posix.Sigaction = .{
+        .handler = .{ .sigaction = onFatalSignal },
+        .mask = posix.sigemptyset(),
+        .flags = posix.SA.SIGINFO | posix.SA.ONSTACK,
+    };
+    for (fatal_signals, 0..) |sig, i| posix.sigaction(sig, &act, &previous_actions[i]);
+    if (builtin.os.tag == .macos) NSSetUncaughtExceptionHandler(&onUncaughtException);
+}
+
+fn signalName(sig: posix.SIG) []const u8 {
+    return switch (sig) {
+        .SEGV => "SIGSEGV",
+        .BUS => "SIGBUS",
+        .ILL => "SIGILL",
+        .FPE => "SIGFPE",
+        .ABRT => "SIGABRT",
+        else => "signal",
+    };
+}
+
+fn faultAddress(info: *const posix.siginfo_t) usize {
+    return switch (builtin.os.tag) {
+        .macos => @intFromPtr(info.addr),
+        .linux => @intFromPtr(info.fields.sigfault.addr),
+        else => 0,
+    };
+}
+
+/// Write "fatal signal" + a symbolized backtrace into the log (async-signal-safe calls only).
+fn logBacktrace(fd: c.fd_t, header: []const u8) void {
+    var buf: [512]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    writeTimestamp(&w);
+    w.writeAll(" ERROR zeron: ") catch {};
+    w.writeAll(header) catch {};
+    if (builtin.os.tag == .macos) w.print(" (image slide 0x{x})", .{@as(usize, @bitCast(_dyld_get_image_vmaddr_slide(0)))}) catch {};
+    w.writeAll("\n") catch {};
+    writeAll(fd, w.buffered());
+    var frames: [64]?*anyopaque = undefined;
+    const n = backtrace(&frames, frames.len);
+    if (n > 0) backtrace_symbols_fd(&frames, n, fd);
+}
+
+fn onFatalSignal(sig: posix.SIG, info: *const posix.siginfo_t, ctx: ?*anyopaque) callconv(.c) void {
+    const i = for (fatal_signals, 0..) |s, k| {
+        if (s == sig) break k;
+    } else return;
+    const fd = log_fd.load(.acquire);
+    if (fd >= 0 and !in_crash.swap(true, .acq_rel)) {
+        var hb: [128]u8 = undefined;
+        const header = std.fmt.bufPrint(&hb, "fatal signal {s} (fault address 0x{x})", .{ signalName(sig), faultAddress(info) }) catch "fatal signal";
+        logBacktrace(fd, header);
+    }
+    // Hand over: the previous handler (std's trace printer) or the default action.
+    const prev = previous_actions[i];
+    posix.sigaction(sig, &prev, null);
+    if (prev.flags & posix.SA.SIGINFO != 0) {
+        if (prev.handler.sigaction) |f| return @call(.auto, f, .{ sig, info, ctx });
+    }
+    // Default (or plain) action: a fault re-executes and hits it; an abort is re-raised.
+    if (sig == .ABRT or sig == .FPE) _ = c.raise(sig);
+}
+
+// ---- macOS: uncaught Objective-C exceptions ----
+
+extern "c" fn NSSetUncaughtExceptionHandler(handler: ?*const fn (?*anyopaque) callconv(.c) void) void;
+extern "c" fn objc_msgSend() void;
+extern "c" fn sel_registerName(name: [*:0]const u8) ?*anyopaque;
+
+fn msgId(obj: ?*anyopaque, sel: [*:0]const u8) ?*anyopaque {
+    const o = obj orelse return null;
+    const f: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque = @ptrCast(&objc_msgSend);
+    return f(o, sel_registerName(sel));
+}
+
+fn msgUtf8(obj: ?*anyopaque) []const u8 {
+    const s = obj orelse return "(null)";
+    const f: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?[*:0]const u8 = @ptrCast(&objc_msgSend);
+    const p = f(s, sel_registerName("UTF8String")) orelse return "(null)";
+    return std.mem.sliceTo(p, 0);
+}
+
+fn onUncaughtException(exception: ?*anyopaque) callconv(.c) void {
+    const fd = log_fd.load(.acquire);
+    if (fd < 0) return;
+    var buf: [2048]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    writeTimestamp(&w);
+    w.print(" ERROR zeron: uncaught Objective-C exception {s}: {s}\n", .{
+        msgUtf8(msgId(exception, "name")), msgUtf8(msgId(exception, "reason")),
+    }) catch {};
+    writeAll(fd, w.buffered());
+    // `callStackSymbols`: one NSString per frame.
+    const stack = msgId(exception, "callStackSymbols") orelse return;
+    const count_fn: *const fn (?*anyopaque, ?*anyopaque) callconv(.c) usize = @ptrCast(&objc_msgSend);
+    const at_fn: *const fn (?*anyopaque, ?*anyopaque, usize) callconv(.c) ?*anyopaque = @ptrCast(&objc_msgSend);
+    const n = count_fn(stack, sel_registerName("count"));
+    var k: usize = 0;
+    while (k < n and k < 128) : (k += 1) {
+        const line = msgUtf8(at_fn(stack, sel_registerName("objectAtIndex:"), k));
+        writeAll(fd, line);
+        writeAll(fd, "\n");
+    }
+}
+
+// ---------------------------------------------------------------------------------------
 
 const testing = std.testing;
 
@@ -285,4 +418,39 @@ test "ZERON_LOG levels" {
     try testing.expectEqual(@intFromEnum(std.log.Level.warn), min_level.load(.monotonic));
     setLevelFromEnv("bogus");
     try testing.expectEqual(@intFromEnum(std.log.Level.warn), min_level.load(.monotonic));
+}
+
+test "a segfault and an abort are written to the log with a backtrace before the process dies" {
+    if (builtin.os.tag != .linux and builtin.os.tag != .macos) return error.SkipZigTest;
+    for ([_]posix.SIG{ .SEGV, .ABRT }) |which| {
+        var dir_buf: [128]u8 = undefined;
+        const dir = try std.fmt.bufPrint(&dir_buf, "/tmp/zeron-crashlog-{d}-{d}", .{ c.getpid(), @intFromEnum(which) });
+        const pid = c.fork();
+        try testing.expect(pid >= 0);
+        if (pid == 0) {
+            _ = open(dir, "crash") orelse c._exit(3);
+            installCrashHandlers();
+            if (which == .SEGV) {
+                const p: *volatile u8 = @ptrFromInt(8);
+                p.* = 1;
+            }
+            c.abort();
+        }
+        var status: c_int = 0;
+        _ = c.waitpid(pid, &status, 0);
+        try testing.expect(c.W.IFSIGNALED(@bitCast(status)));
+        var file_buf: [256]u8 = undefined;
+        const file = joinZ(&file_buf, &.{ dir, "/zeron-crash.log" }).?;
+        const fd = c.open(file, .{ .ACCMODE = .RDONLY }, @as(c.mode_t, 0));
+        try testing.expect(fd >= 0);
+        var text: [16384]u8 = undefined;
+        const n = c.read(fd, &text, text.len);
+        _ = c.close(fd);
+        _ = c.unlink(file);
+        _ = c.rmdir(joinZ(&file_buf, &.{dir}).?);
+        try testing.expect(n > 0);
+        const got = text[0..@intCast(n)];
+        try testing.expect(std.mem.indexOf(u8, got, if (which == .SEGV) "fatal signal SIGSEGV" else "fatal signal SIGABRT") != null);
+        try testing.expect(std.mem.count(u8, got, "\n") >= 3); // header + backtrace frames
+    }
 }
