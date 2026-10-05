@@ -26,6 +26,7 @@ const view_mod = @import("view.zig");
 const background = @import("../background/root.zig");
 const motion = @import("motion.zig");
 const thread_naming = @import("thread_naming.zig");
+const new_thread_defaults = @import("new_thread_defaults.zig");
 const voice_service = @import("../../voice/service.zig"); // [dictation]
 
 const SettingsView = view_mod.SettingsView;
@@ -60,6 +61,9 @@ pub const SelectId = enum(u8) {
     background_effect,
     /// [dictation] Voice → Microphone (once dictation is on and ready).
     microphone,
+    /// General → New threads (new_thread_defaults.zig).
+    default_agent,
+    default_model,
 };
 
 /// `UPDATE_POLICIES`: (policy, menu label, explanation).
@@ -290,6 +294,7 @@ pub fn spec(v: *SettingsView, id: SelectId, cx: anytype) Spec {
             const sel = std.mem.indexOfScalar(Effect, &all, s.newThreadBackgroundEffect) orelse 0;
             return .{ .label = "Background effect", .options = list.items, .selected = sel, .width = 128 };
         },
+        .default_agent, .default_model => return new_thread_defaults.spec(v, id, a, cx),
         .thread_naming => {
             const pt = ui.theme.get(cx);
             const rows = thread_naming.choices(v, a, cx);
@@ -425,6 +430,7 @@ pub fn commit(v: *SettingsView, id: SelectId, ix: usize, cx: *Context(SettingsVi
             background.install.setEffect(cx.app, all[ix]);
         },
         .thread_naming => thread_naming.commit(v, ix, cx),
+        .default_agent, .default_model => new_thread_defaults.commit(v, id, ix, cx),
         .provider_device => {},
         .microphone => {
             // [dictation] the chosen device id; null records from the system default.

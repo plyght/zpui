@@ -28,6 +28,7 @@ const engine = @import("zeron_engine");
 const input_mod = @import("zeron_input");
 const chrome = @import("chrome.zig");
 const rc = @import("run_config.zig");
+const composer_store = model.composer_store;
 const metrics = @import("metrics.zig");
 
 const App = zpui.App;
@@ -97,7 +98,36 @@ pub const ModelPicker = struct {
         const catalog = state.read(cx).catalog;
         try self.subs.add(cx.gpa(), try cx.observe(catalog, ModelPicker.onCatalog));
         try self.subs.add(cx.gpa(), try cx.subscribe(search, ModelPicker.onSearch));
+        // Sticky picks / Settings → General defaults changed: re-resolve the chip.
+        try self.subs.add(cx.gpa(), try cx.observeGlobal(composer_store.ComposerStore, ModelPicker.onDefaultsChanged));
         return self;
+    }
+
+    fn onDefaultsChanged(_: *ModelPicker, cx: *Context(ModelPicker)) void {
+        cx.notify();
+    }
+
+    fn appOf(cx: anytype) *App {
+        return if (@TypeOf(cx) == *App) cx else cx.app;
+    }
+
+    /// The sticky last-used picks: the host's override, else the
+    /// `ComposerStore` global (`composer-defaults.json`).
+    fn stickyDefaults(self: *const ModelPicker, cx: anytype) ?*const rc.ComposerDefaults {
+        return self.defaults orelse composer_store.sticky(appOf(cx));
+    }
+
+    /// On the new-thread canvas (Rust: no selected chat), picks also land in
+    /// the sticky memory (`Pickers::save_defaults`).
+    fn onCanvas(self: *const ModelPicker, cx: anytype) bool {
+        return self.state.read(cx).workspace.read(cx).selected_chat == null;
+    }
+
+    /// `pick_reasoning`'s sticky half: the level for the resolved model.
+    fn rememberReasoning(self: *const ModelPicker, level: protocol.ReasoningLevel, cx: *Context(ModelPicker)) void {
+        if (!self.onCanvas(cx)) return;
+        const in = self.inputs(cx);
+        composer_store.rememberReasoning(cx.app, rc.effectiveHarness(&in), rc.effectiveModelId(&in), level);
     }
 
     pub fn deinit(self: *ModelPicker, cx: *App) void {
@@ -110,7 +140,12 @@ pub const ModelPicker = struct {
         self.options.map.deinit(self.gpa);
     }
 
-    fn onCatalog(_: *ModelPicker, _: Entity(model.CatalogStore), cx: *Context(ModelPicker)) void {
+    fn onCatalog(_: *ModelPicker, catalog: Entity(model.CatalogStore), cx: *Context(ModelPicker)) void {
+        // `remember_labels`: every loaded catalog feeds the label cache.
+        if (cx.app.hasGlobal(composer_store.ComposerStore)) {
+            const c = catalog.read(cx);
+            for (std.enums.values(HarnessId)) |h| if (c.modelList(h)) |list| composer_store.rememberLabels(cx.app, list);
+        }
         cx.notify();
     }
 
@@ -171,7 +206,8 @@ pub const ModelPicker = struct {
             .draft = self.draft,
             .chat_config = if (chat) |c| (if (c.config) |*cfg| cfg else null) else null,
             .existing_chat = chat != null,
-            .defaults = self.defaults,
+            .defaults = self.stickyDefaults(cx),
+            .preferred = composer_store.preferred(appOf(cx)),
             .harnesses = if (catalog.harnesses != null) harnesses else null,
             .models_for = modelsFor,
             .models_ctx = catalog,
@@ -259,6 +295,15 @@ pub const ModelPicker = struct {
         self.draft_model_buf.appendSlice(self.gpa, id) catch @panic("OOM");
         self.draft.harness = h;
         self.draft.model = self.draft_model_buf.items;
+        if (self.onCanvas(cx)) {
+            self.draft.reasoning = null; // effort follows the model (`pick_model`)
+            const catalog = self.state.read(cx).catalog.read(cx);
+            var label: []const u8 = id;
+            if (catalog.modelList(h)) |list| for (list) |row| if (std.mem.eql(u8, row.id, id)) {
+                label = row.label;
+            };
+            composer_store.rememberModel(cx.app, h, id, label);
+        }
         cx.emit(Picked{});
         self.close(window, cx);
     }
@@ -283,6 +328,7 @@ pub const ModelPicker = struct {
 
     fn onReasoning(self: *ModelPicker, level: protocol.ReasoningLevel, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ModelPicker)) void {
         self.draft.reasoning = level;
+        self.rememberReasoning(level, cx);
         cx.emit(Picked{});
         cx.notify();
     }
@@ -303,6 +349,7 @@ pub const ModelPicker = struct {
             else => @intFromFloat(std.math.clamp(@round(req.numeric orelse return), 0, @as(f64, @floatFromInt(ladder.len - 1)))),
         };
         self.draft.reasoning = ladder[next];
+        self.rememberReasoning(ladder[next], cx);
         cx.emit(Picked{});
         cx.notify();
     }
@@ -347,6 +394,7 @@ pub const ModelPicker = struct {
         self.pickHarness(offered[ix - 1].id, cx);
         self.draft.harness = offered[ix - 1].id;
         self.draft.model = null;
+        if (self.onCanvas(cx)) composer_store.rememberHarness(cx.app, offered[ix - 1].id);
         cx.emit(Picked{});
         self.showPanel(window, cx);
     }
@@ -386,6 +434,7 @@ pub const ModelPicker = struct {
         };
         const next: usize = @intCast(std.math.clamp(ix + delta, 0, @as(isize, @intCast(ladder.len - 1))));
         self.draft.reasoning = ladder[next];
+        self.rememberReasoning(ladder[next], cx);
         cx.emit(Picked{});
         cx.notify();
     }
@@ -456,7 +505,7 @@ pub const ModelPicker = struct {
         const query = std.mem.trim(u8, self.search.read(cx).text(), " ");
         var n: usize = 0;
         if (self.favorites_view) {
-            const d = self.defaults orelse return out[0..0];
+            const d = self.stickyDefaults(cx) orelse return out[0..0];
             for (d.favorites) |fav| {
                 const list = catalog.modelList(fav.harness) orelse continue;
                 for (list) |*m| if (std.mem.eql(u8, m.id, fav.model) and matches(query, m) and n < out.len) {
@@ -607,7 +656,7 @@ pub const ModelPicker = struct {
         for (list, 0..) |r, ix| {
             const is_selected = selected == r.model;
             const hovered = ix == self.active;
-            const fav = if (self.defaults) |d| d.isFavorite(r.harness, r.model.id) else false;
+            const fav = if (self.stickyDefaults(cx)) |d| d.isFavorite(r.harness, r.model.id) else false;
             const mark, const tint = chrome.harnessMark(r.harness);
             var row = div().id(.{ "model-row", ix }).role(.list_box_option).ariaLabel(zpui.fmt("{s} · {s}", .{ r.model.label, chrome.harnessName(r.harness) })).ariaSelected(is_selected).h(px(compact_row_height)).flexNone().pl(px(8)).pr(px(4))
                 .rounded(px(chrome.menu_item_radius)).flex().itemsCenter().gap(px(8)).cursorPointer()

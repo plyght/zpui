@@ -24,6 +24,7 @@ pub const background_adjust = @import("background_adjust.zig");
 pub const motion = @import("motion.zig");
 pub const fonts = @import("fonts.zig");
 pub const thread_naming = @import("thread_naming.zig");
+pub const new_thread_defaults = @import("new_thread_defaults.zig");
 pub const theme_library = @import("theme_library.zig");
 pub const accounts = @import("accounts.zig");
 
@@ -40,6 +41,8 @@ test {
     _ = motion;
     _ = fonts;
     _ = thread_naming;
+    _ = new_thread_defaults;
+    _ = @import("new_thread_defaults_test.zig");
     _ = theme_library;
     _ = accounts;
     _ = @import("liquid_glass_tests.zig"); // [liquid-glass]

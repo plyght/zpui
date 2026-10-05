@@ -123,6 +123,8 @@ fn onLaunch(l: *Launch, app: *App) void {
         if (model.settings.dataDir(l.gpa, l.environ, l.io)) |dir| {
             l.data_dir = dir;
             model.settings_store.init(app, l.io, dir) catch |err| log.warn("settings: {t}", .{err});
+            // Sticky composer picks + the explicit new-thread defaults.
+            model.composer_store.init(app, l.io, dir) catch |err| log.warn("composer defaults: {t}", .{err});
             // The custom theme library joins the registry before the first theme is built.
             settings_ui.theme_library.init(app, l.io, dir, true);
             if (model.settings_store.current(app)) |s| {

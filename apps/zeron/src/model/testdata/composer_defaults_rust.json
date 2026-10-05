@@ -1,0 +1,39 @@
+{
+  "harness": "codex",
+  "modelByHarness": {
+    "codex": {
+      "id": "gpt-5.2-codex",
+      "label": "GPT-5.2 Codex"
+    },
+    "claude-code": {
+      "id": "claude-fable-5",
+      "label": "Fable 5"
+    }
+  },
+  "reasoning": "xhigh",
+  "reasoningByModel": {
+    "codex": {
+      "gpt-5.2-codex": "xhigh"
+    }
+  },
+  "modelOptionsByModel": {
+    "claude-code": {
+      "claude-fable-5": {
+        "contextWindow": "1m"
+      }
+    }
+  },
+  "modelLabels": {
+    "claude-fable-5": "Fable 5",
+    "gpt-5.2-codex": "GPT-5.2 Codex"
+  },
+  "device": "dev-1",
+  "project": null,
+  "noProject": false,
+  "favorites": [
+    {
+      "harness": "claude-code",
+      "model": "claude-fable-5"
+    }
+  ]
+}
