@@ -97,7 +97,7 @@ pub fn paint(w: *Window, element_key: u64, kind: platform.LiquidGlassKind, bound
     var view: ?platform.NativeViewId = null;
     if (pool.find(key)) |i| {
         const e = &pool.entries.items[i];
-        if (e.tier != tier or e.kind != kind or !std.meta.eql(e.parent, parent)) {
+        if (e.tier != tier or e.kind != kind or !std.meta.eql(e.parent, parent) or e.config.behind_content != config.behind_content) {
             detachAt(w, i);
         } else {
             if (!configEql(e.config, config)) {
@@ -109,7 +109,7 @@ pub fn paint(w: *Window, element_key: u64, kind: platform.LiquidGlassKind, bound
     }
     if (view == null) {
         // A sidebar material sits under the main surface (zpui leaves alpha 0 above it).
-        const z: platform.NativeViewZ = if (kind == .sidebar_material) .below_content else if (tier == .base) .above_content else .above_overlay;
+        const z: platform.NativeViewZ = if (kind == .sidebar_material or config.behind_content) .below_content else if (tier == .base) .above_content else .above_overlay;
         const v = w.platform_window.attachLiquidGlass(.{ .kind = kind, .z = z, .parent = parent }) catch |err| {
             std.log.scoped(.liquid_glass).warn("attach failed ({t}); falling back", .{err});
             pool.supported = false;

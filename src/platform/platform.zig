@@ -262,6 +262,8 @@ pub const Window = struct {
         /// an `NSGlassEffectContainerView`) and attach it like `attachNativeView`
         /// (pass-through mouse, hidden until placed). Errors when the OS lacks it.
         attachLiquidGlass: ?*const fn (ptr: *anyopaque, options: LiquidGlassAttach) anyerror!NativeViewId = null,
+        /// The window's own corner radius in logical pixels (macOS `_cornerRadius`), if known.
+        windowCornerRadius: ?*const fn (ptr: *anyopaque) ?f32 = null,
         /// Apply style / tint / corner radius / interactivity / container spacing.
         configureLiquidGlass: ?*const fn (ptr: *anyopaque, view: NativeViewId, config: LiquidGlassConfig) void = null,
         /// [liquid-glass] Cut `hole` out of the window's behind-window material (macOS
@@ -297,6 +299,10 @@ pub const Window = struct {
     /// [liquid-glass] Whether this window can host native glass (`attachLiquidGlass`).
     pub fn hasLiquidGlass(w: Window) bool {
         return w.vtable.attachLiquidGlass != null and w.vtable.configureLiquidGlass != null and w.supportsNativeViews();
+    }
+    pub fn windowCornerRadius(w: Window) ?f32 {
+        const f = w.vtable.windowCornerRadius orelse return null;
+        return f(w.ptr);
     }
     pub fn attachLiquidGlass(w: Window, options: LiquidGlassAttach) !NativeViewId {
         const f = w.vtable.attachLiquidGlass orelse return error.LiquidGlassUnsupported;
@@ -459,6 +465,9 @@ pub const LiquidGlassConfig = struct {
     spacing: Pixels = 0,
     /// Force a light/dark glass material (the app's theme), null = follow the system.
     dark: ?bool = null,
+    /// Place the glass under the main surface (Ghostty's window glass): zpui paints its
+    /// translucent content on top of it instead of on the overlay plane.
+    behind_content: bool = false,
 };
 
 pub const NativeViewPlacement = struct {

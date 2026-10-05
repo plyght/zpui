@@ -209,7 +209,7 @@ fn countKind(tw: *TestWindow, kind: zpui.platform.LiquidGlassKind) usize {
     return n;
 }
 
-test "Liquid Glass sidebar sees the desktop: tint around it, a backdrop hole, capsules not a strip" {
+test "Liquid Glass window is Ghostty's macos-glass-regular: one regular glass behind the content, no blur, no hole" {
     var h = try Harness.init(true);
     defer h.deinit();
     store.force_liquid = true;
@@ -221,11 +221,27 @@ test "Liquid Glass sidebar sees the desktop: tint around it, a backdrop hole, ca
     h.app.runUntilParked();
     h.window().drawAndPresent();
     const tw = h.tw();
-    // Default: zeron's original flush column, square corners, made of glass.
-    const hole = tw.backdrop_hole orelse return error.NoBackdropHole;
-    try testing.expectEqual(@as(f32, 0), hole.bounds.origin.x);
-    try testing.expectEqual(@as(f32, 0), hole.corner_radii[1]);
+    // No window blur to cut a hole into, no AppKit sidebar material.
+    try testing.expect(tw.backdrop_hole == null);
     try testing.expectEqual(@as(usize, 0), countKind(tw, .sidebar_material));
+    // Exactly one glass under the main surface, covering the window, regular, untinted,
+    // with the window's corner radius.
+    var behind: usize = 0;
+    for (tw.glass_attach, tw.glass_config, tw.native_attached, tw.native_placement) |g, c, a, p| {
+        if (g == null or !a or g.?.kind != .glass or g.?.z != .below_content) continue;
+        behind += 1;
+        const cfg = c orelse return error.NoGlassConfig;
+        try testing.expect(cfg.behind_content);
+        try testing.expectEqual(zpui.LiquidGlassStyle.regular, cfg.style);
+        try testing.expect(cfg.tint == null);
+        try testing.expectEqual(@as(f32, 16), cfg.corner_radius);
+        const pl = p orelse return error.NoPlacement;
+        try testing.expectEqual(@as(f32, 0), pl.bounds.origin.x);
+        try testing.expectEqual(@as(f32, 0), pl.bounds.origin.y);
+        try testing.expectEqual(h.window().viewportSize().width, pl.bounds.size.width);
+        try testing.expectEqual(h.window().viewportSize().height, pl.bounds.size.height);
+    }
+    try testing.expectEqual(@as(usize, 1), behind);
     // One titlebar container; its capsules are members (no full-width strip).
     try testing.expectEqual(@as(usize, 1), countKind(tw, .container));
     var members: usize = 0;
@@ -240,23 +256,12 @@ test "Liquid Glass sidebar sees the desktop: tint around it, a backdrop hole, ca
     try testing.expect(members >= 2); // title + session controls / pane toggles
     try testing.expect(!full_width);
 
-    // vev: AppKit's sidebar material under the pane, no hole.
+    // vev: AppKit's sidebar material under the pane, no window glass, no hole.
     shell_mod.sidebar_glass_mode = .vev;
     h.window().refresh();
     h.window().drawAndPresent();
     try testing.expectEqual(@as(usize, 1), countKind(tw, .sidebar_material));
     try testing.expect(tw.backdrop_hole == null);
-
-    // Opt-in floating pane: hole = the glass rect, inset 8.
-    shell_mod.sidebar_glass_mode = .glass;
-    const prev_layout = shell_mod.sidebar_layout_override;
-    defer shell_mod.sidebar_layout_override = prev_layout;
-    shell_mod.sidebar_layout_override = .floating;
-    h.window().refresh();
-    h.window().drawAndPresent();
-    const floating = tw.backdrop_hole orelse return error.NoBackdropHole;
-    try testing.expectEqual(@as(f32, 8), floating.bounds.origin.x);
-    try testing.expectEqual(@as(f32, 8), floating.bounds.origin.y);
 }
 
 const titlebar_mod = @import("../shell/titlebar.zig");

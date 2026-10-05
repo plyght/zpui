@@ -679,6 +679,7 @@ pub const Shell = struct {
     pub fn render(self: *Shell, window: *Window, cx: *Context(Shell)) zpui.Div {
         // [liquid-glass] Glass material follows zeron's theme, not the OS appearance.
         window.glass_dark = ui.theme.get(cx).appearance == .dark;
+        syncWindowBackground(window, cx);
         // Reduce motion / pause in background (settings × OS × focus).
         settings_ui.motion.sync(window, cx.app);
         // The OS flipped light/dark (Linux settings portal, macOS effective
@@ -928,6 +929,7 @@ fn liquidSidebar(theme: *const Theme, sidebar_now: f32, window: *Window, cx: any
     const tint = theme.glass();
     const lay = sidebarLayout(cx);
     const mode = sidebar_glass_mode;
+    if (mode == .glass) return ghosttyGlass(theme, sidebar_now, lay);
     var out = div().absolute().inset0();
     // Main area tint (right of the column); a hairline seam for the flush pane.
     var main_tint = div().absolute().top(px(0)).bottom(px(0)).left(px(sidebar_now)).right(px(0)).bg(tint);
@@ -978,6 +980,40 @@ fn liquidSidebar(theme: *const Theme, sidebar_now: f32, window: *Window, cx: any
     const hole = div().absolute().left(px(g.x)).top(px(g.y)).w(px(g.w)).h(px(g.h));
     out = out.child(column).child(zpui.backdropHole(mode == .glass, radii, hole));
     return out;
+}
+
+/// Ghostty's `background-blur = macos-glass-regular`: no window blur at all (the
+/// window is transparent, see `Shell.render`), one regular glass under the whole window
+/// with the window's own corner radius, and the theme background painted on top of it
+/// with its opacity: `sidebar_opacity` in the sidebar column, the theme's shell tint in
+/// the main area. Nothing sits under the glass for it to blur.
+fn ghosttyGlass(theme: *const Theme, sidebar_now: f32, lay: SidebarLayout) zpui.Div {
+    const tint = theme.glass();
+    var fill = div().absolute().inset0();
+    if (sidebar_now > 1) {
+        fill = fill.child(div().absolute().top(px(0)).bottom(px(0)).left(px(0)).w(px(sidebar_now))
+            .bg(tint.alpha(@min(@max(sidebar_opacity, 0), 1))));
+    }
+    var main_fill = div().absolute().top(px(0)).bottom(px(0)).left(px(sidebar_now)).right(px(0)).bg(tint);
+    if (lay == .flush and sidebar_now > 1) main_fill = main_fill.borderL1().borderColor(theme.border);
+    fill = fill.child(main_fill);
+    return div().absolute().inset0()
+        .child(zpui.liquidGlass("window-glass", .{ .style = .regular, .shape = .window, .behind_content = true }, fill));
+}
+
+/// [liquid-glass] Ghostty-style glass needs a transparent window (no behind-window blur
+/// view); everything else keeps the theme's window background.
+fn syncWindowBackground(window: *Window, cx: anytype) void {
+    if (builtin.os.tag != .macos) return;
+    const theme = ui.theme.get(cx);
+    const want: zpui.platform.WindowBackgroundAppearance = if (theme.isLiquid() and sidebar_glass_mode == .glass and zpui.platformSupportsLiquidGlass(cx))
+        .transparent
+    else switch (theme.windowBackgroundAppearance()) {
+        .@"opaque" => .opaque_,
+        .transparent => .transparent,
+        .blurred => .blurred,
+    };
+    if (window.background_appearance != want) window.setBackgroundAppearance(want);
 }
 
 /// Soft scroll edge under the titlebar (replaces a material strip): the transcript

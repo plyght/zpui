@@ -615,6 +615,7 @@ pub const MacWindow = struct {
         .focusNativeView = vFocusNativeView,
         .drawLayered = vDrawLayered,
         .attachLiquidGlass = vAttachLiquidGlass, // [liquid-glass]
+        .windowCornerRadius = vWindowCornerRadius,
         .configureLiquidGlass = vConfigureLiquidGlass,
         .setBackdropHole = vSetBackdropHole,
         .a11yUpdate = vA11yUpdate,
@@ -629,6 +630,16 @@ pub const MacWindow = struct {
         const self = cast(ptr);
         if (self.closed) return;
         native_views.setBackdropHole(self, hole);
+    }
+
+    /// The window's corner radius (private `_cornerRadius`, as Ghostty reads it).
+    fn vWindowCornerRadius(ptr: *anyopaque) ?f32 {
+        const self = cast(ptr);
+        if (self.closed) return null;
+        const win = self.native_window;
+        if (win.msg(objc.BOOL, "respondsToSelector:", .{objc.cachedSel("_cornerRadius")}) != objc.YES) return null;
+        const r = win.msg(ak.CGFloat, "_cornerRadius", .{});
+        return if (r > 0) @floatCast(r) else null;
     }
 
     // [liquid-glass] NSGlassEffectView children (native_views.zig).

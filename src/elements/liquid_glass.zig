@@ -50,11 +50,14 @@ pub const Shape = union(enum) {
     rounded: Pixels,
     /// Fully rounded ends: radius = min(width, height) / 2.
     capsule,
+    /// The window's own corner radius (a full-window glass, like Ghostty's).
+    window,
 
     pub fn radius(self: Shape, bounds: Bounds) Pixels {
         return switch (self) {
             .rounded => |r| @max(r, 0),
             .capsule => @max(@min(bounds.size.width, bounds.size.height) / 2, 0),
+            .window => default_window_radius,
         };
     }
 };
@@ -69,7 +72,15 @@ pub const Options = struct {
     interactive: bool = false,
     /// false: paint the child as if glass were unavailable (pass-through).
     enabled: bool = true,
+    /// Under the main surface (needs a transparent window): the child is painted in
+    /// place on top of the glass, as content with its own alpha (Ghostty's
+    /// `macos-glass-regular` window background).
+    behind_content: bool = false,
 };
+
+/// Fallback for `.window` when the platform can't report its corner radius (Tahoe's
+/// titled windows without a toolbar).
+pub const default_window_radius: Pixels = 16;
 
 pub fn config(opts: Options, bounds: Bounds) platform.LiquidGlassConfig {
     return .{
@@ -80,6 +91,7 @@ pub fn config(opts: Options, bounds: Bounds) platform.LiquidGlassConfig {
         } else null,
         .interactive = opts.interactive,
         .corner_radius = opts.shape.radius(bounds),
+        .behind_content = opts.behind_content,
     };
 }
 
@@ -140,11 +152,16 @@ const LiquidGlassElement = struct {
     }
     pub fn paint(self: *LiquidGlassElement, gid: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
         const d = self.d;
+        var cfg = config(d.opts, bounds);
+        if (d.opts.shape == .window) if (window.platform_window.windowCornerRadius()) |r| {
+            cfg.corner_radius = r;
+        };
         const tier = if (d.opts.enabled and gid != null)
-            window.paintLiquidGlass(gid.?, .glass, bounds, config(d.opts, bounds))
+            window.paintLiquidGlass(gid.?, .glass, bounds, cfg)
         else
             null;
-        paintForeground(tier, d.child, window, cx);
+        // Glass behind the main surface: its content paints in place, over it.
+        paintForeground(if (d.opts.behind_content) null else tier, d.child, window, cx);
     }
 };
 
