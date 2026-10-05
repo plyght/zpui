@@ -284,3 +284,60 @@ test "setNativeControlsEnabled(false) switches the window back to the fallbacks"
     f.app.runUntilParked();
     try testing.expectEqual(@as(u32, 1), f.view().fallback_clicks);
 }
+
+// A control re-attached while painting (kind or tier change) used to be removed from the
+// rendered frame's native view list, shifting the paint ranges of cached views painted
+// after it: their reuse sliced past the end (a ReleaseSafe panic) or placed the wrong view.
+const CachedSwitchView = struct {
+    pub fn render(_: *CachedSwitchView, _: *Window, _: *Context(CachedSwitchView)) elements.Div {
+        return div().h(px(30)).child(nc.nativeSwitch("cached-sw", .{ .on = true, .label = "Cached" }, null, null));
+    }
+};
+
+const KindFlipView = struct {
+    child: @import("../app/entity.zig").Entity(CachedSwitchView),
+    checkbox: bool = false,
+
+    fn init(_: *Window, cx: *Context(KindFlipView)) !KindFlipView {
+        return .{ .child = try cx.new(CachedSwitchView, .{}) };
+    }
+    pub fn deinit(self: *KindFlipView, app: *App) void {
+        self.child.release(app);
+    }
+    pub fn render(self: *KindFlipView, _: *Window, _: *Context(KindFlipView)) elements.Div {
+        const first = if (self.checkbox)
+            nc.nativeCheckbox("flip", .{ .on = false, .label = "Flip" }, null, null)
+        else
+            nc.nativeSwitch("flip", .{ .on = false, .label = "Flip" }, null, null);
+        return div().size(px(400)).flex().flexCol()
+            .child(div().h(px(30)).flexNone().child(first))
+            .child(self.child.cached(@import("../styled.zig").StyleBuilder.init.wFull().h(px(30)).refinement));
+    }
+};
+
+test "a control re-attached while painting keeps cached views' native placements intact" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, KindFlipView, KindFlipView.init, .{});
+    const w = handle.window(app).?;
+    const tw = TestWindow.of(w.platform_window);
+    tw.native_controls = true;
+    w.refresh();
+    w.drawAndPresent();
+    const cached = tw.findNativeControl(.switch_, "Cached") orelse return error.NoCachedControl;
+    const placed = tw.native_placement[@intFromEnum(cached)] orelse return error.NotPlaced;
+
+    // Only the root re-renders: the switch becomes a checkbox (detached + re-attached in
+    // paint) and the cached child reuses its paint from the rendered frame.
+    var l = handle.rootView(app).?.lease(app);
+    l.value.checkbox = true;
+    l.cx.notify();
+    l.end();
+    w.drawAndPresent();
+    try testing.expect(tw.findNativeControl(.checkbox, "Flip") != null);
+    try testing.expect(tw.findNativeControl(.switch_, "Flip") == null);
+    try testing.expectEqual(cached, tw.findNativeControl(.switch_, "Cached").?);
+    try testing.expectEqualDeep(placed, tw.native_placement[@intFromEnum(cached)].?);
+    w.drawAndPresent();
+    try testing.expectEqualDeep(placed, tw.native_placement[@intFromEnum(cached)].?);
+}

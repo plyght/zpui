@@ -235,35 +235,52 @@ pub fn formatReset(a: std.mem.Allocator, resets_at: ?[]const u8, now_s: i64, off
     return std.fmt.allocPrint(a, "resets {s} {d}", .{ months[md.month.numeric() - 1], md.day_index + 1 }) catch null;
 }
 
-/// RFC 3339 → epoch seconds (UTC offsets honoured; fractional seconds ignored).
+/// RFC 3339 → epoch seconds (UTC offsets honoured; fractional seconds ignored). The
+/// string comes from engine / provider data: anything malformed or out of range is
+/// null (no reset label), never a panic.
 pub fn parseRfc3339(s: []const u8) ?i64 {
     if (s.len < 19) return null;
-    const year = std.fmt.parseInt(i32, s[0..4], 10) catch return null;
-    const month = std.fmt.parseInt(u8, s[5..7], 10) catch return null;
-    const dayn = std.fmt.parseInt(u8, s[8..10], 10) catch return null;
-    const hh = std.fmt.parseInt(i64, s[11..13], 10) catch return null;
-    const mm = std.fmt.parseInt(i64, s[14..16], 10) catch return null;
-    const ss = std.fmt.parseInt(i64, s[17..19], 10) catch return null;
+    if (s[4] != '-' or s[7] != '-' or (s[10] != 'T' and s[10] != 't' and s[10] != ' ') or s[13] != ':' or s[16] != ':') return null;
+    const year = digits(s[0..4]) orelse return null;
+    const month = digits(s[5..7]) orelse return null;
+    const dayn = digits(s[8..10]) orelse return null;
+    const hh = digits(s[11..13]) orelse return null;
+    const mm = digits(s[14..16]) orelse return null;
+    const ss = digits(s[17..19]) orelse return null;
+    if (year < 1970 or month < 1 or month > 12 or hh > 23 or mm > 59 or ss > 60) return null;
+    const month_days = std.time.epoch.getDaysInMonth(@intCast(year), @enumFromInt(month));
+    if (dayn < 1 or dayn > month_days) return null;
     var days: i64 = 0;
-    var y: i32 = 1970;
+    var y: u32 = 1970;
     while (y < year) : (y += 1) days += if (std.time.epoch.isLeapYear(@intCast(y))) 366 else 365;
-    var m: u8 = 1;
+    var m: u32 = 1;
     while (m < month) : (m += 1) days += std.time.epoch.getDaysInMonth(@intCast(year), @enumFromInt(m));
-    days += dayn - 1;
-    var secs = days * 86400 + hh * 3600 + mm * 60 + ss;
+    days += @as(i64, dayn) - 1;
+    var secs = days * 86400 + @as(i64, hh) * 3600 + @as(i64, mm) * 60 + ss;
     var rest = s[19..];
     if (rest.len > 0 and rest[0] == '.') {
         var i: usize = 1;
         while (i < rest.len and std.ascii.isDigit(rest[i])) i += 1;
         rest = rest[i..];
     }
-    if (rest.len >= 6 and (rest[0] == '+' or rest[0] == '-')) {
-        const oh = std.fmt.parseInt(i64, rest[1..3], 10) catch 0;
-        const om = std.fmt.parseInt(i64, rest[4..6], 10) catch 0;
-        const off = oh * 3600 + om * 60;
+    if (rest.len >= 6 and (rest[0] == '+' or rest[0] == '-') and rest[3] == ':') {
+        const oh = digits(rest[1..3]) orelse return null;
+        const om = digits(rest[4..6]) orelse return null;
+        if (oh > 23 or om > 59) return null;
+        const off = @as(i64, oh) * 3600 + @as(i64, om) * 60;
         secs = if (rest[0] == '+') secs - off else secs + off;
     }
     return secs;
+}
+
+/// ASCII decimal digits only (no sign, no spaces).
+fn digits(s: []const u8) ?u32 {
+    var v: u32 = 0;
+    for (s) |c| {
+        if (c < '0' or c > '9') return null;
+        v = v * 10 + (c - '0');
+    }
+    return v;
 }
 
 // ---- state ------------------------------------------------------------------------------
@@ -750,7 +767,7 @@ fn onReopen(v: *SettingsView, _: *const zpui.ClickEvent, _: *Window, cx: *Contex
 // ---- rendering ----------------------------------------------------------------------------
 
 fn usageMeter(win: UsageWindow, t: *const Theme) zpui.Div {
-    const fraction = std.math.clamp(win.usedFraction, 0, 1);
+    const fraction = if (std.math.isNan(win.usedFraction)) 0 else std.math.clamp(win.usedFraction, 0, 1);
     const level = usageLevel(fraction);
     const fill = usageColor(level, t).opacity(if (level == .normal) 0.8 else 0.9);
     var bar = div().w(px(usage_bar_width)).flexNone().h(px(4)).roundedFull().overflowHidden().bg(t.wash(0.08));
@@ -1017,3 +1034,31 @@ pub const replies = struct {
     pub const poll = onPoll;
     pub const pollTimer = onPollTimer;
 };
+
+test "malformed or out-of-range reset dates from engine data are ignored, never a panic" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const bad = [_][]const u8{
+        "2026-10-00T12:00:00Z", // day 0 (was a u8 underflow)
+        "2026-13-04T12:00:00Z", // month 13 (was an invalid enum)
+        "2026-00-04T12:00:00Z",
+        "2026-02-30T12:00:00Z",
+        "-999-10-04T12:00:00Z", // negative year (was an @intCast panic)
+        "0000-01-01T00:00:00Z",
+        "2026-10-04T25:00:00Z",
+        "2026-10-04T12:61:00Z",
+        "+026-10-04T12:00:00Z",
+        "2026-1-04T12:00:00Z0",
+        "2026/10/04 12:00:00",
+        "not a date at all!!",
+        "",
+        "2026-10-04T12:00:00+2x:00",
+    };
+    for (bad) |s| {
+        try testing.expectEqual(@as(?i64, null), parseRfc3339(s));
+        try testing.expectEqual(@as(?[]const u8, null), formatReset(a, s, 0, 0));
+    }
+    try testing.expect(parseRfc3339("2024-02-29T23:59:60.5-12:30") != null);
+    try testing.expect(formatReset(a, "1970-01-01T00:00:00Z", std.math.maxInt(i32), 840) != null);
+}

@@ -1377,3 +1377,43 @@ test "with a native view, overlay-plane ranges holding a backdrop blur sample th
     // The page beneath (main plane) holds no blur and is not flagged.
     try testing.expectEqual(@as(usize, 0), frostedMenuBlurOps(scene, 0, r.start));
 }
+
+// A platform frame request from inside a frame (macOS `displayLayer:` fired by the Core
+// Animation flush in present, or AppKit redisplaying while a render changes the window
+// background) must not nest a second draw + present; it schedules the next frame instead.
+const ReentrantFrameView = struct {
+    renders: u32 = 0,
+    reenter: bool = true,
+    in_render: bool = false,
+    nested: bool = false,
+
+    pub fn render(self: *ReentrantFrameView, window: *Window, _: *Context(ReentrantFrameView)) elements.Div {
+        if (self.in_render) self.nested = true;
+        self.in_render = true;
+        defer self.in_render = false;
+        self.renders += 1;
+        if (self.reenter) {
+            self.reenter = false;
+            testWindow(window).frame(true); // nested request while drawing
+        }
+        return div().size(px(100)).bg(color.red);
+    }
+};
+
+fn initReentrantFrameView(_: *Window, _: *Context(ReentrantFrameView)) ReentrantFrameView {
+    return .{};
+}
+
+test "a frame requested from inside a frame does not nest; it redraws afterwards" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, ReentrantFrameView, initReentrantFrameView, .{});
+    const w = handle.window(app).?;
+    const tw = testWindow(w);
+    if (w.dirty) tw.frame(false);
+    const v = handle.rootView(app).?.read(app);
+    try testing.expect(!v.nested);
+    try testing.expect(!w.in_frame);
+    try testing.expectEqual(@as(u32, 2), v.renders); // the dropped request redrew once
+    try testing.expect(!w.dirty);
+}

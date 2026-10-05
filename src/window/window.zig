@@ -485,6 +485,11 @@ pub const Window = struct {
     /// Views notified while drawing; they count as dirty in the next frame.
     pending_dirty_views: std.AutoHashMapUnmanaged(EntityId, void) = .empty,
     refreshing: bool = false,
+    /// Inside `onRequestFrame` (draw + present). The platform can ask for a frame from
+    /// inside one (macOS `displayLayer:` during the Core Animation flush in present, or
+    /// AppKit redisplaying while a view's render changes the window background): that
+    /// nested request is dropped and a redraw is scheduled instead.
+    in_frame: bool = false,
     phase: DrawPhase = .none,
     needs_present: bool = false,
     /// `pushOverlayPlane` nesting and where the open overlay range starts.
@@ -662,6 +667,13 @@ pub const Window = struct {
     /// gpui's `on_request_frame` body: run animation-frame callbacks, then draw if dirty
     /// (or forced) and present.
     pub fn onRequestFrame(self: *Window, force_render: bool) void {
+        if (self.in_frame) {
+            self.dirty = true;
+            self.platform_window.requestFrame();
+            return;
+        }
+        self.in_frame = true;
+        defer self.in_frame = false;
         self.runFrameCallbacks();
         if (self.dirty or force_render) {
             self.draw();
@@ -1435,6 +1447,13 @@ pub const Window = struct {
 
     /// `draw` + `present` (used by tests and on demand).
     pub fn drawAndPresent(self: *Window) void {
+        if (self.in_frame) {
+            self.dirty = true;
+            self.platform_window.requestFrame();
+            return;
+        }
+        self.in_frame = true;
+        defer self.in_frame = false;
         self.draw();
         self.present();
     }
@@ -2131,6 +2150,7 @@ pub const Window = struct {
         }
         self.presented_native_views.clearRetainingCapacity();
         for (views) |v| {
+            if (v.id == forgotten_native_view) continue;
             pw.placeNativeView(v.id, v.placement);
             self.presented_native_views.append(self.gpa, v.id) catch {};
         }
@@ -2158,12 +2178,16 @@ pub const Window = struct {
             _ = self.presented_native_views.swapRemove(i);
             break;
         };
-        var i: usize = 0;
-        const list = &self.rendered_frame.native_views;
-        while (i < list.items.len) {
-            if (list.items[i].id == id) _ = list.orderedRemove(i) else i += 1;
-        }
+        // Tombstone, don't remove: cached views' paint ranges index this list
+        // (`reusePaint`), and removing would shift them.
+        for (self.rendered_frame.native_views.items) |*v| if (v.id == id) {
+            v.id = forgotten_native_view;
+            v.placement.clip.size = .{ .width = 0, .height = 0 };
+        };
     }
+
+    /// The id a forgotten (detached) native view's paint record takes.
+    pub const forgotten_native_view: platform.NativeViewId = @enumFromInt(std.math.maxInt(u32));
 
     /// The rendered frame places at least one visible native view (web view, native
     /// glass): only then can plane content end up beneath or above something native.

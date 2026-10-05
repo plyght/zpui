@@ -75,7 +75,7 @@ pub const Timestamp = struct {
         const ymd = civilFromDays(days);
         const sec = sod % 60 + @as(u32, if (leap) 1 else 0);
         try w.print("{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}", .{
-            @as(u32, @intCast(ymd.year)), ymd.month, ymd.day, sod / 3600, sod / 60 % 60, sec,
+            @as(u32, @intCast(std.math.clamp(ymd.year, 0, 9999))), ymd.month, ymd.day, sod / 3600, sod / 60 % 60, sec, // wire data before year 0 must not panic
         });
         if (nanos != 0) {
             if (nanos % 1_000_000 == 0) {

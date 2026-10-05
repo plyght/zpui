@@ -103,14 +103,20 @@ pub const Host = struct {
     backdrop_mask: ?MaskKey = null,
     /// The target of every native form control's action (native_controls.zig).
     control_target: ?id = null,
+    /// Views detached while AppKit was tracking the mouse (a control's drag, a pop-up's
+    /// menu): AppKit may still be inside that view's `mouseDown:`, so our last reference
+    /// is dropped only once tracking is over (`releaseRetired`).
+    retired: std.ArrayList(id) = .empty,
 
     pub fn enabled(self: *const Host) bool {
         return self.overlay_view != null;
     }
 
     pub fn deinit(self: *Host, w: *MacWindow) void {
-        for (self.children.items) |c| destroyChild(w.gpa, c);
+        for (self.children.items) |c| destroyChild(w, c);
         self.children.deinit(w.gpa);
+        for (self.retired.items) |v| v.release();
+        self.retired.deinit(w.gpa);
         if (self.overlay_view) |v| {
             objc.setIvar(v, state_ivar, null);
             v.msg(void, "removeFromSuperview", .{});
@@ -305,14 +311,36 @@ fn find(w: *MacWindow, ident: platform.NativeViewId) ?usize {
     return null;
 }
 
-fn destroyChild(gpa: std.mem.Allocator, c: *Child) void {
+fn destroyChild(w: *MacWindow, c: *Child) void {
     if (c.member_of == null) objc.setIvar(c.clip, child_ivar, null);
     c.view.msg(void, "removeFromSuperview", .{});
     c.clip.msg(void, "removeFromSuperview", .{});
-    c.view.release();
+    // Frames render inside AppKit's tracking loops (the display link reaches the main
+    // queue in every common run loop mode), so a frame can detach the very control whose
+    // mouseDown: is still on the stack (a slider drag, a switch, a pop-up's open menu).
+    // Releasing it there would deallocate it under AppKit: keep it until tracking ends.
+    if (inEventTracking() and !w.closed) {
+        w.natives.retired.append(w.gpa, c.view) catch c.view.release();
+    } else c.view.release();
     c.clip.release();
     if (c.mask) |m| m.release();
-    gpa.destroy(c);
+    w.gpa.destroy(c);
+}
+
+/// The main run loop is in `NSEventTrackingRunLoopMode` (mouse tracking, menus).
+fn inEventTracking() bool {
+    const loop = ak.class("NSRunLoop").msg(?id, "currentRunLoop", .{}) orelse return false;
+    const mode = loop.msg(?id, "currentMode", .{}) orelse return false;
+    const pool = objc.AutoreleasePool.push();
+    defer pool.pop();
+    return objc.fromBOOL(mode.msg(BOOL, "isEqualToString:", .{ak.nsString("NSEventTrackingRunLoopMode")}));
+}
+
+/// Drop the views `destroyChild` kept alive through a tracking loop, once it is over.
+pub fn releaseRetired(w: *MacWindow) void {
+    if (w.natives.retired.items.len == 0 or inEventTracking()) return;
+    for (w.natives.retired.items) |v| v.release();
+    w.natives.retired.clearRetainingCapacity();
 }
 
 pub fn detach(w: *MacWindow, ident: platform.NativeViewId) void {
@@ -323,12 +351,12 @@ pub fn detach(w: *MacWindow, ident: platform.NativeViewId) void {
         var j: usize = 0;
         while (j < w.natives.children.items.len) {
             const m = w.natives.children.items[j];
-            if (m.member_of == c) destroyChild(w.gpa, w.natives.children.orderedRemove(j)) else j += 1;
+            if (m.member_of == c) destroyChild(w, w.natives.children.orderedRemove(j)) else j += 1;
         }
     }
     _ = w.natives.children.orderedRemove(find(w, ident).?);
     if (isFirstResponderWithin(w, c.view)) _ = w.native_window.msg(BOOL, "makeFirstResponder:", .{w.native_view});
-    destroyChild(w.gpa, c);
+    destroyChild(w, c);
 }
 
 fn isFirstResponderWithin(w: *MacWindow, view: id) bool {
@@ -385,6 +413,7 @@ pub fn place(w: *MacWindow, ident: platform.NativeViewId, placement: ?platform.N
 
 /// zui `draw_layered` ([liquid-glass]: plus the top plane).
 pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges: []const platform.OverlayRange, capture_input: bool) !void {
+    releaseRetired(w);
     const size = w.drawableSizePub();
     const scale = w.scaleFactor();
     const host = &w.natives;
