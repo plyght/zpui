@@ -252,7 +252,7 @@ const SettingsStress = struct {
                 shell.update(app, shell_mod.Shell.closeSettings, .{win});
                 next.cycle += 1;
                 if (next.cycle >= next.cycles) {
-                    std.debug.print("PASS: zeron smoke: settings stress ({d} cycles, {d} control pokes, {d} control events, {d} attaches, {d} AX nodes read)\n", .{ next.cycles, next.pokes, win.native_controls.event_count, win.native_controls.attach_count, next.ax_nodes });
+                    std.debug.print("PASS: zeron smoke: settings stress ({d} cycles, {d} control pokes, {d} control events, {d} attaches, {d} AX nodes read)\n", .{ next.cycles, next.pokes, controlEvents(win), win.native_controls.attach_count, next.ax_nodes });
                     s.done.store(true, .release);
                     s.exit_code = 0;
                     return app.quit();
@@ -263,6 +263,12 @@ const SettingsStress = struct {
             },
         }
         win.onNextFrame(next, tick);
+    }
+
+    /// Native control events received (0 on app commits that predate the counter).
+    fn controlEvents(win: *Window) u32 {
+        if (comptime !@hasField(@TypeOf(win.native_controls), "event_count")) return 0;
+        return win.native_controls.event_count;
     }
 
     /// Poke every native control placed in the last presented frame; returns the count.
