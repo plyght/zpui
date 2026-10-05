@@ -388,7 +388,10 @@ pub fn picker(v: *SettingsView, kind: FontKind, t: *const Theme, cx: *Context(Se
 }
 
 fn onHover(_: *SettingsView, kind: FontKind, hovered: *const bool, _: *Window, cx: *Context(SettingsView)) void {
-    ui.hover.set(cx, zpui.fmt("settings-font-{s}", .{kind.slug()}), hovered.*);
+    // A hover handler runs outside a draw: no frame arena (`zpui.fmt`) here.
+    var buf: [64]u8 = undefined;
+    const key = std.fmt.bufPrint(&buf, "settings-font-{s}", .{kind.slug()}) catch return;
+    ui.hover.set(cx, key, hovered.*);
 }
 
 fn menu(v: *SettingsView, kind: FontKind, t_page: *const Theme, exit: ?f32, cx: *Context(SettingsView)) zpui.Div {

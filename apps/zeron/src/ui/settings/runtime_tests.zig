@@ -744,3 +744,31 @@ test "a streamed animation playing for many loops keeps the atlas bounded" {
     try testing.expect(peak_tiles >= 1 and final_tiles <= peak_tiles and peak_tiles <= 12);
     try testing.expect(peak_slots <= 3);
 }
+
+test "sweeping the pointer over every Settings page (hover in and out) never needs a frame arena" {
+    // Hover handlers run outside a draw; the font pickers' and account rows' handlers
+    // built their hover keys with `zpui.fmt` and crashed the app ("no element arena").
+    var h = try Harness.init();
+    defer h.deinit();
+    const v = h.openSettings(.general);
+    for (view_mod.Section.all) |section| {
+        v.update(h.app, openSection, .{section});
+        h.frames(2);
+        for ([_]f32{ 0, -700, -1400, -2100 }) |offset| {
+            v.update(h.app, scrollPage, .{offset});
+            h.frames(1);
+            var y: f32 = 10;
+            while (y < 1000) : (y += 30) {
+                var x: f32 = 10;
+                while (x < 1600) : (x += 60) h.tw().moveMouse(x, y);
+            }
+            h.tw().moveMouse(-5, -5);
+            h.app.runUntilParked();
+        }
+    }
+}
+
+fn scrollPage(v: *SettingsView, y: f32, cx: *zpui.Context(SettingsView)) void {
+    v.page_scroll.setOffset(.{ .x = 0, .y = y });
+    cx.notify();
+}

@@ -1417,3 +1417,39 @@ test "a frame requested from inside a frame does not nest; it redraws afterwards
     try testing.expectEqual(@as(u32, 2), v.renders); // the dropped request redrew once
     try testing.expect(!w.dirty);
 }
+
+// Hover / click handlers run outside a draw. Building strings or elements there with the
+// element arena (`zpui.fmt`, `div()`) panicked with "no element arena" (zeron Settings:
+// hovering a font picker or an account row crashed the app).
+const HoverFmtView = struct {
+    seen: [2]u8 = .{ 0, 0 },
+    events: u32 = 0,
+
+    pub fn render(_: *HoverFmtView, _: *Window, cx: *Context(HoverFmtView)) elements.Div {
+        return div().size(px(400)).child(div().id("hover-fmt").size(px(50)).onHover(cx.listener(HoverFmtView.onHover)));
+    }
+    fn onHover(self: *HoverFmtView, hovered: *const bool, _: *Window, _: *Context(HoverFmtView)) void {
+        const key = window_mod.arena_mod.fmt("row-{d}", .{@intFromBool(hovered.*)});
+        _ = div().id(key); // element building outside a draw works too
+        self.seen[@intFromBool(hovered.*)] = key[key.len - 1];
+        self.events += 1;
+    }
+};
+
+fn initHoverFmtView(_: *Window, _: *Context(HoverFmtView)) HoverFmtView {
+    return .{};
+}
+
+test "event handlers can use the element arena (zpui.fmt, div) outside a draw" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, HoverFmtView, initHoverFmtView, .{});
+    const tw = testWindow(handle.window(app).?);
+    tw.moveMouse(10, 10);
+    tw.moveMouse(300, 300);
+    const v = handle.rootView(app).?.read(app);
+    try testing.expectEqual(@as(u32, 2), v.events);
+    try testing.expectEqual(@as(u8, '1'), v.seen[1]);
+    try testing.expectEqual(@as(u8, '0'), v.seen[0]);
+    try testing.expect(window_mod.arena_mod.currentOrNull() == null); // nothing left installed
+}

@@ -69,6 +69,7 @@ const focus_mod = @import("../window/focus.zig");
 const text_mod = @import("../text/text.zig");
 const geometry = @import("../geometry.zig");
 const DispatchPhase = @import("dispatch_tree.zig").DispatchPhase;
+const arena_mod = @import("../window/arena.zig");
 pub const lifecycle_mod = @import("lifecycle.zig");
 
 // ---------------------------------------------------------------------------------------
@@ -210,6 +211,13 @@ pub const App = struct {
     new_entity_observers: SubscriberSet(NewEntityListener),
 
     pending_updates: u32 = 0,
+    /// Element arena for code running outside a draw (event handlers, timers, tasks,
+    /// native control actions): `zpui.fmt` / `div()` there used to panic ("no element
+    /// arena"). Entered by the outermost update when no arena is current; cleared when it
+    /// finishes, so nothing allocated in it may outlive the update.
+    update_arena: ?*arena_mod.ElementArena = null,
+    update_arena_prev: ?*arena_mod.ElementArena = null,
+    update_arena_entered: bool = false,
     flushing_effects: bool = false,
     shutting_down: bool = false,
     quit_requested: bool = false,
@@ -304,6 +312,11 @@ pub const App = struct {
         app.pending_notifications.deinit(gpa);
         app.pending_global_notifications.deinit(gpa);
         app.event_arena.deinit();
+        if (app.update_arena) |a| {
+            if (app.update_arena_entered) arena_mod.exit(app.update_arena_prev);
+            a.deinit();
+            gpa.destroy(a);
+        }
         app.observers.deinit();
         app.event_listeners.deinit();
         app.release_listeners.deinit();
@@ -450,6 +463,16 @@ pub const App = struct {
 
     pub fn startUpdate(app: *App) void {
         app.pending_updates += 1;
+        if (app.pending_updates == 1 and arena_mod.currentOrNull() == null) {
+            const a = app.update_arena orelse blk: {
+                const created = app.gpa.create(arena_mod.ElementArena) catch return;
+                created.* = .init(app.gpa);
+                app.update_arena = created;
+                break :blk created;
+            };
+            app.update_arena_prev = arena_mod.enter(a);
+            app.update_arena_entered = true;
+        }
     }
 
     pub fn finishUpdate(app: *App) void {
@@ -459,6 +482,12 @@ pub const App = struct {
             app.flushing_effects = false;
         }
         app.pending_updates -= 1;
+        if (app.pending_updates == 0 and app.update_arena_entered) {
+            app.update_arena_entered = false;
+            arena_mod.exit(app.update_arena_prev);
+            app.update_arena_prev = null;
+            app.update_arena.?.clear();
+        }
     }
 
     /// Run `f(ctx, app)` as an update (effects flush when the outermost update returns).

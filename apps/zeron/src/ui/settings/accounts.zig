@@ -860,7 +860,10 @@ fn accountRow(v: *SettingsView, a: *const Account, ix: usize, first: bool, t: *c
 }
 
 fn onRowHover(_: *SettingsView, ix: usize, hovered: *const bool, _: *Window, cx: *Context(SettingsView)) void {
-    ui.hover.set(cx, zpui.fmt("account-row-{d}-hover", .{ix}), hovered.*);
+    // A hover handler runs outside a draw: no frame arena (`zpui.fmt`) here.
+    var buf: [48]u8 = undefined;
+    const key = std.fmt.bufPrint(&buf, "account-row-{d}-hover", .{ix}) catch return;
+    ui.hover.set(cx, key, hovered.*);
 }
 
 fn skeleton(t: *const Theme) zpui.Div {
