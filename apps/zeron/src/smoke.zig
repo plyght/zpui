@@ -34,6 +34,14 @@
 //! `ZERON_SMOKE_SETTINGS=<section>` (`general`, `appearance`, ...): after the frames,
 //! open Settings on that page, render 30 more frames and capture it (on macOS the
 //! page's switches, pop-ups and sliders are native AppKit controls).
+//!
+//! `ZERON_SMOKE_SETTINGS_STRESS=<cycles>`: after the frames, open Settings, visit every
+//! section and poke every visible native control (macOS: real `NSEvent` clicks through
+//! AppKit's tracking loop for switches / checkboxes / sliders / steppers, pop-up menus
+//! opened and cancelled, programmatic `sendAction:` for the rest), close Settings,
+//! wait a varying number of frames (sometimes past the controls' idle detach), and
+//! repeat. Every step is logged (`zeron smoke: stress ...`) so a crash names the last
+//! action. Exits 0 after `PASS: zeron smoke: settings stress` (no capture).
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -61,6 +69,8 @@ pub const Options = struct {
     /// ZERON_SMOKE_SETTINGS=<section> (e.g. `appearance`): open Settings on that page
     /// before capturing (shows the native AppKit controls on macOS).
     settings: ?[]const u8 = null,
+    /// ZERON_SMOKE_SETTINGS_STRESS=<cycles>: the Settings open/poke/close stress.
+    settings_stress: ?[]const u8 = null,
 };
 
 const shell_mod = @import("ui/shell/shell.zig");
@@ -81,8 +91,9 @@ var state: ?State = null;
 /// Arm the smoke test for `win` (call once, right after opening the window).
 pub fn start(gpa: std.mem.Allocator, io: std.Io, win: *Window, opts: Options) void {
     state = .{ .gpa = gpa, .io = io, .opts = opts };
+    if (opts.settings_stress != null) state.?.opts.timeout_s = 3000;
     std.debug.print("zeron smoke: rendering {d} frames, then capturing (watchdog {d}s)\n", .{ opts.frames, opts.timeout_s });
-    if (std.Thread.spawn(.{}, watchdog, .{ io, opts.timeout_s, opts.frames })) |t| t.detach() else |err| std.debug.print("WARN: smoke watchdog thread: {t}\n", .{err});
+    if (std.Thread.spawn(.{}, watchdog, .{ io, state.?.opts.timeout_s, opts.frames })) |t| t.detach() else |err| std.debug.print("WARN: smoke watchdog thread: {t}\n", .{err});
     win.onNextFrame(Tick{ .left = opts.frames }, Tick.tick);
 }
 
@@ -106,6 +117,7 @@ const Tick = struct {
         _ = frames_seen.fetchAdd(1, .monotonic);
         if (self.left > 0) return win.onNextFrame(Tick{ .left = self.left - 1 }, tick);
         const s = &state.?;
+        if (s.opts.settings_stress) |n| if (self.waited == 0) return SettingsStress.begin(s, win, app, n);
         if (s.opts.settings) |section| if (self.waited == 0) return openSettings(s, win, app, section);
         if (s.opts.browser_url) |url| return openBrowser(s, win, app, url);
         if (s.opts.menu and self.waited == 0) return MenuProbe.begin(s, win, app);
@@ -155,6 +167,220 @@ const SettingsWait = struct {
         win.refresh();
         win.onNextFrame(SettingsWait{ .left = self.left - 1 }, tick);
     }
+};
+
+/// ZERON_SMOKE_SETTINGS_STRESS: open → every section (poke, poke again) → close, `cycles` times.
+const SettingsStress = struct {
+    cycles: u32,
+    cycle: u32 = 0,
+    section: usize = 0,
+    step: Step = .open,
+    wait: u32 = 0,
+    pokes: u64 = 0,
+
+    const Step = enum { open, visit, poke, unpoke, close };
+    const sections = settings_ui.view.Section.all;
+
+    fn begin(s: *State, win: *Window, app: *App, arg: []const u8) void {
+        const n = std.fmt.parseInt(u32, arg, 10) catch return failNow(s, app, "ZERON_SMOKE_SETTINGS_STRESS wants a cycle count");
+        std.debug.print("zeron smoke: stress: {d} Settings cycles over {d} sections\n", .{ n, sections.len });
+        if (builtin.os.tag == .macos) mac_poke.activate(win);
+        win.onNextFrame(SettingsStress{ .cycles = n }, tick);
+    }
+
+    fn tick(self: *const SettingsStress, win: *Window, app: *App) void {
+        _ = frames_seen.fetchAdd(1, .monotonic);
+        const s = &state.?;
+        var next = self.*;
+        win.refresh();
+        if (next.wait > 0) {
+            next.wait -= 1;
+            return win.onNextFrame(next, tick);
+        }
+        const shell = MenuProbe.shellOf(win, app) orelse return failNow(s, app, "stress: root view is not the shell");
+        switch (next.step) {
+            .open => {
+                std.debug.print("zeron smoke: stress: cycle {d}: open Settings\n", .{next.cycle});
+                shell.update(app, shell_mod.Shell.openSettings, .{win});
+                if (shell.read(app).settings_view == null) return failNow(s, app, "stress: settings did not open");
+                next.section = (next.cycle * 3) % sections.len; // vary the landing page
+                next.step = .visit;
+                next.wait = next.cycle % 3;
+            },
+            .visit => {
+                const v = shell.read(app).settings_view orelse return failNow(s, app, "stress: settings closed under us");
+                const which = sections[next.section % sections.len];
+                std.debug.print("zeron smoke: stress: cycle {d}: section {t}\n", .{ next.cycle, which });
+                v.update(app, settings_ui.SettingsView.openSection, .{which});
+                next.step = .poke;
+                next.wait = 2 + next.cycle % 2;
+            },
+            .poke, .unpoke => {
+                next.pokes += poke(win, next.cycle, next.section, next.step == .unpoke);
+                if (next.step == .poke) {
+                    next.step = .unpoke;
+                    // Sometimes leave the page (or Settings) while the clicks are still queued.
+                    next.wait = if (next.cycle % 4 == 3) 0 else 2;
+                } else {
+                    next.section += 1;
+                    const visited = next.section - (next.cycle * 3) % sections.len;
+                    next.step = if (visited >= sections.len) .close else .visit;
+                    next.wait = if (next.cycle % 4 == 3) 0 else 1;
+                }
+            },
+            .close => {
+                std.debug.print("zeron smoke: stress: cycle {d}: close Settings\n", .{next.cycle});
+                shell.update(app, shell_mod.Shell.closeSettings, .{win});
+                next.cycle += 1;
+                if (next.cycle >= next.cycles) {
+                    std.debug.print("PASS: zeron smoke: settings stress ({d} cycles, {d} control pokes, {d} attaches)\n", .{ next.cycles, next.pokes, win.native_controls.attach_count });
+                    s.done.store(true, .release);
+                    s.exit_code = 0;
+                    return app.quit();
+                }
+                next.step = .open;
+                // Every 5th cycle stays closed past the controls' idle detach.
+                next.wait = if (next.cycle % 5 == 0) zpui.window.native_controls_mod.keep_idle_presents + 10 else next.cycle % 4;
+            },
+        }
+        win.onNextFrame(next, tick);
+    }
+
+    /// Poke every native control placed in the last presented frame; returns the count.
+    fn poke(win: *Window, cycle: u32, section: usize, again: bool) u64 {
+        if (builtin.os.tag != .macos) return 0;
+        return mac_poke.pokeAll(win, cycle *% 7919 +% @as(u32, @intCast(section)) *% 31 +% @intFromBool(again));
+    }
+};
+
+const mac_poke = if (builtin.os.tag == .macos) struct {
+    const mac = zpui.mac_platform;
+    const objc = mac.objc_runtime;
+    const ak = mac.appkit;
+    const id = objc.id;
+    const NSInteger = isize;
+    const NSUInteger = usize;
+
+    fn activate(win: *Window) void {
+        const mw = mac.MacWindow.fromWindow(win.platform_window);
+        ak.sharedApp().msg(void, "activateIgnoringOtherApps:", .{objc.YES});
+        mw.native_window.msg(void, "makeKeyAndOrderFront:", .{@as(?id, null)});
+    }
+
+    const Target = struct { view: id, kind: zpui.platform.NativeControlKind, label: []const u8, center: ak.NSPoint, frame: ak.NSRect, min: f64, max: f64, items: usize };
+
+    fn pokeAll(win: *Window, seed: u64) u64 {
+        const mw = mac.MacWindow.fromWindow(win.platform_window);
+        var prng = std.Random.DefaultPrng.init(seed);
+        const rng = prng.random();
+        var targets: [64]Target = undefined;
+        var n: usize = 0;
+        for (win.native_controls.entries.items) |e| {
+            if (n == targets.len) break;
+            const c = for (mw.natives.children.items) |c| {
+                if (c.id == e.view) break c;
+            } else continue;
+            if (c.last == null or c.region.size.width < 2 or c.region.size.height < 2) continue;
+            const f = ak.frame(c.view);
+            // Center of the visible part of the control (content-view coordinates).
+            const x0 = @max(f.origin.x, c.region.origin.x);
+            const x1 = @min(f.origin.x + f.size.width, c.region.origin.x + c.region.size.width);
+            const y0 = @max(f.origin.y, c.region.origin.y);
+            const y1 = @min(f.origin.y + f.size.height, c.region.origin.y + c.region.size.height);
+            if (x1 - x0 < 2 or y1 - y0 < 2) continue;
+            targets[n] = .{ .view = c.view, .kind = e.kind, .label = e.state.label, .center = .{ .x = (x0 + x1) / 2, .y = (y0 + y1) / 2 }, .frame = f, .min = e.state.min, .max = e.state.max, .items = e.state.items.len };
+            n += 1;
+        }
+        for (targets[0..n]) |t| pokeOne(mw, t, rng);
+        return n;
+    }
+
+    fn pokeOne(mw: *mac.MacWindow, t: Target, rng: std.Random) void {
+        const mode = rng.uintLessThan(u8, 4);
+        switch (t.kind) {
+            .switch_, .checkbox => if (mode < 2) {
+                log(t, "click (NSEvent)");
+                postClick(mw, t.center, 0);
+            } else {
+                log(t, "sendAction");
+                const on = t.view.msg(NSInteger, "state", .{});
+                t.view.msg(void, "setState:", .{@as(NSInteger, if (on == 1) 0 else 1)});
+                sendAction(t.view);
+            },
+            .slider => if (mode < 2) {
+                log(t, "drag (NSEvent)");
+                const x = t.frame.origin.x + 4 + rng.float(f64) * @max(t.frame.size.width - 8, 1);
+                postClick(mw, .{ .x = x, .y = t.center.y }, 3);
+            } else {
+                log(t, "sendAction");
+                t.view.msg(void, "setDoubleValue:", .{t.min + rng.float(f64) * (t.max - t.min)});
+                sendAction(t.view);
+            },
+            .stepper => if (mode < 2) {
+                log(t, "click (NSEvent)");
+                postClick(mw, t.center, 0);
+            } else {
+                log(t, "sendAction");
+                t.view.msg(void, "setDoubleValue:", .{t.min + rng.float(f64) * (t.max - t.min)});
+                sendAction(t.view);
+            },
+            .segmented => if (t.items > 0) {
+                log(t, "sendAction");
+                t.view.msg(void, "setSelectedSegment:", .{@as(NSInteger, @intCast(rng.uintLessThan(usize, t.items)))});
+                sendAction(t.view);
+            },
+            .popup => if (mode == 0) {
+                // Open the menu with a real click; cancel it from the tracking run loop.
+                log(t, "open menu (NSEvent), cancel in 0.3s");
+                if (t.view.msg(?id, "menu", .{})) |menu| {
+                    const modes = ak.class("NSArray").msg(id, "arrayWithObject:", .{ak.nsString("kCFRunLoopCommonModes")});
+                    menu.msg(void, "performSelector:withObject:afterDelay:inModes:", .{ objc.sel("cancelTracking"), @as(?id, null), @as(f64, 0.3), modes });
+                }
+                postClick(mw, t.center, 0);
+            } else if (t.items > 0) {
+                const ix = rng.uintLessThan(usize, t.items);
+                std.debug.print("zeron smoke: stress: popup \"{s}\": sendAction item {d}/{d}\n", .{ t.label, ix, t.items });
+                t.view.msg(void, "selectItemAtIndex:", .{@as(NSInteger, @intCast(ix))});
+                sendAction(t.view);
+            },
+        }
+    }
+
+    fn log(t: Target, what: []const u8) void {
+        std.debug.print("zeron smoke: stress: {t} \"{s}\": {s}\n", .{ t.kind, t.label, what });
+    }
+
+    fn sendAction(view: id) void {
+        const action = view.msg(?objc.SEL, "action", .{}) orelse return;
+        _ = view.msg(objc.BOOL, "sendAction:to:", .{ action, view.msg(?id, "target", .{}) });
+    }
+
+    /// Queue mouse down, `drags` drags and up at `p` (content-view = window coordinates).
+    fn postClick(mw: *mac.MacWindow, p: ak.NSPoint, drags: u32) void {
+        const app = ak.sharedApp();
+        const num = mw.native_window.msg(NSInteger, "windowNumber", .{});
+        const now = ak.class("NSProcessInfo").msg(id, "processInfo", .{}).msg(f64, "systemUptime", .{});
+        const types = [_]NSUInteger{ 1, 6, 2 }; // left mouse down, dragged, up
+        var events: [8]NSUInteger = undefined;
+        var k: usize = 0;
+        events[k] = types[0];
+        k += 1;
+        for (0..@min(drags, 5)) |_| {
+            events[k] = types[1];
+            k += 1;
+        }
+        events[k] = types[2];
+        k += 1;
+        for (events[0..k], 0..) |ty, i| {
+            const pt: ak.NSPoint = .{ .x = p.x + @as(f64, @floatFromInt(i)), .y = p.y };
+            const ev = ak.class("NSEvent").msg(?id, "mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:", .{
+                ty, pt, @as(NSUInteger, 0), now + @as(f64, @floatFromInt(i)) * 0.01, num, @as(?id, null), @as(NSInteger, 0), @as(NSInteger, 1), @as(f32, if (ty == 2) 0 else 1),
+            }) orelse return;
+            app.msg(void, "postEvent:atStart:", .{ ev, objc.NO });
+        }
+    }
+} else struct {
+    fn activate(_: *Window) void {}
 };
 
 /// Browser smoke: open the tab, then poll every frame until the page loaded.

@@ -245,7 +245,7 @@ fn onLaunch(l: *Launch, app: *App) void {
     if (l.open_url) |url| zpui.lifecycle.openUrls(app, &.{url});
     // --- smoke test (CI): render N frames, capture, exit (smoke.zig) ---
     if (l.smoke_frames) |n|
-        smoke.start(l.gpa, l.io, window, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT"), .browser_url = l.environ.get("ZERON_SMOKE_BROWSER_URL"), .diag = l.environ.get("ZERON_SMOKE_DIAG") != null, .menu = l.environ.get("ZERON_SMOKE_MENU") != null, .settings = l.environ.get("ZERON_SMOKE_SETTINGS") });
+        smoke.start(l.gpa, l.io, window, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT"), .browser_url = l.environ.get("ZERON_SMOKE_BROWSER_URL"), .diag = l.environ.get("ZERON_SMOKE_DIAG") != null, .menu = l.environ.get("ZERON_SMOKE_MENU") != null, .settings = l.environ.get("ZERON_SMOKE_SETTINGS"), .settings_stress = l.environ.get("ZERON_SMOKE_SETTINGS_STRESS") });
     if (l.max_frames) |n| {
         const Quit = struct {
             left: u64,

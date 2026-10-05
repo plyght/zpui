@@ -1,0 +1,84 @@
+name: Settings stress
+
+# Manual: drive the real Zeron.app (ReleaseSafe, bundled like the shipped app) through
+# Settings over and over — open, every section, poke every native AppKit control
+# (real NSEvent clicks / slider drags / pop-up menus, plus sendAction:), close, reopen —
+# to reproduce "going into Settings sometimes crashes" (apps/zeron/src/smoke.zig,
+# ZERON_SMOKE_SETTINGS_STRESS). macOS 15 (frosted fallback) and macOS 26 (native
+# Liquid Glass, Reduce Transparency switched off like the glass CI job).
+# Uploads the run logs, ~/.zeron/logs and any crash report.
+on:
+  workflow_dispatch:
+    inputs:
+      cycles:
+        description: Settings cycles per run
+        default: "40"
+      runs:
+        description: Runs per job
+        default: "3"
+
+jobs:
+  stress:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-26-intel]
+        data: [fixtures, live]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: macOS version
+        run: sw_vers
+      - name: Build Zeron.app (ReleaseSafe, x86_64, minos 12.0 like the shipped bundle)
+        run: zig build zeron-app-bundle -Doptimize=ReleaseSafe -Dtarget=x86_64-macos.12.0 -Dmacos-sdk="$(xcrun --sdk macosx --show-sdk-path)" --summary all
+      - name: Disable Reduce Transparency (real Liquid Glass)
+        continue-on-error: true
+        run: |
+          defaults write com.apple.universalaccess reduceTransparency -bool false 2>&1 || true
+          defaults -currentHost write com.apple.universalaccess reduceTransparency -bool false 2>&1 || true
+          sudo defaults write com.apple.universalaccess reduceTransparency -bool false 2>&1 || true
+          killall cfprefsd 2>/dev/null || true
+      - name: Settings stress
+        timeout-minutes: 45
+        run: |
+          mkdir -p zig-out/stress
+          ls ~/Library/Logs/DiagnosticReports > "$RUNNER_TEMP/reports-before.txt" 2>/dev/null || true
+          args=(--smoke-frames 30 --dark)
+          if [ "${{ matrix.data }}" = fixtures ]; then args=(--fixtures apps/zeron/fixtures/reference "${args[@]}"); fi
+          status=0
+          for i in $(seq 1 "${{ inputs.runs || 3 }}"); do
+            echo "::group::run $i"
+            set +e
+            ZERON_SMOKE_SETTINGS_STRESS="${{ inputs.cycles || 40 }}" \
+              ./zig-out/Zeron.app/Contents/MacOS/zeron "${args[@]}" > "zig-out/stress/run-$i.log" 2>&1
+            code=$?
+            set -e
+            tail -n 60 "zig-out/stress/run-$i.log"
+            echo "::endgroup::"
+            echo "run $i: exit $code"
+            if [ "$code" != 0 ] || ! grep -q "PASS: zeron smoke: settings stress" "zig-out/stress/run-$i.log"; then
+              echo "::error::Settings stress run $i failed (exit $code); last lines:"
+              grep -E "panic|FAIL|error|Segmentation|thread [0-9]+ panic" "zig-out/stress/run-$i.log" | tail -n 20 || true
+              status=1
+            fi
+          done
+          exit $status
+      - name: Collect logs and crash reports
+        if: always()
+        run: |
+          mkdir -p zig-out/stress/reports zig-out/stress/zeron-logs
+          cp -R ~/.zeron/logs/. zig-out/stress/zeron-logs/ 2>/dev/null || true
+          for d in ~/Library/Logs/DiagnosticReports /Library/Logs/DiagnosticReports; do
+            find "$d" -maxdepth 2 -newer zig-out/Zeron.app -iname '*zeron*' -exec cp {} zig-out/stress/reports/ \; 2>/dev/null || true
+          done
+          ls -la zig-out/stress zig-out/stress/reports || true
+          for f in zig-out/stress/reports/*; do [ -f "$f" ] && { echo "== $f"; head -c 12000 "$f"; echo; }; done || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: settings-stress-${{ matrix.os }}-${{ matrix.data }}
+          path: zig-out/stress/
