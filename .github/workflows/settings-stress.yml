@@ -16,6 +16,9 @@ on:
       runs:
         description: Runs per job
         default: "3"
+      app_ref:
+        description: Build the app from this commit (the stress harness, smoke.zig, stays main's); empty = main
+        default: ""
 
 jobs:
   stress:
@@ -29,6 +32,18 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: App source at ${{ inputs.app_ref || 'main' }}
+        if: inputs.app_ref != ''
+        run: |
+          cp apps/zeron/src/smoke.zig "$RUNNER_TEMP/smoke.zig"
+          git checkout "${{ inputs.app_ref }}" -- . ':!.github'
+          cp "$RUNNER_TEMP/smoke.zig" apps/zeron/src/smoke.zig
+          grep -q ZERON_SMOKE_SETTINGS_STRESS apps/zeron/src/main.zig || \
+            sed -i '' 's/\.settings = l\.environ\.get("ZERON_SMOKE_SETTINGS") });/.settings = l.environ.get("ZERON_SMOKE_SETTINGS"), .settings_stress = l.environ.get("ZERON_SMOKE_SETTINGS_STRESS") });/' apps/zeron/src/main.zig
+          grep -n ZERON_SMOKE_SETTINGS_STRESS apps/zeron/src/main.zig
+          git log -1 --oneline "${{ inputs.app_ref }}"
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.17.0
