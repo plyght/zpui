@@ -145,6 +145,59 @@ pub const DockFrame = struct {
     }
 };
 
+/// `DockLayout`: the composer's height endpoints on both routes (layout
+/// endpoints can change while the route clock moves: wrapping, mode flips,
+/// attachment rows).
+pub const DockLayout = struct {
+    hero_height: f32,
+    thread_height: f32,
+    extra_height: f32 = 0,
+    compact: bool,
+
+    pub fn height(self: DockLayout, amount: f32) f32 {
+        return lerp(self.hero_height, self.thread_height, amount) + self.extra_height;
+    }
+
+    fn compactAmount(self: DockLayout, amount: f32) f32 {
+        return if (self.compact) amount else 0;
+    }
+};
+
+/// `DockReflow`: keeps a discrete layout change out of the painted geometry
+/// during a route (or its own settle) without filtering the route motion.
+pub const DockReflow = struct {
+    previous: ?struct { layout: DockLayout, frame: DockFrame } = null,
+    height_offset: Glide = .init(0),
+    compact_offset: Glide = .init(0),
+    last_sample: ?u64 = null,
+
+    pub fn active(self: DockReflow) bool {
+        return self.height_offset.active() or self.compact_offset.active();
+    }
+
+    /// A height correction and the compact-control position on the dock's
+    /// timeline (`sample`).
+    pub fn sample(self: *DockReflow, layout: DockLayout, frame: DockFrame, reduced: bool, now: u64) [2]f32 {
+        const previous = self.previous;
+        self.previous = .{ .layout = layout, .frame = frame };
+        const last_sample = self.last_sample;
+        self.last_sample = now;
+        const owns_layout = frame.active or self.active() or (if (previous) |p| p.frame.amount != frame.amount else false);
+        if (reduced or frame.snap_reflow or !owns_layout or previous == null) {
+            self.height_offset = .init(0);
+            self.compact_offset = .init(0);
+        } else if (previous) |p| {
+            // Do not consume idle time or lose velocity on route reversal.
+            const dt: f32 = if (frame.docked != p.frame.docked) 0 else if (last_sample) |l| seconds(l, now) else 0;
+            self.height_offset.advance(0, dt, duration(frame.docked));
+            self.compact_offset.advance(0, dt, duration(frame.docked));
+            self.height_offset.value += p.layout.height(frame.amount) - layout.height(frame.amount);
+            self.compact_offset.value += p.layout.compactAmount(frame.amount) - layout.compactAmount(frame.amount);
+        }
+        return .{ self.height_offset.value, std.math.clamp(layout.compactAmount(frame.amount) + self.compact_offset.value, 0, 1) };
+    }
+};
+
 // ---- panel hand-off (`composer_dock/panel_handoff.rs`) ----
 
 pub const handoff_duration: f32 = 0.320;
@@ -403,6 +456,19 @@ test "dock parity with composer_dock.rs" {
         try testing.expectApproxEqAbs(c.out[1], v.selectors, 1e-5);
         try testing.expectApproxEqAbs(c.out[2], v.footer, 1e-5);
         try testing.expectApproxEqAbs(c.out[3], v.dissolve, 1e-5);
+    }
+    // Reflow: a layout change mid-route stays continuous.
+    for (data.reflows) |c| {
+        var r: DockReflow = .{};
+        for (c.samples) |sm| {
+            var f: DockFrame = .settled(sm.docked);
+            f.active = sm.active;
+            f.amount = sm.amount;
+            const layout: DockLayout = .{ .hero_height = sm.layout[0], .thread_height = sm.layout[1], .extra_height = sm.layout[2], .compact = sm.compact };
+            const out = r.sample(layout, f, false, sm.t_ms * std.time.ns_per_ms);
+            try testing.expectApproxEqAbs(sm.out[0], out[0], 2e-2);
+            try testing.expectApproxEqAbs(sm.out[1], out[1], 2e-3);
+        }
     }
     // Whole-route runs: tick + position + width per frame.
     for (data.routes) |c| {

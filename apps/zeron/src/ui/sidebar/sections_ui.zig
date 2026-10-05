@@ -133,6 +133,8 @@ pub const State = struct {
     ctl: sections.Controller = .{},
     /// Section `⋯` menu: (section id, window position).
     menu: ?struct { id: []u8, pos: zpui.Point(f32) } = null,
+    /// [motion] The section menu's closing phase (MENU_OUT).
+    menu_exit: ui.popover.Exit = .{},
     /// Keyboard-highlighted menu row (`section_menu_active`).
     menu_active: ?usize = null,
     /// The open menu's key focus (`section_menu_focus`).
@@ -490,10 +492,11 @@ pub fn migrate(self: *Sidebar, cx: *Ctx) void {
 pub fn openDialog(self: *Sidebar, id: ?[]const u8, cx: *Ctx) void {
     const e = env(self, cx);
     const profile = sections.Controller.profileKey(self.gpa, e.workspace.read(cx).workspace_scope, e.auth) orelse return;
-    self.view_menu_open = false;
+    self.shutMenu(&self.view_menu_open, &self.view_menu_exit, cx);
     self.view_submenu = null;
     if (self.sec.menu) |m| self.gpa.free(m.id);
     self.sec.menu = null;
+    self.sec.menu_exit.clear();
     var name: []const u8 = "";
     var scratch: std.heap.ArenaAllocator = .init(self.gpa);
     defer scratch.deinit();
@@ -634,15 +637,22 @@ fn onMenuButton(self: *Sidebar, ix: usize, ev: *const zpui.ClickEvent, window: *
     const id = idAt(self, ix) orelse return;
     if (self.sec.menu) |m| self.gpa.free(m.id);
     self.sec.menu = .{ .id = self.gpa.dupe(u8, id) catch return, .pos = ev.mousePosition() orelse .{ .x = 0, .y = 0 } };
+    self.sec.menu_exit.clear();
     self.sec.menu_active = null;
     if (self.sec.menu_focus == null) self.sec.menu_focus = cx.focusHandle();
     window.focus(self.sec.menu_focus.?);
     cx.notify();
 }
 
+/// `begin_close`: the menu plays MENU_OUT before it is dropped (reduced
+/// motion drops it at once).
 fn closeMenu(self: *Sidebar, cx: *Ctx) void {
-    if (self.sec.menu) |m| self.gpa.free(m.id);
-    self.sec.menu = null;
+    if (self.sec.menu == null or self.sec.menu_exit.isClosing()) return;
+    if (self.sec.reduced or !self.sec.menu_exit.begin(cx.app.executor.now())) {
+        if (self.sec.menu) |m| self.gpa.free(m.id);
+        self.sec.menu = null;
+        self.sec.menu_exit.clear();
+    } else ui.popover.reap(Sidebar, cx);
     cx.notify();
 }
 
@@ -654,6 +664,7 @@ fn onMenuOutside(self: *Sidebar, _: *const zpui.input.MouseDownEvent, _: *Window
 /// Enter runs the highlighted action.
 fn onMenuKey(self: *Sidebar, ev: *const zpui.input.KeyDownEvent, _: *Window, cx: *Ctx) void {
     const key = ev.keystroke.key;
+    if (self.sec.menu_exit.isClosing()) return;
     if (std.mem.eql(u8, key, "escape")) {
         closeMenu(self, cx);
     } else if (std.mem.eql(u8, key, "up") or std.mem.eql(u8, key, "down")) {
@@ -672,21 +683,30 @@ fn onMenuAction(self: *Sidebar, action: u8, _: *const zpui.ClickEvent, _: *Windo
 
 /// `activate_section_menu`: 0 Edit section, 1 Archive all, 2 Delete.
 fn activateMenu(self: *Sidebar, action: u8, cx: *Ctx) void {
+    if (self.sec.menu_exit.isClosing()) return;
     const m = self.sec.menu orelse return;
-    self.sec.menu = null;
-    defer self.gpa.free(m.id);
+    const id = self.gpa.dupe(u8, m.id) catch return;
+    defer self.gpa.free(id);
+    closeMenu(self, cx);
     switch (action) {
-        0 => openDialog(self, m.id, cx),
-        1 => archiveSection(self, m.id, cx),
+        0 => openDialog(self, id, cx),
+        1 => archiveSection(self, id, cx),
         else => {
             cancelTransfer(self, cx);
-            _ = change(self, .{ .delete = .{ .id = m.id } }, cx);
+            _ = change(self, .{ .delete = .{ .id = id } }, cx);
         },
     }
     cx.notify();
 }
 
 pub fn renderMenu(self: *Sidebar, theme_in: *const Theme, cx: *Ctx) ?zpui.AnyElement {
+    const now = cx.app.executor.now();
+    if (self.sec.menu_exit.done(now)) {
+        if (self.sec.menu) |m| self.gpa.free(m.id);
+        self.sec.menu = null;
+        self.sec.menu_exit.clear();
+    }
+    const exit = self.sec.menu_exit.progress(now);
     const m = self.sec.menu orelse return null;
     var known = false;
     for (active(self, zpui.window.arena_mod.frameAllocator(), cx)) |s| if (std.mem.eql(u8, s.id, m.id)) {
@@ -704,7 +724,7 @@ pub fn renderMenu(self: *Sidebar, theme_in: *const Theme, cx: *Ctx) ?zpui.AnyEle
         card = card.child(ui.popover.menuRow(theme, self.sec.menu_active == i).id(.{ "section-action", i }).role(.menu_item)
             .onClick(cx.listenerWith(@as(u8, @intCast(i)), onMenuAction)).child(label));
     }
-    return ui.popover.anchoredAt(m.pos, card);
+    return ui.popover.anchoredAtExit(m.pos, card, exit);
 }
 
 // ---- archive all -------------------------------------------------------------------------

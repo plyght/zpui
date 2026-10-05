@@ -64,6 +64,9 @@ pub const Pickers = struct {
     subs: zpui.Subscriptions = .{},
 
     open: ?Kind = null,
+    /// [motion] The popover playing its exit (MENU_OUT) after `close`.
+    closing_kind: ?Kind = null,
+    exit: ui.popover.Exit = .{},
     /// Keyboard highlight (null: nothing highlighted until the user navigates).
     active: ?usize = null,
     geometry: [4]menu.MenuGeometry = @splat(.{ .height = 320, .below = false }),
@@ -154,7 +157,7 @@ pub const Pickers = struct {
         if (sel) |s| self.space_owner = self.gpa.dupe(u8, s) catch null;
         freeOpt(self.gpa, &self.branch);
         self.checkout = .local;
-        if (self.open == .branch or self.open == .checkout) self.open = null;
+        if (self.open == .branch or self.open == .checkout) self.close(null, cx);
         cx.notify();
     }
 
@@ -172,6 +175,8 @@ pub const Pickers = struct {
             return;
         }
         self.open = kind;
+        self.closing_kind = null;
+        self.exit.clear();
         self.menu_scroll.setOffset(.{ .x = 0, .y = 0 });
         // Clearing stale text emits `edited` after this returns: mute that one
         // event so its reset can't clobber the highlight anchored below.
@@ -203,8 +208,16 @@ pub const Pickers = struct {
     }
 
     pub fn close(self: *Pickers, window: ?*Window, cx: *Context(Pickers)) void {
-        if (self.open == null) return;
+        const kind = self.open orelse return;
         self.open = null;
+        // `begin_close`: the card plays MENU_OUT before it unmounts.
+        if (!ui.popover.appReduced(cx.app)) {
+            self.exit.clear();
+            if (self.exit.begin(cx.app.executor.now())) {
+                self.closing_kind = kind;
+                ui.popover.reap(Pickers, cx);
+            }
+        }
         if (window) |w| if (self.focus.containsFocused(w) or self.search.read(cx).isFocused(w)) w.blur();
         cx.notify();
     }
@@ -410,7 +423,7 @@ pub const Pickers = struct {
         switch (result) {
             .ok => {
                 self.setBranch(name);
-                self.open = null;
+                self.close(null, cx);
                 self.ensureRefs(true, cx);
             },
             .err => |e| self.switch_error = self.gpa.dupe(u8, e.message) catch null,
@@ -711,8 +724,8 @@ pub const Pickers = struct {
         var device_chip = self.footerChip(.device, "picker-device", .monitor, device_label, theme, cx);
         if (offline) device_chip = device_chip.textColor(theme.warning.opacity(0.8));
         var project_chip = self.footerChip(.space, "picker-project", .folder, project_label, theme, cx);
-        if (self.open == .device) device_chip = device_chip.child(self.overlayEnd(.device, cx));
-        if (self.open == .space) project_chip = project_chip.child(self.overlayEnd(.space, cx));
+        if (self.mounted(.device)) device_chip = device_chip.child(self.overlayEnd(.device, cx));
+        if (self.mounted(.space)) project_chip = project_chip.child(self.overlayEnd(.space, cx));
         return div().flexNone().flex().flexRow().itemsCenter().gap(px(4)).child(device_chip).child(project_chip);
     }
 
@@ -727,8 +740,8 @@ pub const Pickers = struct {
         const kind_icon: Icon = if (self.checkout == .local and (self.selectedRef() == null or self.selectedRef().?.worktreePath == null)) .folder else .folder_with_files;
         var checkout_chip = self.footerChip(.checkout, "picker-checkout", kind_icon, self.checkoutLabel(), theme, cx);
         var branch_chip = self.footerChip(.branch, "picker-branch", .git_branch, self.refLabel(), theme, cx);
-        if (self.open == .checkout) checkout_chip = checkout_chip.child(self.overlayStart(.checkout, cx));
-        if (self.open == .branch) branch_chip = branch_chip.child(self.overlayStart(.branch, cx));
+        if (self.mounted(.checkout)) checkout_chip = checkout_chip.child(self.overlayStart(.checkout, cx));
+        if (self.mounted(.branch)) branch_chip = branch_chip.child(self.overlayStart(.branch, cx));
         var row = div().wFull().minW0().flex().flexRow().itemsCenter().gap(px(4))
             .child(div().flex().flexRow().itemsCenter().minW0().child(checkout_chip))
             .child(div().flex().flexRow().itemsCenter().minW0().child(branch_chip));
@@ -767,25 +780,48 @@ pub const Pickers = struct {
             .child(body);
     }
 
+    /// Mounted: open, or `kind` is playing its exit (`Popup::get`). Drops
+    /// a finished exit (`finish_close`).
+    fn mounted(self: *Pickers, kind: Kind) bool {
+        if (self.open == kind) return true;
+        const k = self.closing_kind orelse return false;
+        return k == kind;
+    }
+
+    /// The exit progress for `kind` this frame (null while open).
+    fn exitFor(self: *Pickers, kind: Kind, cx: *Context(Pickers)) ?f32 {
+        if (self.open == kind) return null;
+        const now = cx.app.executor.now();
+        if (self.exit.done(now)) {
+            self.exit.clear();
+            self.closing_kind = null;
+            return 1;
+        }
+        return self.exit.progress(now);
+    }
+
     /// Below-left (branch / checkout on the canvas) or above-left.
     fn overlayStart(self: *Pickers, kind: Kind, cx: *Context(Pickers)) zpui.Div {
+        const exit = self.exitFor(kind, cx);
         const card = self.content(kind, cx);
-        return if (self.geometry[@intFromEnum(kind)].below) ui.popover.anchoredBelow(card) else ui.popover.anchoredAbove(card);
+        return if (self.geometry[@intFromEnum(kind)].below) ui.popover.anchoredBelowExit(card, exit) else ui.popover.anchoredAboveExit(card, exit);
     }
 
     /// Right-aligned to the trigger: above (default) or below when flipped.
     fn overlayEnd(self: *Pickers, kind: Kind, cx: *Context(Pickers)) zpui.Div {
+        const exit = self.exitFor(kind, cx);
         const card = self.content(kind, cx);
-        const framed = ui.popover.frostedCard(card);
+        const framed = ui.popover.frostedCardExit(card, exit);
+        // `anchored_menu_below_end` / `_above_end`: MENU_TRAVEL (4 px) from the trigger side.
         if (self.geometry[@intFromEnum(kind)].below) {
             return div().absolute().bottom(px(0)).right(px(0)).size(px(0)).child(zpui.deferred(
                 zpui.anchored().anchorCorner(.top_right).snapToWindowWithMargin(.all(8))
-                    .child(ui.anim.menuIn("picker-below-end", div().occlude().pt(px(6)).child(framed), -2)),
+                    .child(ui.popover.menuMotion("picker-below-end", exit, div().occlude().pt(px(6)).child(framed), -4)),
             ).withPriority(1));
         }
         return div().absolute().top(px(0)).right(px(0)).size(px(0)).child(zpui.deferred(
             zpui.anchored().anchorCorner(.bottom_right).snapToWindowWithMargin(.all(8))
-                .child(ui.anim.menuIn("picker-above-end", div().occlude().pb(px(6)).child(framed), 4)),
+                .child(ui.popover.menuMotion("picker-above-end", exit, div().occlude().pb(px(6)).child(framed), 4)),
         ).withPriority(1));
     }
 

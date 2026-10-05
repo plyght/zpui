@@ -446,7 +446,6 @@ test {
     _ = @import("ui/shell/harness_updates_test.zig");
     _ = @import("ui/shell/sidebar_sync_parity_test.zig");
     _ = @import("ui/shell/sidebar_sync_test.zig");
-    _ = @import("ui/shell/dock.zig"); // [motion] composer route choreography (parity)
     _ = @import("ui/settings/root.zig");
     _ = @import("ui/background/root.zig");
     _ = @import("ui/pickers/root.zig");

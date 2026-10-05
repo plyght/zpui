@@ -117,6 +117,16 @@ pub const HistoryPane = struct {
     view_mode: ViewMode = .all_commits,
     collapsed: std.StringHashMapUnmanaged(void) = .empty,
     view_arena: std.heap.ArenaAllocator,
+    /// [motion] The previous build's arena: rows leaving during a fold
+    /// transition still point into it (the two swap on every rebuild).
+    prev_arena: std.heap.ArenaAllocator,
+    /// [motion] A branch fold's row choreography (`HistoryViewTransition`):
+    /// the merged old + new rows, which of them enter / exit, and the final
+    /// rows the settle swaps in after COLLAPSE.
+    transition: ?struct { final: []const Commit, rows: []const RowTransition } = null,
+    view_epoch: u64 = 0,
+    animate_fold: bool = false,
+    transition_task: Task(void) = .none,
     visible: []const Commit = &.{},
     layout: graph.Layout = .{},
     hidden_counts: std.StringHashMapUnmanaged(usize) = .empty,
@@ -144,6 +154,9 @@ pub const HistoryPane = struct {
     author_name_mode: bool = false,
     column_menu_at: ?zpui.Point(f32) = null,
     author_menu_at: ?zpui.Point(f32) = null,
+    /// [motion] The two menus' closing phases (MENU_OUT).
+    column_exit: ui.popover.Exit = .{},
+    author_exit: ui.popover.Exit = .{},
     focus_key_buf: [48]u8 = undefined,
     author_w: f32 = graph.author_width,
     date_w: f32 = graph.date_width,
@@ -162,6 +175,7 @@ pub const HistoryPane = struct {
             .focus = cx.focusHandle(),
             .list = zpui.ListState.init(cx.gpa(), 0, .top, px(graph.row_height * 5)),
             .view_arena = .init(cx.gpa()),
+            .prev_arena = .init(cx.gpa()),
         };
         if (model.settings_store.current(cx.app)) |st| {
             self.show_author = st.gitHistoryColumns.author;
@@ -186,7 +200,9 @@ pub const HistoryPane = struct {
         var it = self.collapsed.keyIterator();
         while (it.next()) |k| self.gpa.free(k.*);
         self.collapsed.deinit(self.gpa);
+        self.transition_task.cancel();
         self.view_arena.deinit();
+        self.prev_arena.deinit();
         self.closeSearch(app);
         self.list.release();
         self.focus.release(app);
@@ -258,6 +274,16 @@ pub const HistoryPane = struct {
         const key = h.final();
         if (key == self.built_key) return;
         self.built_key = key;
+        // A second fold mid-tween starts from the previous destination.
+        const old: []const Commit = if (self.transition) |t| t.final else self.visible;
+        self.transition = null;
+        self.transition_task.cancel();
+        self.transition_task = .none;
+        const animate = self.animate_fold and !ui.popover.appReduced(cx.app);
+        self.animate_fold = false;
+        const anchor = self.scrollAnchor();
+        // Keep the old rows alive in the other arena for the exit rows.
+        std.mem.swap(std.heap.ArenaAllocator, &self.view_arena, &self.prev_arena);
         _ = self.view_arena.reset(.retain_capacity);
         self.hidden_counts = .empty;
         const a = self.view_arena.allocator();
@@ -285,11 +311,60 @@ pub const HistoryPane = struct {
                 self.visible = tips;
             },
         }
+        // [motion] `apply_view_change(animate_rows)`: a fold merges the old and
+        // new rows; leaving rows collapse and arriving rows grow over COLLAPSE.
+        if (animate and old.len > 0 and !sameShas(old, self.visible)) {
+            if (historyTransitionRows(a, old, self.visible)) |tr| {
+                self.transition = .{ .final = self.visible, .rows = tr.rows };
+                self.visible = tr.commits;
+                self.view_epoch +%= 1;
+                self.transition_task = cx.timer(zt.motion.collapse.totalNs(1.0), onTransitionSettled) catch .none;
+            } else |_| {}
+        }
         self.layout = graph.layoutGraph(a, self.visible, head) catch .{};
         const loaded = graph.layoutGraph(a, st.commits.items, head) catch graph.Layout{};
         self.lane_capacity = @max(self.lane_capacity, @max(self.layout.max_lane_count, loaded.max_lane_count));
         const count = self.visible.len + @intFromBool(st.hasLoadMore());
         self.list.resetWithUniformHeight(count, px(graph.row_height));
+        self.restoreScrollAnchor(anchor);
+    }
+
+    /// `settle_view_transition`: swap in the final rows (the merged rows'
+    /// zero-height leftovers drop out without moving the viewport).
+    fn onTransitionSettled(self: *HistoryPane, cx: *Context(HistoryPane)) void {
+        self.transition_task = .none;
+        const t = self.transition orelse return;
+        const anchor = self.scrollAnchor();
+        self.transition = null;
+        self.visible = t.final;
+        const st = self.store.read(cx);
+        self.layout = graph.layoutGraph(self.view_arena.allocator(), self.visible, st.head_sha) catch .{};
+        self.list.resetWithUniformHeight(self.visible.len + @intFromBool(st.hasLoadMore()), px(graph.row_height));
+        self.restoreScrollAnchor(anchor);
+        cx.notify();
+    }
+
+    const ScrollAnchor = struct { sha_buf: [64]u8 = undefined, sha_len: usize = 0, offset: f32 = 0 };
+
+    /// `current_scroll_anchor`: the first visible row's sha + the offset into it.
+    fn scrollAnchor(self: *const HistoryPane) ?ScrollAnchor {
+        const top = self.list.logicalScrollTop();
+        if (top.item_ix >= self.visible.len) return null;
+        const sha = self.visible[top.item_ix].sha;
+        var out: ScrollAnchor = .{ .offset = top.offset_in_item };
+        out.sha_len = @min(sha.len, out.sha_buf.len);
+        @memcpy(out.sha_buf[0..out.sha_len], sha[0..out.sha_len]);
+        return out;
+    }
+
+    /// `restore_scroll_anchor`: the same commit stays under the viewport top.
+    fn restoreScrollAnchor(self: *HistoryPane, anchor: ?ScrollAnchor) void {
+        const an = anchor orelse return;
+        const sha = an.sha_buf[0..an.sha_len];
+        for (self.visible, 0..) |c, i| if (std.mem.eql(u8, c.sha, sha)) {
+            self.list.scrollTo(.{ .item_ix = i, .offset_in_item = an.offset });
+            return;
+        };
     }
 
     // ---- interactions -------------------------------------------------------------
@@ -377,6 +452,7 @@ pub const HistoryPane = struct {
             }
             break;
         }
+        self.animate_fold = true; // [motion] `toggle_branch_ref` animates the rows
         cx.notify();
     }
 
@@ -470,23 +546,47 @@ pub const HistoryPane = struct {
     fn onColumnsButton(self: *HistoryPane, ev: *const zpui.input.MouseDownEvent, window: *Window, cx: *Context(HistoryPane)) void {
         window.preventDefault();
         cx.stopPropagation();
-        self.author_menu_at = null;
-        self.column_menu_at = if (self.column_menu_at == null) ev.position else null;
+        self.closeMenuAt(&self.author_menu_at, &self.author_exit, cx);
+        if (self.column_menu_at == null or self.column_exit.isClosing()) {
+            self.column_menu_at = ev.position;
+            self.column_exit.clear();
+        } else self.closeMenuAt(&self.column_menu_at, &self.column_exit, cx);
         cx.notify();
     }
 
     fn onAuthorRightClick(self: *HistoryPane, ev: *const zpui.input.MouseDownEvent, window: *Window, cx: *Context(HistoryPane)) void {
         window.preventDefault();
         cx.stopPropagation();
-        self.column_menu_at = null;
+        self.closeMenuAt(&self.column_menu_at, &self.column_exit, cx);
         self.author_menu_at = ev.position;
+        self.author_exit.clear();
         cx.notify();
     }
 
     fn onMenuOutside(self: *HistoryPane, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(HistoryPane)) void {
-        self.column_menu_at = null;
-        self.author_menu_at = null;
+        self.closeMenuAt(&self.column_menu_at, &self.column_exit, cx);
+        self.closeMenuAt(&self.author_menu_at, &self.author_exit, cx);
         cx.notify();
+    }
+
+    /// `begin_close` for a positioned menu: it plays MENU_OUT, then the
+    /// render drops it (reduced motion drops it at once).
+    fn closeMenuAt(_: *HistoryPane, slot: *?zpui.Point(f32), exit: *ui.popover.Exit, cx: *Context(HistoryPane)) void {
+        if (slot.* == null or exit.isClosing()) return;
+        if (ui.popover.appReduced(cx.app)) {
+            slot.* = null;
+            return;
+        }
+        if (exit.begin(cx.app.executor.now())) ui.popover.reap(HistoryPane, cx);
+    }
+
+    /// Per frame: drop a finished exit; the exit progress (null while open).
+    fn menuExit(slot: *?zpui.Point(f32), exit: *ui.popover.Exit, now: u64) ?f32 {
+        if (exit.done(now)) {
+            exit.clear();
+            slot.* = null;
+        }
+        return exit.progress(now);
     }
 
     fn onToggleColumn(self: *HistoryPane, col: Column, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
@@ -510,7 +610,7 @@ pub const HistoryPane = struct {
     fn onToggleAuthorDisplay(self: *HistoryPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
         cx.stopPropagation();
         self.author_name_mode = !self.author_name_mode;
-        self.author_menu_at = null;
+        self.closeMenuAt(&self.author_menu_at, &self.author_exit, cx);
         const Set = struct {
             fn set(v: bool, s: *model.UiSettings, _: Allocator) void {
                 s.gitHistoryAuthorDisplay = if (v) .name else .avatar;
@@ -543,9 +643,9 @@ pub const HistoryPane = struct {
         } else if (std.mem.eql(u8, key, "end")) {
             self.list.scrollToEnd();
         } else if (std.mem.eql(u8, key, "escape")) {
-            if (self.column_menu_at == null and self.author_menu_at == null) return;
-            self.column_menu_at = null;
-            self.author_menu_at = null;
+            if ((self.column_menu_at == null or self.column_exit.isClosing()) and (self.author_menu_at == null or self.author_exit.isClosing())) return;
+            self.closeMenuAt(&self.column_menu_at, &self.column_exit, cx);
+            self.closeMenuAt(&self.author_menu_at, &self.author_exit, cx);
         } else return;
         cx.stopPropagation();
         cx.notify();
@@ -853,7 +953,20 @@ pub const HistoryPane = struct {
                     .onClick(cx.listenerWith(ix, onShaClick))
                     .child(if (copied) "Copied" else c.sha[0..@min(7, c.sha.len)])));
         }
-        return zpui.intoAnyElement(row.child(cells));
+        const done = zpui.intoAnyElement(row.child(cells));
+        // [motion] `history-row-fold-{epoch}-{sha}-{in|out}`: COLLAPSE height
+        // 36·k with opacity .35 → 1 for rows entering / leaving a fold.
+        if (self.transition) |t| if (ix < t.rows.len and t.rows[ix] != .stable) {
+            const entering = t.rows[ix] == .entering;
+            const Fold = struct {
+                fn f(enter: bool, el: zpui.Div, k: f32) zpui.Div {
+                    const amount = if (enter) k else 1 - k;
+                    return el.h(px(graph.row_height * amount)).opacity(0.35 + 0.65 * amount);
+                }
+            };
+            return zpui.intoAnyElement(zpui.withAnimationCtx(div().wFull().flexNone().overflowHidden().child(done), .{ "history-row-fold", std.hash.Wyhash.hash(self.view_epoch *% 2 +% @intFromBool(entering), c.sha) }, zt.motion.collapse.animation(), entering, Fold.f));
+        };
+        return done;
     }
 
     fn loadMoreRow(self: *HistoryPane, theme: *const Theme, cx: *Context(HistoryPane)) AnyElement {
@@ -953,21 +1066,21 @@ pub const HistoryPane = struct {
             .child(div().w(px(12)).flexNone().flex().justifyEnd().child(if (checked) ui.icon.of(.check, 10, theme.text_muted) else null));
     }
 
-    fn columnMenu(self: *HistoryPane, at: zpui.Point(f32), base: *const Theme, cx: *Context(HistoryPane)) AnyElement {
+    fn columnMenu(self: *HistoryPane, at: zpui.Point(f32), exit: ?f32, base: *const Theme, cx: *Context(HistoryPane)) AnyElement {
         const theme = arenaTheme(base.forPopup());
         const card = ui.popover.card(theme).w(px(132)).rounded(px(9)).onMouseDownOut(cx.listener(onMenuOutside))
             .child(div().flex().flexCol().gap(px(ui.popover.menu_gap))
                 .child(menuOption(theme, "history-column-author", "Author", self.show_author).onClick(cx.listenerWith(Column.author, onToggleColumn)))
                 .child(menuOption(theme, "history-column-date", "Date", self.show_date).onClick(cx.listenerWith(Column.date, onToggleColumn)))
                 .child(menuOption(theme, "history-column-sha", "SHA", self.show_sha).onClick(cx.listenerWith(Column.sha, onToggleColumn))));
-        return ui.popover.anchoredAt(at, card);
+        return ui.popover.anchoredAtExit(at, card, exit);
     }
 
-    fn authorMenu(self: *HistoryPane, at: zpui.Point(f32), base: *const Theme, cx: *Context(HistoryPane)) AnyElement {
+    fn authorMenu(self: *HistoryPane, at: zpui.Point(f32), exit: ?f32, base: *const Theme, cx: *Context(HistoryPane)) AnyElement {
         const theme = arenaTheme(base.forPopup());
         const card = ui.popover.card(theme).w(px(116)).rounded(px(9)).onMouseDownOut(cx.listener(onMenuOutside))
             .child(menuOption(theme, "history-author-display-name", "Name", self.author_name_mode).onClick(cx.listener(onToggleAuthorDisplay)));
-        return ui.popover.anchoredAt(at, card);
+        return ui.popover.anchoredAtExit(at, card, exit);
     }
 
     // ---- render -------------------------------------------------------------------
@@ -1122,8 +1235,10 @@ pub const HistoryPane = struct {
             root = root.child(errorBanner(e, theme));
         };
         root = root.child(zpui.containerQuery(MainQuery{ .pane = cx.weakEntity(), .theme = theme }, MainQuery.render).wFull().flex1().minH0());
-        if (self.column_menu_at) |at| root = root.child(self.columnMenu(at, theme, cx));
-        if (self.author_menu_at) |at| root = root.child(self.authorMenu(at, theme, cx));
+        const column_exit = menuExit(&self.column_menu_at, &self.column_exit, cx.app.executor.now());
+        const author_exit = menuExit(&self.author_menu_at, &self.author_exit, cx.app.executor.now());
+        if (self.column_menu_at) |at| root = root.child(self.columnMenu(at, column_exit, theme, cx));
+        if (self.author_menu_at) |at| root = root.child(self.authorMenu(at, author_exit, theme, cx));
         return zpui.intoAnyElement(root);
     }
 
@@ -1183,3 +1298,80 @@ pub const HistoryPane = struct {
             .bg(theme.danger.opacity(0.05)).truncate().whitespaceNowrap().textSize(px(11)).textColor(theme.danger_muted).child(text);
     }
 };
+
+
+// ---- [motion] fold transition rows (`history_transition_rows`) ------------------------
+
+pub const RowTransition = enum { stable, entering, exiting };
+
+fn sameShas(a: []const Commit, b: []const Commit) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (!std.mem.eql(u8, x.sha, y.sha)) return false;
+    return true;
+}
+
+/// `history_transition_rows`: the target rows in order, with every row that
+/// only the old view has re-inserted after the last shared row above it
+/// (leading ones first) and tagged as exiting; new rows are entering.
+pub fn historyTransitionRows(a: Allocator, old: []const Commit, target: []const Commit) !struct { commits: []Commit, rows: []RowTransition } {
+    var target_shas: std.StringHashMapUnmanaged(void) = .empty;
+    for (target) |c| try target_shas.put(a, c.sha, {});
+    var old_shas: std.StringHashMapUnmanaged(void) = .empty;
+    for (old) |c| try old_shas.put(a, c.sha, {});
+    var before_first: std.ArrayList(Commit) = .empty;
+    // anchor sha → the old-only rows that followed it.
+    var after_anchor: std.StringArrayHashMapUnmanaged(std.ArrayList(Commit)) = .empty;
+    var anchor: ?[]const u8 = null;
+    for (old) |c| {
+        if (target_shas.contains(c.sha)) {
+            anchor = c.sha;
+        } else if (anchor) |an| {
+            const gop = try after_anchor.getOrPut(a, an);
+            if (!gop.found_existing) gop.value_ptr.* = .empty;
+            try gop.value_ptr.append(a, c);
+        } else try before_first.append(a, c);
+    }
+    var commits: std.ArrayList(Commit) = .empty;
+    var rows: std.ArrayList(RowTransition) = .empty;
+    for (before_first.items) |c| {
+        try commits.append(a, c);
+        try rows.append(a, .exiting);
+    }
+    for (target) |c| {
+        try commits.append(a, c);
+        try rows.append(a, if (old_shas.contains(c.sha)) .stable else .entering);
+        if (after_anchor.fetchSwapRemove(c.sha)) |kv| for (kv.value.items) |e| {
+            try commits.append(a, e);
+            try rows.append(a, .exiting);
+        };
+    }
+    // Duplicate anchors / no shared row: keep the leftovers exiting.
+    for (after_anchor.values()) |list| for (list.items) |e| {
+        try commits.append(a, e);
+        try rows.append(a, .exiting);
+    };
+    return .{ .commits = commits.items, .rows = rows.items };
+}
+
+test "history transition rows match history_transition_rows" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const C = struct {
+        fn of(comptime shas: []const []const u8) []const Commit {
+            comptime var out: [shas.len]Commit = undefined;
+            inline for (shas, 0..) |sha, i| out[i] = .{ .sha = sha };
+            const final = out;
+            return &final;
+        }
+    };
+    // Folding b, c away: they leave after their anchor a.
+    const r = try historyTransitionRows(a, C.of(&.{ "a", "b", "c", "d" }), C.of(&.{ "a", "d" }));
+    try std.testing.expectEqual(@as(usize, 4), r.commits.len);
+    try std.testing.expectEqualStrings("b", r.commits[1].sha);
+    try std.testing.expectEqualSlices(RowTransition, &.{ .stable, .exiting, .exiting, .stable }, r.rows);
+    // Unfolding: x enters, a leading old-only row leaves first.
+    const u = try historyTransitionRows(a, C.of(&.{ "z", "a", "d" }), C.of(&.{ "a", "x", "d" }));
+    try std.testing.expectEqualStrings("z", u.commits[0].sha);
+    try std.testing.expectEqualSlices(RowTransition, &.{ .exiting, .stable, .entering, .stable }, u.rows);
+}

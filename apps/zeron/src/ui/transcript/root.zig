@@ -22,6 +22,7 @@ pub const workspace_links = @import("workspace_links.zig");
 pub const subagents = @import("subagents.zig");
 pub const blobs = @import("blobs.zig");
 pub const badges = @import("badges.zig");
+pub const stick = @import("stick.zig");
 
 pub const TranscriptView = view.TranscriptView;
 pub const parseFixture = view.parseFixture;
@@ -35,4 +36,5 @@ test {
     _ = @import("compact_test.zig");
     _ = @import("parity_test.zig");
     _ = @import("badges.zig");
+    _ = @import("stick.zig");
 }

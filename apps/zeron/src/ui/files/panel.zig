@@ -186,6 +186,8 @@ pub const FilesPanel = struct {
 
     // mutations
     menu: ?ContextMenu = null,
+    /// [motion] The context menu's closing phase (MENU_OUT).
+    menu_exit: ui.popover.Exit = .{},
     rename: ?Rename = null,
     delete_flow: ?DeleteFlow = null,
     mutation_error: ?[]u8 = null,
@@ -567,12 +569,21 @@ pub const FilesPanel = struct {
         self.tree.select(path);
         if (self.menu) |m| self.gpa.free(m.path);
         self.menu = .{ .path = self.gpa.dupe(u8, path) catch return, .position = pos };
+        self.menu_exit.clear();
         cx.notify();
     }
 
     fn closeMenu(self: *FilesPanel) void {
         if (self.menu) |m| self.gpa.free(m.path);
         self.menu = null;
+        self.menu_exit.clear();
+    }
+
+    /// `begin_close`: the menu plays MENU_OUT before it is dropped.
+    fn beginMenuClose(self: *FilesPanel, cx: *Context(FilesPanel)) void {
+        if (self.menu == null or self.menu_exit.isClosing()) return;
+        if (ui.popover.appReduced(cx.app)) return self.closeMenu();
+        if (self.menu_exit.begin(cx.app.executor.now())) ui.popover.reap(FilesPanel, cx);
     }
 
     fn onTreeMouseDown(self: *FilesPanel, _: *const zpui.input.MouseDownEvent, window: *Window, _: *Context(FilesPanel)) void {
@@ -979,10 +990,11 @@ pub const FilesPanel = struct {
     }
 
     fn onMenuRow(self: *FilesPanel, ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(FilesPanel)) void {
+        if (self.menu_exit.isClosing()) return;
         const m = self.menu orelse return;
         const path = self.gpa.dupe(u8, m.path) catch return;
         defer self.gpa.free(path);
-        self.closeMenu();
+        self.beginMenuClose(cx);
         switch (ix) {
             0 => {
                 const is_dir = if (self.tree.node(path)) |n| n.kind == .directory else false;
@@ -1002,7 +1014,7 @@ pub const FilesPanel = struct {
     }
 
     fn onMenuOutside(self: *FilesPanel, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(FilesPanel)) void {
-        self.closeMenu();
+        self.beginMenuClose(cx);
         cx.notify();
     }
 
@@ -1262,6 +1274,7 @@ pub const FilesPanel = struct {
                 .child(div().flex1().minW0().child(msg)));
         }
         if (self.opts.show_sections) root = root.child(self.renderSections(theme, cx));
+        if (self.menu_exit.done(cx.app.executor.now())) self.closeMenu();
         if (self.menu) |m| root = root.child(self.renderMenu(m, theme, cx));
         if (self.delete_flow) |d| root = root.child(self.renderDeleteDialog(d, theme, window, cx));
         return zpui.intoAnyElement(root);
@@ -1488,7 +1501,7 @@ pub const FilesPanel = struct {
             row = if (enabled) row.onClick(cx.listenerWith(i, onMenuRow)) else row.opacity(0.38);
             card = card.child(row);
         }
-        return ui.popover.anchoredAt(m.position, card);
+        return ui.popover.anchoredAtExit(m.position, card, self.menu_exit.progress(cx.app.executor.now()));
     }
 
     fn renderDeleteDialog(self: *FilesPanel, d: DeleteFlow, theme_in: *const Theme, window: *Window, cx: *Context(FilesPanel)) AnyElement {

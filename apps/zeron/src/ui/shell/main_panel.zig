@@ -19,7 +19,7 @@ const settings_store_ui = @import("../settings/store.zig");
 const harness_updates = @import("harness_updates.zig");
 const right_pane = @import("right_pane.zig");
 const files = @import("../files/root.zig");
-const dock_mod = @import("dock.zig");
+const dock_mod = @import("zeron_composer").dock;
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -60,6 +60,10 @@ pub const MainPanel = struct {
     dock: dock_mod.DockState = .{},
     composer_probe: ?zpui.Bounds(f32) = null,
     col_probe: ?zpui.Bounds(f32) = null,
+    /// [motion] The right pane's target width (set by the shell): a route
+    /// that also changes it plays the panel hand-off fade-through.
+    pane_target: f32 = 0,
+    departing_width: f32 = 0,
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, cx: *Context(MainPanel)) !MainPanel {
         var self: MainPanel = .{
@@ -117,8 +121,23 @@ pub const MainPanel = struct {
         // [motion] `composer_dock`: one clock for the hero ↔ thread hand-off.
         const reduced = window.prefersReducedMotion();
         const t_now = cx.app.executor.now();
+        const handoff = self.dock.observePane(has_chat, self.pane_target, !reduced, t_now);
         const frame = self.dock.tick(has_chat, reduced, t_now);
-        const in_flight = (frame.active or self.dock.moving) and has_spaces and self.composer_probe != null and self.col_probe != null;
+        {
+            const ComposerView = @TypeOf(self.slots.composer_view).Type;
+            self.slots.composer_view.update(cx, ComposerView.setDockFrame, .{frame});
+        }
+        // `layout_width`: the composer's width glides on the route clock.
+        self.slots.width_override = null;
+        self.slots.width_override = self.dock.layoutWidth(self.slots.composerTargetWidth(width, cx), reduced, t_now);
+        // `transcript_width`: a departing transcript keeps its source column.
+        self.departing_width = self.dock.transcriptWidth(width, has_chat, handoff);
+        // The outgoing transcript is released once its fade has run out.
+        if (!has_chat and frame.transcript() <= 0) {
+            const TranscriptView = @TypeOf(self.slots.transcript_view).Type;
+            if (self.slots.transcript_view.read(cx).exit_pending) self.slots.transcript_view.update(cx, TranscriptView.finishRouteExit, .{});
+        }
+        const in_flight = (frame.active or self.dock.moving or handoff) and has_spaces and self.composer_probe != null and self.col_probe != null;
         if (in_flight) {
             col = col.child(self.renderDockTransition(frame, reduced, t_now, window, cx));
         } else if (has_chat) {
@@ -241,7 +260,10 @@ pub const MainPanel = struct {
         if (has_chat or transcript_t > 0) {
             const stack = self.slots.composer_view.read(cx).last_rendered_height;
             const clearance = (if (stack > 0) stack else layout.composer_compact_height) + 64;
-            var layer = div().absolute().inset0().overflowHidden().child(div().relative().top(px(8 * (1 - transcript_t))).sizeFull().opacity(transcript_t)
+            var inner = div().relative().top(px(8 * (1 - transcript_t))).sizeFull().opacity(transcript_t);
+            // A departing transcript keeps its source column's width.
+            if (!has_chat) inner = inner.w(px(self.departing_width));
+            var layer = div().absolute().inset0().overflowHidden().child(inner
                 .child(ui.effects.edgeFaded(div().sizeFull().child(self.slots.transcript(clearance, width, cx)), .{
                 .band = layout.transcript_fade_band,
                 .top = true,

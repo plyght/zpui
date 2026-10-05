@@ -15,7 +15,7 @@ Legend: ✅ ported (same trigger, span, curve, reduced-motion rule) · 🟡 part
 | Reduced motion: oneshots snap to the end state, loops rest at phase 0, no frames scheduled | gpui `App::reduce_motion` + `with_animation` | `src/elements/animation.zig` (`window.prefersReducedMotion()`), hand-driven tweens check the flag (`motion.Tween.eval`, shell `reduced_motion`, sidebar `sec.reduced`, composer, transcript) | ✅ |
 | Preference × OS × focus (`reduceMotion` on/off/system, pause in background) | `motion.rs` `ReduceMotion`, `resolve`, `window_activation_changed` | `ui/settings/motion.zig` → each window's flag; `theme/motion.zig` `resolveReduced` | ✅ |
 | Activity grids keep a gentle 2.4 s brightness pulse under *system* reduced motion only | `motion.rs` `ActivityPulse` | `theme/motion.zig` `activityAnimates` / `activityOpacity`, `ui/components/loaders.zig` | ✅ |
-| `ZERON_MOTION_SCALE` (clamped 0.01–100) stretches every catalog span, hover fades, manual tweens, the dock clock, composer morph clock and voice morph (loops are not stretched, as in Rust's `repeating()`) | `motion.rs` `speed_scale()` | `theme/motion.zig` `speed_scale` (set in `main.zig`), `MotionSpec.totalNs`/`animation()`, `scaledNs`, `HoverFades`, `ui/shell/dock.zig` `duration`, composer `nowMs`, `voice.zig` `Tween` | ✅ |
+| `ZERON_MOTION_SCALE` (clamped 0.01–100) stretches every catalog span, hover fades, manual tweens, the dock clock, composer morph clock and voice morph (loops are not stretched, as in Rust's `repeating()`) | `motion.rs` `speed_scale()` | `theme/motion.zig` `speed_scale` (set in `main.zig`), `MotionSpec.totalNs`/`animation()`, `scaledNs`, `HoverFades`, `ui/composer/dock.zig` `duration`, composer `nowMs`, `voice.zig` `Tween` | ✅ |
 | Hover color fades (`transition-colors`, premultiplied blend, re-anchored on reversal) | `motion.rs` `HoverFades`, `hover_blend` | `theme/motion.zig` `HoverFades`, `ui/components/hover.zig` | ✅ |
 
 ## Element animations (`with_animation` / helpers)
@@ -32,7 +32,7 @@ Legend: ✅ ported (same trigger, span, curve, reduced-motion rule) · 🟡 part
 | 8 | Command palette / New project palette | `shell/command_palette.rs:525` `palette_overlay` | none (card mounts as is) | `ui/shell/palette.zig`, `ui/pickers/add_project.zig` | ✅ (removed the extra MENU_IN the Zig port had added) |
 | 9 | Jump-to-bottom pill | `shell.rs:10553` `dialog_in` inside frost | DIALOG_IN | `ui/transcript/view.zig` `renderJump` (`jumpInFrame`) | ✅ (added) |
 | 10 | Popover / menu entrance | `popover.rs:532` `menu_in_from`, MENU_TRAVEL 4 for upward menus | opacity 0.3→1, y from→0, 140 ms ease | `ui/components/popover.zig` `anchoredAbove/Below/Right/At`, pickers, changes, right pane | ✅ (context menus via `anchoredAt` gained it) |
-| 11 | Popover / menu exit | `popover.rs:529` `menu_out_toward`, `exit_progress`, `frosted_menu` blur ride-down, `reap_popup` | close: opacity 1→0, retreat half the travel, 100 ms; blur radius follows | `anim.menuOutFrame` exists; menus still unmount on close | ❌ (needs a closing phase per popup owner) |
+| 11 | Popover / menu exit | `popover.rs:529` `menu_out_toward`, `exit_progress`, `frosted_menu` blur ride-down, `reap_popup`, `Popup::begin_close` / `as_open` | close: opacity 1→0, retreat half the travel, 100 ms; blur radius follows; an occluding overlay keeps the dying rows from taking clicks | `ui/components/popover.zig` `Exit` (closing phase), `reap`, `shut` / `toggle` / `settle`, `menuMotion`, `frostedCardExit`, `anchored*Exit`; owners: sidebar (account, project filter, view options, chat context menu, section menu), right-pane "+", project actions, target pickers, Changes scope / ref menus, History column / author menus, file tree and editor context menus | ✅ (settings popups are still settings-owned) |
 | 12 | Agent details reveal (Settings → Agents) | `settings/harnesses.rs:271` `menu_in` (none under reduced motion) | MENU_IN | `ui/settings/providers.zig:244` | ✅ |
 | 13 | Dictation outcome strip | `composer.rs:9597` `fade_in("dictation-message-enter")` | FADE_IN | `ui/composer/voice.zig` `renderStatus` (now `fade_in.animation()`, scaled) | ✅ |
 | 14 | Composer queue notice (offline / degraded delivery) | `composer.rs:10123` | FADE_IN | — (delivery-degraded notice not ported) | ➖ |
@@ -45,7 +45,7 @@ Legend: ✅ ported (same trigger, span, curve, reduced-motion rule) · 🟡 part
 | 21 | Changes per-file fold | `changes.rs:3464` | COLLAPSE height | `ui/changes/pane.zig` (`collapse.animation()`) | ✅ |
 | 22 | Changes fold chevron | `changes.rs:3522` | CHEVRON opacity .25→1 | `ui/changes/pane.zig` (`chevron.animation()`) | ✅ |
 | 23 | History search open / close | `history.rs:1812` (`Collapsing` mode, RESIZE) | width 24↔full, opacity .45↔1 | `ui/history/pane.zig` `searchControl` (`history-search-morph`), `beginCollapse` (unmounts after RESIZE) | ✅ (added; Rust's idle auto-dismiss is not ported) |
-| 24 | History branch fold rows enter / exit | `history.rs:4146`, `history_transition_rows`, settle after COLLAPSE | height 36·k, opacity .35→1 | — (fold re-lays out at once) | ❌ |
+| 24 | History branch fold rows enter / exit | `history.rs:4146`, `history_transition_rows`, `apply_view_change`, `settle_view_transition` | fold click: merged old + new rows, leaving rows collapse and arriving rows grow (height 36·k, opacity .35→1, COLLAPSE), then the final rows swap in with the scroll anchor kept | `ui/history/pane.zig` `historyTransitionRows`, `rebuild` (arenas swap so leaving rows stay valid), `onTransitionSettled`, `scrollAnchor` / `restoreScrollAnchor` | ✅ (view-mode switches do not animate, as in Rust) |
 | 25 | History graph compact ⇄ full morph | `history.rs:4448` `interpolate_graph_geometry` | COLLAPSE | `ui/history/pane.zig` `morph`, `history/graph.zig` `interpolate` (parity-tested) | ✅ |
 | 26 | History hover clear | `history.rs:2821` (clear after HOVER_FADE) | hover fade | `ui/history/pane.zig` (`ui.hover`) | ✅ |
 | 27 | Sidebar group disclosures (Pinned, Sessions, Archived, project / device groups, custom sections) | `shell/spaces.rs:2329` body, `:2366` chevron | COLLAPSE: height, opacity .35→1, y −3→0; chevron quarter turn | `ui/sidebar/sections_ui.zig` (`disclosureBody`, `headerChevron`, `toggleMotion`); used by custom sections and now Pinned / Sessions / Archived / groups in `sidebar.zig` | ✅ (built-in groups added) |
@@ -59,7 +59,7 @@ Legend: ✅ ported (same trigger, span, curve, reduced-motion rule) · 🟡 part
 | 35 | Terminal tab drag slide | `terminal/panel.rs:1609` | TAB_SLIDE | — (terminal tabs have no drag reorder yet) | ➖ |
 | 36 | Queue row drag slide | `queue.rs:687` | TAB_SLIDE from the previous to the current offset | `ui/composer/extras.zig` `queueRow` (was an instant offset) | ✅ (added) |
 | 37 | Files panel sections (Subagents / Chats) | `files/sections.rs:672`, `:713` | COLLAPSE body (height, opacity .35→1, y −3→0) + chevron quarter turn | `ui/files/panel.zig` `renderSection`, `SectionMotion` | ✅ (added) |
-| 38 | Tool group arrival: header reveal, per-row reveal (360 ms expo, 90 ms first delay, 65 ms stagger), connector draw (480 ms quint) | `transcript.rs:2601`, `:2610`, `:7470`, `tool_connector_parts` | new tools: rows grow in, rails draw | — (rows and rails appear at once) | ❌ |
+| 38 | Tool group arrival: header reveal, per-row reveal (360 ms expo, 90 ms first delay, 65 ms stagger), connector draw (480 ms quint) | `transcript.rs:2601`, `:2610`, `:4880` (`tool_group_reveals`), `:7470`, `tool_connector_parts`, `tool_connector_continuation`, `activity_branch_points`, `reveal_tool_row` | new tools: rows grow in, the incoming trunk then the elbow / branch draw by arc length, the label rises 4 px as it fades in, the icon fades with the branch | `ui/transcript/tools.zig` (`updateReveals`, `rowRevealProgress`, `connectorRevealProgress`, `connectorParts`, `connectorContinuation`, `branchPoints`, `ribbon`, `revealToolRow`), bookkeeping from `view.zig` `rebuild` | ✅ (history detection is "streamed before attach"; Rust also tracks fully-historical entries) |
 | 39 | Tool title shimmer | `transcript.rs` 3.4 s sweep | live groups | `ui/transcript/tools.zig` `shimmerAmount` | ✅ |
 | 40 | Tool fold (140) / chip detail fold (180) | `transcript.rs` `TOOL_FOLD`, detail | height | `ui/transcript/tools.zig` | ✅ |
 | 41 | "Worked for" crossfade | `transcript.rs` | FADE_IN | `ui/transcript/tools.zig` `compactWorkTitle` | ✅ |
@@ -73,7 +73,7 @@ Legend: ✅ ported (same trigger, span, curve, reduced-motion rule) · 🟡 part
 | 44 | Sidebar / right pane / explorer width | `shell.rs:1276` `WidthTween`, `eval_tween` | RESIZE from the painted width; reduced → target | `ui/shell/shell.zig` `Tween` (now snaps under reduced motion, scaled) | ✅ |
 | 45 | Resize-edge bounce | `motion.rs:498` `resize_drag_sample`, `:542` `resize_bounce_offset`, `shell.rs:4433`, `:4498` | dragging past min / max nudges 5 px once (220 ms, two-phase smoothstep) | `ui/shell/shell.zig` `onSidebarDrag` / `onRightDrag`, `EdgeBounce` | ✅ (added; the edge latch is not cleared on mouse-up) |
 | 46 | Terminal drawer open / close | `shell.rs:4365` `terminal_tween`, `render_terminal_container` | Cmd-J: height 0↔`terminal_height` over RESIZE, fixed inner clipped; drag cancels | `ui/shell/main_panel.zig` (`terminal_tween`, `terminal_painted`) | ✅ (added) |
-| 47 | Composer dock choreography | `composer_dock.rs` (`Glide` critically damped 420 / 470 ms, `Visuals` stages, `PanelHandoff` 320 ms fade-through, `position_at`, `layout_width`) | Home ↔ thread: composer glides between the hero slot and the dock; transcript fades + rises 8 px; hero artwork dissolves | `ui/shell/dock.zig` (verbatim port, parity-tested against `scripts/dock_parity.rs`); `ui/shell/main_panel.zig` `renderDockTransition` drives the vertical glide, transcript fade/rise, hero dissolve (as opacity) and the hand-off opacity | 🟡 the pane hand-off is not fed (main panel does not know the right pane's target width), the hero/thread height reflow (`DockLayout`, `DockReflow`) and the selector/footer visuals inside the composer are not wired, the width glide is computed but not applied |
+| 47 | Composer dock choreography | `composer_dock.rs` (`Glide` critically damped 420 / 470 ms, `Visuals` stages, `PanelHandoff` 320 ms fade-through, `DockLayout` / `DockReflow`, `position_at`, `layout_width`, `transcript_width`), `composer.rs` `set_dock_frame` | Home ↔ thread: composer glides between the hero slot and the dock while its height rides the route amount; Home selectors and the thread footer trade fades; transcript fades + rises 8 px and a departing one keeps the old conversation (and its column width through a hand-off); hero artwork dissolves; a route that also opens / closes the right pane fades through zero | `ui/composer/dock.zig` (verbatim port incl. reflow, parity-tested against `scripts/dock_parity.rs`); `ui/composer/composer.zig` (`setDockFrame`, dock height + reflow, selector / footer opacity); `ui/shell/main_panel.zig` (`observePane` from the shell's pane target, `layoutWidth` → `Slots.width_override`, `transcriptWidth`, `renderDockTransition`); `ui/transcript/view.zig` `exit_pending` / `finishRouteExit` | 🟡 the hero dissolve is an opacity fade (Rust masks the artwork), the departing route's chrome is not re-rendered (Rust keeps the source selectors / footer on screen while fading them) |
 | 48 | Composer compact ⇄ expanded flip | `composer.rs` `FlipMorph`, `flip_morph_step` | COLLAPSE height + inner geometry | `ui/composer/metrics.zig` | ✅ (morph clock now divided by `ZERON_MOTION_SCALE`) |
 | 49 | New-thread flip (`FlipMorph::new_thread_transition`, 420 ms) | `composer.rs:7797` | first send / return to Home | — | 🟡 the dock owns layout during a route change in Rust (`dock_frame.active` cancels the flip), so the visible part is the dock row above |
 | 50 | Send / Queue / Stop morph | `composer.rs` | button morph | `ui/composer/composer.zig` | ✅ |
@@ -84,7 +84,7 @@ Legend: ✅ ported (same trigger, span, curve, reduced-motion rule) · 🟡 part
 | 55 | Settings switch travel | `settings/widgets.rs:662` (180 ms cubic-out) | toggle | `ui/settings/view.zig` `travel(…, 180)` | ✅ |
 | 56 | Settings tab selection fade | `settings/widgets.rs:989` (TAB_SLIDE, scaled) | selection | `ui/settings/view.zig` `travel(…, 150)` | 🟡 cubic-out instead of TAB_SLIDE's ease-out, not scaled, and `SettingsView.reducedMotion` ignores the OS / background pause |
 | 57 | Message rail click → scroll glide | `rail.rs:263` (SCROLL_GLIDE over the distance, re-aimed at the measured row) | click a tick | `ui/transcript/view.zig` `onRailClick` / `railGlideTick` | ✅ (added; pixel glide re-aimed at `offsetForItem` each 16 ms tick) |
-| 58 | Transcript stick-to-bottom spring and own-turn glide | `transcript.rs:184` (`SPRING_*`), `own_turn_*` | streaming growth is chased by a spring; a sent prompt glides to the top | `src/elements/list.zig` tail follow (instant) | ❌ |
+| 58 | Transcript stick-to-bottom spring and own-turn glide | `transcript.rs:184` (`StickSpring`, `SPRING_*`), `engage_pin`, `step_spring`, `on_own_send`, `step_own_turn`, `update_runway_minimum` | the jump pill and a filled runway glide to the end on the spring (teleporting past 2.5 viewports) and land in tail-follow; a sent prompt reserves its reply runway (zpui tail reservation) and glides to the top inset (`1 − 0.85^frames`), then holds; a wheel releases the hold | `ui/transcript/stick.zig` (spring, parity-tested against `scripts/stick_parity.rs`), `ui/transcript/view.zig` (`engagePin`, `stepSpring`, `onOwnSend`, `stepOwnTurn`) | 🟡 the send is detected from the optimistic echo row (Rust is told by the composer, incl. queued sends); streaming growth at the bottom stays anchored by tail-follow, as Rust's `should_anchor_live_stream` |
 | 59 | Harness-updates island | `shell/harness_updates.rs:380` | RESIZE size / radius / mark collapse / row reveal | `ui/shell/harness_updates.zig` (parity-tested) | ✅ |
 | 60 | New-thread artwork crossfade | `new_thread_background_effects.rs:33` | WALLPAPER_CROSSFADE | `ui/background/hero.zig` | ✅ |
 | 61 | Loaders: zeron pulse, gradient spinner, mini glyph / mono spinner, mark loader, activity grids | `loaders.rs`, `motion.rs` | repeating | `ui/components/loaders.zig`, `theme/motion.zig` | ✅ |
@@ -94,17 +94,20 @@ Legend: ✅ ported (same trigger, span, curve, reduced-motion rule) · 🟡 part
 
 ## Parity tests
 
-- `ui/shell/dock.zig` "dock parity with composer_dock.rs": glide trajectories, all four visual
-  schedules and four whole-route runs (hero → thread, reversal, panel departure, panel return
-  with an idle gap) against `ui/shell/testdata/dock_parity.zig`, dumped by
-  `scripts/dock_parity.rs` from the Rust source lifted verbatim.
+- `ui/composer/dock.zig` "dock parity with composer_dock.rs": glide trajectories, all four visual
+  schedules, two reflow runs and four whole-route runs (hero → thread, reversal, panel
+  departure, panel return with an idle gap) against `ui/composer/testdata/dock_parity.zig`,
+  dumped by `scripts/dock_parity.rs` from the Rust source lifted verbatim.
+- `ui/transcript/stick.zig` "stick spring parity with transcript.rs" against
+  `ui/transcript/testdata/stick_parity.zig` (`scripts/stick_parity.rs`).
+- `ui/transcript/tools.zig` connector parts / branch points (the Rust unit cases).
+- `ui/history/pane.zig` "history transition rows match history_transition_rows".
 - `ui/sidebar/sidebar.zig` "resort offsets match shell.rs" (the Rust unit cases).
 - `theme/motion.zig` "manual tween" (RESIZE eval, reduced motion, `ZERON_MOTION_SCALE`).
 - Existing: veil (`ui/markdown`), history graph morph (`history/graph.zig`), harness updates.
 
 ## Known gaps (to port next)
 
-Popover exit (11), history fold rows (24), tool arrival choreography
-(38), compact picker motion (54), transcript spring / own-turn glide (58), the dock's height
-reflow, selector / footer visuals and pane hand-off wiring (47), and the settings-owned items
-(7 settings modals, 56).
+Compact picker motion (54, the user's area), the settings-owned items (7 settings modals, 56,
+settings popups' exit), and the partial notes on 47 (artwork mask, departing chrome) and 58
+(queued-send detection).

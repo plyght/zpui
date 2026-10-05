@@ -873,6 +873,8 @@ pub const Shell = struct {
             var l = self.main.lease(cx);
             defer l.end();
             l.value.width = @max(vw - sidebar_now - right_now - files_now, 0);
+            // [motion] The dock's panel hand-off watches the pane's target width.
+            l.value.pane_target = self.rightTarget(cx) + self.filesTarget(cx);
         }
         const card = div().flex1().minW0().flex().flexRow().overflowHidden().child(self.main);
 

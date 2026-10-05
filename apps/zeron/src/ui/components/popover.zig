@@ -13,10 +13,12 @@
 //! 10px gap and 8×6 padding. On frosted themes the card is wrapped in a 16px
 //! backdrop blur and has no shadow; opaque themes get `shadow_lg`.
 
+const std = @import("std");
 const zpui = @import("zpui");
 const theme_mod = @import("theme.zig");
 const effects = @import("effects.zig");
 const anim = @import("anim.zig");
+const motion = @import("zeron_theme").motion;
 
 const Theme = theme_mod.Theme;
 const div = zpui.div;
@@ -94,35 +96,164 @@ pub fn kbdHint(theme: *const Theme, label: []const u8) zpui.Div {
         .child(label);
 }
 
+/// zeron `Popup`'s closing phase: when the exit began (executor ns). A
+/// popup owner keeps its state mounted while closing, renders the anchored
+/// helpers with `exit.progress(now)`, and drops the state once `done`
+/// (`reap` schedules the render that does it). Event paths treat a closing
+/// popup as closed (`isClosing`); the exit layer occludes its rows.
+pub const Exit = struct {
+    since: ?u64 = null,
+
+    /// `begin_close`: true when this call started the exit.
+    pub fn begin(self: *Exit, now: u64) bool {
+        if (self.since != null) return false;
+        self.since = now;
+        return true;
+    }
+
+    pub fn clear(self: *Exit) void {
+        self.since = null;
+    }
+
+    pub fn isClosing(self: Exit) bool {
+        return self.since != null;
+    }
+
+    /// `exit_progress`: eased MENU_OUT progress from the wall clock (never
+    /// replays on remount); null while open.
+    pub fn progress(self: Exit, now: u64) ?f32 {
+        const since = self.since orelse return null;
+        const total = motion.menu_out.totalNs(1.0);
+        if (total == 0) return 1;
+        const raw: f32 = @floatCast(@min(@as(f64, @floatFromInt(now -| since)) / @as(f64, @floatFromInt(total)), 1));
+        return motion.menu_out.progress(raw);
+    }
+
+    /// `finish_close`: the exit ran its course; drop the popup state.
+    pub fn done(self: Exit, now: u64) bool {
+        const since = self.since orelse return false;
+        return now -| since >= motion.menu_out.totalNs(1.0);
+    }
+};
+
+/// `reap_popup`: repaint `V` once the exit span (+20 ms) has passed, so its
+/// render drops the closed popup. The task is detached.
+pub fn reap(comptime V: type, cx: *zpui.Context(V)) void {
+    const T = struct {
+        fn f(_: *V, c: *zpui.Context(V)) void {
+            c.notify();
+        }
+    };
+    var task = cx.timer(motion.menu_out.totalNs(1.0) + 20 * std.time.ns_per_ms, T.f) catch return;
+    task.detach();
+}
+
+/// The app's resolved reduced-motion flag (first window), for owners
+/// without a window at hand.
+pub fn appReduced(app: *zpui.App) bool {
+    if (app.windows.items.len == 0) return false;
+    const w = app.windows.items[0] orelse return false;
+    return w.prefersReducedMotion();
+}
+
+/// Close a boolean popup (`begin_close` + `reap_popup`); reduced motion
+/// drops it at once.
+pub fn shut(comptime V: type, open: *bool, exit: *Exit, cx: *zpui.Context(V)) void {
+    if (!open.*) return;
+    open.* = false;
+    if (appReduced(cx.app)) {
+        exit.clear();
+        return;
+    }
+    if (exit.begin(cx.app.executor.now())) reap(V, cx);
+}
+
+/// Toggle a boolean popup (opening cancels a running exit).
+pub fn toggle(comptime V: type, open: *bool, exit: *Exit, cx: *zpui.Context(V)) void {
+    if (open.*) return shut(V, open, exit, cx);
+    open.* = true;
+    exit.clear();
+}
+
+/// Per-frame settle for a boolean popup: the exit progress to render with
+/// (null while open), dropping a finished exit (`finish_close`).
+pub fn settle(open: bool, exit: *Exit, now: u64) ?f32 {
+    if (open) {
+        exit.clear();
+        return null;
+    }
+    if (exit.done(now)) exit.clear();
+    return exit.progress(now);
+}
+
+/// `frosted_menu`: the card's blur radius rides the exit down to 0 (the
+/// backdrop primitive ignores element opacity).
+pub fn frostedCardExit(c: anytype, exit: ?f32) effects.Frosted {
+    return effects.frosted(card_radius, theme_mod.layout.menu_blur * (1 - (exit orelse 0)), c);
+}
+
+const MenuOut = struct { exit: f32, toward: f32 };
+
+fn menuOutFrame(c: MenuOut, el: zpui.Div, _: f32) zpui.Div {
+    return anim.menuOutFrame(el, c.toward, c.exit);
+}
+
+/// `menu_motion_from`: MENU_IN from `from` px, or — while exiting — MENU_OUT
+/// toward the trigger under a fresh id (pumping frames for the exit span)
+/// with an occluding overlay so the dying rows take no clicks.
+pub fn menuMotion(comptime id: []const u8, exit: ?f32, inner: zpui.Div, from: f32) zpui.AnyElement {
+    if (exit) |t| {
+        const dying = inner.relative().child(div().absolute().inset0().occlude());
+        return zpui.intoAnyElement(zpui.withAnimationCtx(dying, id ++ "-out", motion.menu_out.animation(), MenuOut{ .exit = t, .toward = from }, menuOutFrame));
+    }
+    return zpui.intoAnyElement(anim.menuIn(id, inner, from));
+}
+
 /// Mount `content` (a card) as a floating layer opening upward from the
 /// trigger's top-left (`anchored_menu_above`); the trigger must be `relative`.
 pub fn anchoredAbove(content: anytype) zpui.Div {
+    return anchoredAboveExit(content, null);
+}
+
+pub fn anchoredAboveExit(content: anytype, exit: ?f32) zpui.Div {
     return div().absolute().top(px(0)).left(px(0)).child(zpui.deferred(
         zpui.anchored().anchorCorner(.bottom_left).snapToWindowWithMargin(.all(8))
-            .child(anim.menuIn("menu-above", div().occlude().pb(px(6)).child(frostedCard(content)), 4)),
+            .child(menuMotion("menu-above", exit, div().occlude().pb(px(6)).child(frostedCardExit(content, exit)), 4)),
     ).withPriority(1));
 }
 
 /// Dropdown below the trigger's bottom-left (`anchored_menu_below`, 6px gap).
 pub fn anchoredBelow(content: anytype) zpui.Div {
+    return anchoredBelowExit(content, null);
+}
+
+pub fn anchoredBelowExit(content: anytype, exit: ?f32) zpui.Div {
     return div().absolute().top(zpui.relative(1)).left(px(0)).child(zpui.deferred(
         zpui.anchored().anchorCorner(.top_left).snapToWindowWithMargin(.all(8))
-            .child(anim.menuIn("menu-below", div().occlude().pt(px(6)).child(frostedCard(content)), -2)),
+            .child(menuMotion("menu-below", exit, div().occlude().pt(px(6)).child(frostedCardExit(content, exit)), -2)),
     ).withPriority(1));
 }
 
 /// Opens to the right of the trigger, top-aligned (`anchored_menu_right`).
 pub fn anchoredRight(content: anytype) zpui.Div {
+    return anchoredRightExit(content, null);
+}
+
+pub fn anchoredRightExit(content: anytype, exit: ?f32) zpui.Div {
     return div().absolute().top(px(0)).left(zpui.relative(1)).child(zpui.deferred(
         zpui.anchored().anchorCorner(.top_left).snapToWindowWithMargin(.all(8))
-            .child(anim.menuIn("menu-right", div().occlude().pl(px(6)).child(frostedCard(content)), -2)),
+            .child(menuMotion("menu-right", exit, div().occlude().pl(px(6)).child(frostedCardExit(content, exit)), -2)),
     ).withPriority(1));
 }
 
-/// Floating layer at an absolute window `position` (context menus).
+/// Floating layer at an absolute window `position` (context menus, `menu_at`).
 pub fn anchoredAt(position: zpui.Point(f32), content: anytype) zpui.AnyElement {
+    return anchoredAtExit(position, content, null);
+}
+
+pub fn anchoredAtExit(position: zpui.Point(f32), content: anytype, exit: ?f32) zpui.AnyElement {
     return zpui.intoAnyElement(zpui.deferred(
         zpui.anchored().position(position).snapToWindowWithMargin(.all(8))
-            .child(anim.menuIn("menu-at", div().occlude().child(frostedCard(content)), -2)),
+            .child(menuMotion("menu-at", exit, div().occlude().child(frostedCardExit(content, exit)), -2)),
     ).withPriority(1));
 }

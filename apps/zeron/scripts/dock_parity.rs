@@ -1,7 +1,7 @@
 //! Dumps the composer route choreography (zeron `crates/ui/src/composer_dock.rs`
 //! + `composer_dock/panel_handoff.rs`) for a deterministic corpus as Zig
-//! source, for apps/zeron/src/ui/shell/testdata/dock_parity.zig (compared by
-//! the "dock parity" test in apps/zeron/src/ui/shell/dock.zig).
+//! source, for apps/zeron/src/ui/composer/testdata/dock_parity.zig (compared by
+//! the "dock parity" test in apps/zeron/src/ui/composer/dock.zig).
 //!
 //! The state machine is private to the gpui crate, so it is lifted VERBATIM
 //! into generated includes; only visibility is relaxed, the module path of
@@ -13,7 +13,7 @@
 //!   sed -n '1,57p' $Z/crates/ui/src/composer_dock/panel_handoff.rs \
 //!     | sed 's/pub(super) //; /^use std::time::Instant;/d; /^\/\/!/d' > $S/handoff.rs
 //!   DOCK_LIFTED=$S/dock.rs HANDOFF_LIFTED=$S/handoff.rs rustc --edition 2024 dock_parity.rs -o $S/run
-//!   $S/run > apps/zeron/src/ui/shell/testdata/dock_parity.zig
+//!   $S/run > apps/zeron/src/ui/composer/testdata/dock_parity.zig
 //!
 //! Clock order per frame matches `Shell::render` → `DockedComposer::prepaint`:
 //! `observe_pane`, `tick`, `layout_width`, then the prepaint position step.
@@ -106,6 +106,39 @@ fn main() {
                     f(v.transcript), f(v.selectors), f(v.footer), f(v.dissolve)
                 );
             }
+        }
+    }
+    println!("}};");
+    println!();
+
+    // ---- reflow ----
+    println!("pub const ReflowSample = struct {{ t_ms: u64, docked: bool, active: bool, amount: f32, layout: [3]f32, compact: bool, out: [2]f32 }};");
+    println!("pub const ReflowCase = struct {{ samples: []const ReflowSample }};");
+    println!("pub const reflows = [_]ReflowCase{{");
+    {
+        let base = Instant::now();
+        // (t_ms, docked, active, amount, hero, thread, extra, compact)
+        let cases: Vec<Vec<(u64, bool, bool, f32, f32, f32, f32, bool)>> = vec![
+            // An attachment row lands mid-route, then settles.
+            (0..30).map(|i| (i * 16, true, i < 20, (i as f32 / 20.0).min(1.0), 124.0, 49.0, if i < 6 { 0.0 } else { 64.0 }, true)).collect(),
+            // Reversal while the reflow is still settling; the mode flips too.
+            (0..30).map(|i| (i * 16, i < 10, true, if i < 10 { i as f32 / 10.0 * 0.6 } else { 0.6 - (i - 10) as f32 / 20.0 * 0.6 }, 124.0, if i < 4 { 49.0 } else { 90.0 }, 0.0, i < 4)).collect(),
+        ];
+        for case in cases {
+            let mut r = DockReflow::default();
+            println!("    .{{ .samples = &.{{");
+            for (t, docked, active, amount, hero, thread, extra, compact) in case {
+                let mut frame = DockFrame::settled(docked);
+                frame.active = active;
+                frame.amount = amount;
+                let layout = DockLayout { hero_height: hero, thread_height: thread, extra_height: extra, compact };
+                let (h, c) = r.sample(layout, frame, false, base + Duration::from_millis(t));
+                println!(
+                    "        .{{ .t_ms = {t}, .docked = {docked}, .active = {active}, .amount = {}, .layout = .{{ {}, {}, {} }}, .compact = {compact}, .out = .{{ {}, {} }} }},",
+                    f(amount), f(hero), f(thread), f(extra), f(h), f(c)
+                );
+            }
+            println!("    }} }},");
         }
     }
     println!("}};");

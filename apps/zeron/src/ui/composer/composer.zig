@@ -56,6 +56,7 @@ const mentions = @import("mentions.zig"); // [wiring]
 const extras = @import("extras.zig"); // [wiring] wizard, todo tray, queue drag/lease, @ mentions, provider commands
 const review_chip = @import("review_chip.zig"); // [review-comments]
 const voice = @import("voice.zig"); // [dictation]
+const dock = @import("dock.zig"); // [motion]
 const media = @import("zeron_media");
 const att = model.attachments;
 const appshots = model.appshots;
@@ -175,6 +176,10 @@ pub const ComposerView = struct {
     width_changed_at: ?u64 = null,
     settle_task: zpui.Task(void) = .none,
     flip_morph: ?m.FlipMorph = null,
+    /// [motion] The main panel's route clock (`set_dock_frame`) and the
+    /// layout-reflow corrector riding it (`composer_dock.rs`).
+    dock_frame: ?dock.DockFrame = null,
+    dock_reflow: dock.DockReflow = .{},
     height_morph: ?m.FlipMorph = null,
     last_rendered_height: f32 = 0,
     last_target_height: f32 = 0,
@@ -333,6 +338,14 @@ pub const ComposerView = struct {
 
     /// The conversation column width (the composer follows it, max 768 on
     /// the canvas).
+    /// [motion] `set_dock_frame`: the route choreography's frame for this
+    /// render (height reflow, selector / footer fades).
+    pub fn setDockFrame(self: *ComposerView, frame: dock.DockFrame, cx: *Context(ComposerView)) void {
+        if (self.dock_frame) |f| if (std.meta.eql(f, frame)) return;
+        self.dock_frame = frame;
+        cx.notify();
+    }
+
     pub fn setAvailableWidth(self: *ComposerView, width: ?f32, cx: *Context(ComposerView)) void {
         if (std.meta.eql(self.available_width, width)) return;
         self.available_width = width;
@@ -1509,9 +1522,28 @@ pub const ComposerView = struct {
         const strip_h = m.attachmentStripHeight(self.staged().len, strip_width_hint) + model.review_comments.stripHeight(comment_count) + m.appshotStripHeight(self.stagedAppshots().len); // [appshots]
         const base_height = if (expanded) m.composerTotalHeight(content_height) else m.compact_total_height;
         const target_height = base_height + strip_h;
-        self.height_morph = m.flipMorphStep(self.height_morph, @abs(target_height - self.last_target_height) > 0.5, self.last_rendered_height, now_ms, reduced, false);
+        // [motion] `DockLayout` / `DockReflow`: while the route clock runs (or
+        // its reflow settles) the pill's height rides the dock amount between
+        // the hero and thread heights; local morphs stand down.
+        var dock_height: ?f32 = null;
+        if (self.dock_frame) |f| {
+            const session_expanded = self.expanded_mode;
+            const layout_d: dock.DockLayout = .{
+                .hero_height = m.composerTotalHeight(content_height),
+                .thread_height = if (session_expanded) std.math.clamp(content_height + m.textarea_pad_v, m.textarea_min - 16, m.textarea_max) + m.actions_row_height + m.pill_border_v else m.compact_total_height,
+                .extra_height = strip_h,
+                .compact = !session_expanded,
+            };
+            const rf = self.dock_reflow.sample(layout_d, f, reduced, now);
+            if (f.active or self.dock_reflow.active()) {
+                dock_height = layout_d.height(f.amount) + rf[0];
+                self.flip_morph = null;
+                window.requestAnimationFrame();
+            }
+        }
+        self.height_morph = if (dock_height != null) null else m.flipMorphStep(self.height_morph, @abs(target_height - self.last_target_height) > 0.5, self.last_rendered_height, now_ms, reduced, false);
         self.last_target_height = target_height;
-        const pill_height = if (self.height_morph) |hm| hm.height(target_height, now_ms) else target_height;
+        const pill_height = dock_height orelse if (self.height_morph) |hm| hm.height(target_height, now_ms) else target_height;
         if (self.height_morph != null) window.requestAnimationFrame();
         var morph_t: f32 = 1;
         var morphing = false;
@@ -1608,13 +1640,17 @@ pub const ComposerView = struct {
         if (queue_tray) |q| {
             container = container.child(fadeQuick("composer-queue", div().mx(px(m.queue_side_inset)).mb(px(-(zt.layout.space_sm + m.queue_composer_overlap))).child(q)));
         }
-        if (new_chat) container = container.child(self.renderTargetSelectors(cx));
+        // [motion] Route chrome rides the dock's staged fades (`selectors` /
+        // `footer`): Home's selectors and the thread footer trade places.
+        const selectors_op: f32 = if (self.dock_frame) |f| f.selectors() else 1;
+        const footer_op: f32 = if (self.dock_frame) |f| (if (new_chat) f.selectors() else f.footer()) else 1;
+        if (new_chat) container = container.child(self.renderTargetSelectors(cx).opacity(selectors_op));
         // [dictation] Only leaving the pill + status region cancels capture;
         // outcomes (no speech, errors) read below the pill.
         var region = voice.focusRegion(self, cx).child(pill_surface);
         if (voice.renderStatus(self, cx)) |st| region = region.child(st);
         container = container.child(region);
-        container = container.child(self.renderFooter(new_chat, cx));
+        container = container.child(self.renderFooter(new_chat, cx).opacity(footer_op));
         if (self.lightbox) |lb| container = container.child(lb);
         return container;
     }

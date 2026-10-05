@@ -187,6 +187,12 @@ pub const Sidebar = struct {
     view_menu_open: bool = false,
     /// Right-click menu over a row: (row index, window position).
     ctx_menu: ?struct { ix: usize, pos: zpui.Point(f32) } = null,
+    /// [motion] Each popup's closing phase (`Popup::begin_close`): the menu
+    /// stays mounted for MENU_OUT while it fades toward its trigger.
+    ctx_exit: ui.popover.Exit = .{},
+    user_menu_exit: ui.popover.Exit = .{},
+    spaces_menu_exit: ui.popover.Exit = .{},
+    view_menu_exit: ui.popover.Exit = .{},
     /// Open child of the view menu (0 Organize, 1 Sort, 2 Show).
     view_submenu: ?u8 = null,
     /// Row under the pointer (index into `row_ids`).
@@ -410,6 +416,7 @@ pub const Sidebar = struct {
 
     fn onRowContext(self: *Sidebar, ix: usize, ev: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(Sidebar)) void {
         self.ctx_menu = .{ .ix = ix, .pos = ev.position };
+        self.ctx_exit.clear();
         self.ctx_page = .root;
         cx.notify();
     }
@@ -428,8 +435,8 @@ pub const Sidebar = struct {
     }
 
     fn onCtxRename(self: *Sidebar, _: *const zpui.ClickEvent, window: *Window, cx: *Context(Sidebar)) void {
-        const m = self.ctx_menu orelse return;
-        self.ctx_menu = null;
+        const m = self.liveCtx() orelse return;
+        self.shutCtx(cx);
         const id = self.rowId(m.ix) orelse return;
         const copy = self.gpa.dupe(u8, id) catch return;
         defer self.gpa.free(copy);
@@ -527,8 +534,8 @@ pub const Sidebar = struct {
 
     /// Copy ▸ rows: 0 path, 1 Zeron conversation link, 2 harness link, 3 session id.
     fn onCtxCopy(self: *Sidebar, which: u8, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        const m = self.ctx_menu orelse return;
-        self.ctx_menu = null;
+        const m = self.liveCtx() orelse return;
+        self.shutCtx(cx);
         self.ctx_page = .root;
         const id = self.rowId(m.ix) orelse return;
         const st = self.state.read(cx);
@@ -555,8 +562,8 @@ pub const Sidebar = struct {
     }
 
     fn onCtxDelete(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        const m = self.ctx_menu orelse return;
-        self.ctx_menu = null;
+        const m = self.liveCtx() orelse return;
+        self.shutCtx(cx);
         const id = self.rowId(m.ix) orelse return;
         cx.emit(DeleteChat{ .chat_id = id });
         cx.notify();
@@ -570,8 +577,8 @@ pub const Sidebar = struct {
     }
 
     fn onCtxPin(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        const m = self.ctx_menu orelse return;
-        self.ctx_menu = null;
+        const m = self.liveCtx() orelse return;
+        self.shutCtx(cx);
         const id = self.rowId(m.ix) orelse return;
         const pin = !prefs_mod.get(cx).isPinned(id);
         const copy = self.gpa.dupe(u8, id) catch return;
@@ -581,19 +588,66 @@ pub const Sidebar = struct {
     }
 
     fn onCtxArchive(self: *Sidebar, e: *const zpui.ClickEvent, w: *Window, cx: *Context(Sidebar)) void {
-        const m = self.ctx_menu orelse return;
-        self.ctx_menu = null;
+        const m = self.liveCtx() orelse return;
+        self.shutCtx(cx);
         self.onArchiveClick(m.ix, e, w, cx);
     }
 
     fn onCtxDismiss(self: *Sidebar, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(Sidebar)) void {
-        if (self.ctx_menu != null) {
-            self.ctx_menu = null;
+        if (self.liveCtx() != null) {
+            self.shutCtx(cx);
             cx.notify();
         }
     }
 
+    // ---- [motion] popup closing phases -------------------------------------------------
+
+    fn exitNow(self: *Sidebar, exit: *ui.popover.Exit, cx: *Context(Sidebar)) bool {
+        if (self.sec.reduced) return false;
+        if (exit.begin(cx.app.executor.now())) ui.popover.reap(Sidebar, cx);
+        return true;
+    }
+
+    /// Close a boolean menu, playing its exit (MENU_OUT) unless reduced.
+    pub fn shutMenu(self: *Sidebar, open: *bool, exit: *ui.popover.Exit, cx: *Context(Sidebar)) void {
+        if (!open.*) return;
+        open.* = false;
+        if (!self.exitNow(exit, cx)) exit.clear();
+    }
+
+    fn toggleMenu(self: *Sidebar, open: *bool, exit: *ui.popover.Exit, cx: *Context(Sidebar)) void {
+        if (open.*) return self.shutMenu(open, exit, cx);
+        open.* = true;
+        exit.clear();
+    }
+
+    /// The context menu only while genuinely open (`Popup::as_open`).
+    fn liveCtx(self: *const Sidebar) @TypeOf(self.ctx_menu) {
+        return if (self.ctx_exit.isClosing()) null else self.ctx_menu;
+    }
+
+    fn shutCtx(self: *Sidebar, cx: *Context(Sidebar)) void {
+        if (self.ctx_menu == null or self.ctx_exit.isClosing()) return;
+        if (!self.exitNow(&self.ctx_exit, cx)) self.ctx_menu = null;
+    }
+
+    /// Drop a finished exit (`finish_close`) and return the exit progress
+    /// for this frame (null while open).
+    fn menuExit(open: bool, exit: *ui.popover.Exit, now: u64) ?f32 {
+        if (open) {
+            exit.clear();
+            return null;
+        }
+        if (exit.done(now)) exit.clear();
+        return exit.progress(now);
+    }
+
     fn renderContextMenu(self: *Sidebar, theme_in: *const Theme, cx: *Context(Sidebar)) ?zpui.AnyElement {
+        if (self.ctx_exit.done(cx.app.executor.now())) {
+            self.ctx_exit.clear();
+            self.ctx_menu = null;
+        }
+        const ctx_exit = self.ctx_exit.progress(cx.app.executor.now());
         const m = self.ctx_menu orelse return null;
         const id = self.rowId(m.ix) orelse return null;
         const theme = zpui.window.arena_mod.current().create(Theme, theme_in.forPopup());
@@ -614,7 +668,7 @@ pub const Sidebar = struct {
             };
             if (c != null and chat_menu.harnessSessionId(c.?) != null) card = card.child(ui.popover.menuRow(theme, false).id("chat-copy-session").role(.menu_item).onClick(cx.listenerWith(@as(u8, 3), Sidebar.onCtxCopy))
                 .child(icon.of(.copy, 16, theme.text_muted)).child("Harness session ID"));
-            return ui.popover.anchoredAt(m.pos, card);
+            return ui.popover.anchoredAtExit(m.pos, card, ctx_exit);
         }
         card = card
             .child(ui.popover.menuRow(theme, false).id("chat-menu-rename").role(.menu_item).onClick(cx.listener(Sidebar.onCtxRename))
@@ -629,7 +683,7 @@ pub const Sidebar = struct {
             .child(ui.popover.separator(theme))
             .child(ui.popover.menuRow(theme, false).id("chat-menu-delete").role(.menu_item).textColor(theme.danger).onClick(cx.listener(Sidebar.onCtxDelete))
                 .child(icon.of(.trash_bin_minimalistic, 16, theme.danger)).child("Delete…"));
-        return ui.popover.anchoredAt(m.pos, card);
+        return ui.popover.anchoredAtExit(m.pos, card, ctx_exit);
     }
 
     /// [wiring] `sidebar-notice`: the inline mutation / copy notice.
@@ -693,59 +747,59 @@ pub const Sidebar = struct {
     }
 
     fn onUserMenu(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        self.user_menu_open = !self.user_menu_open;
+        self.toggleMenu(&self.user_menu_open, &self.user_menu_exit, cx);
         cx.notify();
     }
 
     fn onCloseMenus(self: *Sidebar, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(Sidebar)) void {
         if (self.user_menu_open or self.spaces_menu_open or self.view_menu_open) {
-            self.user_menu_open = false;
-            self.spaces_menu_open = false;
-            self.view_menu_open = false;
+            self.shutMenu(&self.user_menu_open, &self.user_menu_exit, cx);
+            self.shutMenu(&self.spaces_menu_open, &self.spaces_menu_exit, cx);
+            self.shutMenu(&self.view_menu_open, &self.view_menu_exit, cx);
             cx.notify();
         }
     }
 
     fn onSettings(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        self.user_menu_open = false;
+        self.shutMenu(&self.user_menu_open, &self.user_menu_exit, cx);
         cx.emit(OpenSettings{});
         cx.notify();
     }
 
     fn onEnableSync(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        self.user_menu_open = false;
+        self.shutMenu(&self.user_menu_open, &self.user_menu_exit, cx);
         cx.emit(EnableSync{});
         cx.notify();
     }
 
     fn onSignOut(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        self.user_menu_open = false;
+        self.shutMenu(&self.user_menu_open, &self.user_menu_exit, cx);
         cx.emit(SignOut{});
         cx.notify();
     }
 
     fn onSpacesTrigger(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        self.spaces_menu_open = !self.spaces_menu_open;
-        self.view_menu_open = false;
+        self.toggleMenu(&self.spaces_menu_open, &self.spaces_menu_exit, cx);
+        self.shutMenu(&self.view_menu_open, &self.view_menu_exit, cx);
         cx.notify();
     }
 
     fn onViewTrigger(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        self.view_menu_open = !self.view_menu_open;
+        self.toggleMenu(&self.view_menu_open, &self.view_menu_exit, cx);
         self.view_submenu = null;
-        self.spaces_menu_open = false;
+        self.shutMenu(&self.spaces_menu_open, &self.spaces_menu_exit, cx);
         cx.notify();
     }
 
     fn onPickSpace(self: *Sidebar, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
         const p = prefs_mod.mut(cx);
         if (ix == std.math.maxInt(usize)) p.setFilter(null) else if (ix < self.menu_space_ids.items.len) p.setFilter(self.menu_space_ids.items[ix]);
-        self.spaces_menu_open = false;
+        self.shutMenu(&self.spaces_menu_open, &self.spaces_menu_exit, cx);
         cx.notify();
     }
 
     fn onNewProject(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        self.spaces_menu_open = false;
+        self.shutMenu(&self.spaces_menu_open, &self.spaces_menu_exit, cx);
         cx.emit(NewSession{});
         cx.notify();
     }
@@ -1484,7 +1538,8 @@ pub const Sidebar = struct {
             .child(icon.of(.folder, 16, theme.text_muted))
             .child(name_group)
             .child(icon.of(.alt_arrow_down, 14, theme.text_muted.opacity(0.6)));
-        if (self.spaces_menu_open) trigger = trigger.child(ui.popover.anchoredBelow(self.renderSpacesMenu(theme, prefs, ws, cx)));
+        const spaces_exit = menuExit(self.spaces_menu_open, &self.spaces_menu_exit, cx.app.executor.now());
+        if (self.spaces_menu_open or spaces_exit != null) trigger = trigger.child(ui.popover.anchoredBelowExit(self.renderSpacesMenu(theme, prefs, ws, cx), spaces_exit));
 
         var view_trigger = div().id("sidebar-view-options").role(.button).ariaLabel("Sidebar view options").ariaExpanded(self.view_menu_open)
             .relative().size(px(29)).flexNone().flex().itemsCenter().justifyCenter()
@@ -1495,7 +1550,8 @@ pub const Sidebar = struct {
             .child(icon.of(.more_horizontal, 16, theme.text_muted.opacity(0.6)));
         if (!self.view_menu_open) view_trigger = view_trigger.tooltipWith(@as([]const u8, "View options"), ui.tooltip.build)
             .tooltipShowDelay(350 * std.time.ns_per_ms);
-        if (self.view_menu_open) view_trigger = view_trigger.child(ui.popover.anchoredRight(self.renderViewMenu(theme, prefs, cx)));
+        const view_exit = menuExit(self.view_menu_open, &self.view_menu_exit, cx.app.executor.now());
+        if (self.view_menu_open or view_exit != null) view_trigger = view_trigger.child(ui.popover.anchoredRightExit(self.renderViewMenu(theme, prefs, cx), view_exit));
 
         return div().flexNone().flex().flexRow().itemsCenter().gap(px(4))
             .px(px(zt.layout.space_sm)).pt(px(8)).pb(px(4))
@@ -1561,7 +1617,7 @@ pub const Sidebar = struct {
         // The event is delivered after this handler returns: keep the id alive.
         if (self.emitted_space_id) |old| self.gpa.free(old);
         self.emitted_space_id = m.id;
-        self.spaces_menu_open = false;
+        self.shutMenu(&self.spaces_menu_open, &self.spaces_menu_exit, cx);
         const id = m.id;
         if (delete) cx.emit(DeleteSpace{ .space_id = id }) else cx.emit(RenameSpace{ .space_id = id });
         cx.notify();
@@ -1720,13 +1776,13 @@ pub const Sidebar = struct {
 
     // [lifecycle] Account menu "Check for updates" (Linux; macOS uses the app menu).
     fn onCheckUpdates(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        self.user_menu_open = false;
+        self.shutMenu(&self.user_menu_open, &self.user_menu_exit, cx);
         cx.notify();
         if (app_update.AppUpdate.global(cx.app)) |u| u.update(cx.app, app_update.AppUpdate.checkForUpdates, .{});
     }
 
     fn onAccountAction(self: *Sidebar, action: sync_flow.AccountMenuAction, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
-        self.user_menu_open = false;
+        self.shutMenu(&self.user_menu_open, &self.user_menu_exit, cx);
         if (action == .sync_in_progress) return cx.notify();
         cx.emit(AccountAction{ .action = action });
         cx.notify();
@@ -1761,7 +1817,8 @@ pub const Sidebar = struct {
                 .fontWeight(600).textColor(theme.bg)
                 .child(div().wFull().textCenter().child(initial)))
             .child(div().minW0().flex().lineHeight(px(17)).child(ui.effects.fadedText(user_line, .{})));
-        if (self.user_menu_open) {
+        const user_exit = menuExit(self.user_menu_open, &self.user_menu_exit, cx.app.executor.now());
+        if (self.user_menu_open or user_exit != null) {
             const prefs = prefs_mod.get(cx);
             var menu = ui.popover.card(theme).w(px(prefs.sidebar_width - 2 * zt.layout.space_sm))
                 .onMouseDownOut(cx.listener(Sidebar.onCloseMenus))
@@ -1781,7 +1838,7 @@ pub const Sidebar = struct {
                     .onClick(cx.listener(Sidebar.onCheckUpdates)) // [lifecycle]
                     .child(icon.of(.refresh, 16, theme.text_muted)).child("Check for updates"));
             }
-            trigger = trigger.child(ui.popover.anchoredAbove(menu));
+            trigger = trigger.child(ui.popover.anchoredAboveExit(menu, user_exit));
         }
         const mac = @import("builtin").os.tag == .macos;
         return div().wFull().flex().itemsCenter().justifyBetween().gap(px(4))

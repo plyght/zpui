@@ -95,6 +95,161 @@ fn affordanceLabel(t: ToolItem) ?[]const u8 {
     return null;
 }
 
+// ---- [motion] arrival choreography (`ToolGroupReveal`) -----------------------------------
+
+/// `TOOL_ROW_REVEAL`: each new row grows in (360 ms expo-out).
+pub const tool_row_reveal: motion.MotionSpec = .init(360, motion.ease_out_expo);
+/// `TOOL_CONNECTOR_REVEAL`: its rail draws briskly then eases into the tip.
+pub const tool_connector_reveal: motion.MotionSpec = .init(480, motion.ease_out_quint);
+/// `TOOL_FIRST_ROW_DELAY_MS` / `TOOL_ROW_STAGGER_MS`.
+pub const tool_first_row_delay_ms: u64 = 90;
+pub const tool_row_stagger_ms: u64 = 65;
+
+/// One chip's arrival state for this frame.
+pub const Reveal = struct { connector: f32 = 1, continuation: f32 = 0 };
+
+fn revealRaw(spec: motion.MotionSpec, start: u64, now: u64) f32 {
+    if (now <= start) return 0;
+    // Rust divides by the unscaled span (`TOOL_ROW_REVEAL.total()`).
+    const total: f32 = @floatFromInt(spec.totalMs() * std.time.ns_per_ms);
+    return @as(f32, @floatFromInt(now - start)) / total;
+}
+
+/// `tool_row_reveal_progress`: eased 0..1 (1 with no start or reduced motion).
+pub fn rowRevealProgress(start: ?u64, now: u64, reduced: bool) f32 {
+    const st = start orelse return 1;
+    if (reduced) return 1;
+    return tool_row_reveal.curve.eval(revealRaw(tool_row_reveal, st, now));
+}
+
+/// `tool_connector_reveal_progress`.
+pub fn connectorRevealProgress(start: ?u64, now: u64, reduced: bool) f32 {
+    const st = start orelse return 1;
+    if (reduced) return 1;
+    return tool_connector_reveal.curve.eval(revealRaw(tool_connector_reveal, st, now));
+}
+
+/// `tool_connector_parts`: (incoming leg, elbow + branch) of one arrival.
+/// A child row's predecessor first grows its continuation to the boundary.
+pub fn connectorParts(progress0: f32, has_predecessor: bool) [2]f32 {
+    const progress = std.math.clamp(progress0, 0, 1);
+    const incoming_start: f32 = if (has_predecessor) 0.45 else 0.0;
+    const incoming_end: f32 = if (has_predecessor) 0.72 else 0.62;
+    const branch_start: f32 = if (has_predecessor) 0.68 else 0.58;
+    return .{
+        std.math.clamp((progress - incoming_start) / (incoming_end - incoming_start), 0, 1),
+        std.math.clamp((progress - branch_start) / (1.0 - branch_start), 0, 1),
+    };
+}
+
+/// `tool_connector_continuation`: the outgoing trunk's timing belongs to the
+/// next row's arrival.
+pub fn connectorContinuation(next: ?f32) f32 {
+    const p = next orelse return 0;
+    return std.math.clamp(p / 0.45, 0, 1);
+}
+
+/// `activity_branch_points`: the elbow (quadratic) + straight branch, cut at
+/// `progress` of its arc length. Points are relative to the bend top.
+pub fn branchPoints(progress: f32, buf: *[32][2]f32) [][2]f32 {
+    var path: [26][2]f32 = undefined;
+    for (0..25) |step| {
+        const t: f32 = @as(f32, @floatFromInt(step)) / 24.0;
+        path[step] = .{ activity_bend_radius * t * t, activity_bend_radius * (2 * t - t * t) };
+    }
+    path[25] = .{ activity_branch_end_x - activity_trunk_x, activity_bend_radius };
+    if (progress >= 1) {
+        @memcpy(buf[0..26], &path);
+        return buf[0..26];
+    }
+    var total: f32 = 0;
+    for (0..25) |i| total += std.math.hypot(path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1]);
+    var remaining = total * std.math.clamp(progress, 0, 1);
+    buf[0] = path[0];
+    var n: usize = 1;
+    for (0..25) |i| {
+        if (remaining <= 0) break;
+        const len = std.math.hypot(path[i + 1][0] - path[i][0], path[i + 1][1] - path[i][1]);
+        const t = @min(remaining / len, 1);
+        buf[n] = .{ lerp(path[i][0], path[i + 1][0], t), lerp(path[i][1], path[i + 1][1], t) };
+        n += 1;
+        remaining -= len;
+    }
+    return buf[0..n];
+}
+
+/// `reveal_tool_row`: a growing clip of the row's height.
+fn revealToolRow(row: AnyElement, height: f32, progress: f32) AnyElement {
+    if (progress >= 1) return row;
+    return zpui.intoAnyElement(div().wFull().h(px(height * progress)).flexNone().overflowHidden().child(row));
+}
+
+fn partKey(row_key: u64, part_id: []const u8) u64 {
+    return std.hash.Wyhash.hash(row_key, part_id);
+}
+
+/// A chip's arrival start (null: historical / settled).
+fn revealStart(self: *const TranscriptView, row_key: u64, part_id: []const u8) ?u64 {
+    return self.tool_starts.get(partKey(row_key, part_id)) orelse null;
+}
+
+/// `sync`'s reveal bookkeeping: groups present at attach are history; a
+/// new group's header reveals with its rows (first row after 90 ms); tools
+/// joining a live group stagger by 65 ms; known tools keep their start.
+pub fn updateReveals(self: *TranscriptView, new_rows: []const rows.Row, old_keys: *const std.AutoHashMapUnmanaged(u64, void), historical: bool, now: u64) !void {
+    const gpa = self.gpa;
+    var starts: std.AutoHashMapUnmanaged(u64, ?u64) = .empty;
+    errdefer starts.deinit(gpa);
+    var headers: std.AutoHashMapUnmanaged(u64, ?u64) = .empty;
+    errdefer headers.deinit(gpa);
+    for (new_rows) |r| {
+        if (r.kind != .tool_group) continue;
+        const g = r.kind.tool_group;
+        if (!self.compact_mode and !g.collapses) continue;
+        const known_group = self.tool_headers.contains(r.key);
+        const is_new_group = !historical and !known_group and !old_keys.contains(r.key);
+        const header: ?u64 = if (self.tool_headers.get(r.key)) |h| h else if (is_new_group) now else null;
+        try headers.put(gpa, r.key, header);
+        const delay: u64 = if (is_new_group) tool_first_row_delay_ms else 0;
+        var arrival: u64 = 0;
+        for (g.tools) |t| {
+            const k = partKey(r.key, t.part_id);
+            if (self.tool_starts.get(k)) |prev| {
+                try starts.put(gpa, k, prev);
+                continue;
+            }
+            if (historical or (!known_group and !is_new_group)) {
+                try starts.put(gpa, k, null);
+                continue;
+            }
+            try starts.put(gpa, k, now + motion.scaledNs((delay + arrival * tool_row_stagger_ms) * std.time.ns_per_ms));
+            arrival += 1;
+        }
+    }
+    self.tool_starts.deinit(gpa);
+    self.tool_starts = starts;
+    self.tool_headers.deinit(gpa);
+    self.tool_headers = headers;
+}
+
+test "tool connector parts match tool_connector_parts" {
+    try std.testing.expectEqual([2]f32{ 0, 0 }, connectorParts(0, false));
+    try std.testing.expectEqual([2]f32{ 0, 0 }, connectorParts(0.44, true));
+    try std.testing.expectEqual(@as(f32, 0), connectorContinuation(0));
+    try std.testing.expect(connectorContinuation(0.3) > 0);
+    try std.testing.expectEqual(@as(f32, 1), connectorContinuation(0.45));
+    const p = connectorParts(0.60, true);
+    try std.testing.expect(p[0] > 0 and p[0] < 1 and p[1] == 0);
+    try std.testing.expectEqual([2]f32{ 1, 1 }, connectorParts(1, true));
+    try std.testing.expectEqual(@as(f32, 0), connectorContinuation(null));
+    var buf: [32][2]f32 = undefined;
+    try std.testing.expectEqual(@as(usize, 26), branchPoints(1, &buf).len);
+    try std.testing.expectEqual(@as(usize, 1), branchPoints(0, &buf).len);
+    try std.testing.expectEqual(@as(f32, 1), rowRevealProgress(null, 0, false));
+    try std.testing.expectEqual(@as(f32, 0), rowRevealProgress(1000, 1000, false));
+    try std.testing.expectEqual(@as(f32, 1), rowRevealProgress(1000, 1000, true));
+}
+
 fn eased(spec: motion.MotionSpec, start: ?u64, now: u64, reduced: bool) f32 {
     const s = start orelse return 1;
     if (reduced) return 1;
@@ -155,8 +310,20 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
         if (p < 1) animating = true;
         heights[ix] = if (df.toggled_at != null and p < 1) lerp(df.from, target, p) else target;
     }
+    // [motion] Arrival choreography (`tool_row_reveal_progress`,
+    // `tool_connector_reveal_progress`): rows grow in, rails draw.
+    const reveal = a.alloc(f32, g.tools.len) catch @panic("OOM");
+    const connector = a.alloc(f32, g.tools.len) catch @panic("OOM");
+    for (g.tools, 0..) |t, ix| {
+        const start = revealStart(self, row.key, t.part_id);
+        reveal[ix] = rowRevealProgress(start, now, reduced);
+        connector[ix] = connectorRevealProgress(start, now, reduced);
+        if (reveal[ix] < 1 or connector[ix] < 1) animating = true;
+    }
+    const header_reveal = rowRevealProgress(self.tool_headers.get(row.key) orelse null, now, reduced);
+    if (header_reveal < 1) animating = true;
     var revealed: f32 = chips_top_pad;
-    for (heights) |h| revealed += h;
+    for (heights, reveal) |h, r| revealed += h * r;
     const target_h: f32 = if (open) revealed else 0;
     const fp = eased(tool_fold, fold.toggled_at, now, reduced);
     if (fp < 1) animating = true;
@@ -177,13 +344,20 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
             ))
             .child(div().minW0().h(px(tool_label_line_height)).flex().itemsCenter().overflowHidden()
                 .child(if (worked_secs) |secs| compactWorkTitle(g.summary, workedForLabel(secs), worked_fade_t, shimmer, theme) else groupTitle(g.summary, shimmer, theme)));
-        group = group.child(header);
+        group = group.child(revealToolRow(zpui.intoAnyElement(header), tool_group_header_height, header_reveal));
     }
     // A compact shell's expanded content is its sibling body rows.
     if (g.compact_shell) return zpui.intoAnyElement(group);
     if (open or body_h > 0) {
         var chips = div().pt(px(chips_top_pad)).flex().flexCol();
-        for (g.tools, 0..) |t, ix| chips = chips.child(chipRow(self, row, t, ix, g.tools.len, collapses, opens[ix], heights[ix], theme, cx));
+        for (g.tools, 0..) |t, ix| {
+            const rv: Reveal = .{
+                .connector = connector[ix],
+                .continuation = connectorContinuation(if (ix + 1 < g.tools.len) connector[ix + 1] else null),
+            };
+            const chip = chipRow(self, row, t, ix, g.tools.len, collapses, opens[ix], heights[ix], rv, theme, cx);
+            chips = chips.child(if (t.isSpawnLink()) chip else revealToolRow(chip, heights[ix], reveal[ix]));
+        }
         if (collapses) group = group.child(div().overflowHidden().h(px(body_h)).child(chips)) else group = group.child(chips);
     }
     return zpui.intoAnyElement(group);
@@ -250,17 +424,20 @@ fn mixColor(a: Hsla, b: Hsla, t: f32) Hsla {
     });
 }
 
-fn chipRow(self: *TranscriptView, row: *const rows.Row, t: ToolItem, ix: usize, count: usize, collapses: bool, open: bool, height: f32, theme: *const Theme, cx: *Context(TranscriptView)) AnyElement {
+fn chipRow(self: *TranscriptView, row: *const rows.Row, t: ToolItem, ix: usize, count: usize, collapses: bool, open: bool, height: f32, rv: Reveal, theme: *const Theme, cx: *Context(TranscriptView)) AnyElement {
     const base_row_height: f32 = if (collapses) tool_tree_row_height else chip_height;
     const has_pred = ix > 0;
     const continues = ix + 1 < count;
+    // The text arrives with the branch tip (rises 4 px as it fades in).
+    const content_reveal = connectorParts(rv.connector, has_pred)[1];
     if (t.isSpawnLink()) return subagentChip(t, row.key, ix, collapses, theme, cx);
     const expandable = t.body != null or t.invocation != null;
     if (!expandable) {
         var r = div().h(px(base_row_height)).wFull().flexNone().flex().flexRow();
-        if (collapses) r = r.child(activityRail(t, has_pred, continues, base_row_height, theme));
+        if (collapses) r = r.child(activityRail(t, has_pred, continues, base_row_height, rv, theme));
         var card = div().my(px((base_row_height - chip_card_height) / 2)).h(px(chip_card_height)).minW0().flex1()
             .flex().itemsCenter().overflowHidden();
+        if (collapses and content_reveal < 1) card = card.relative().top(px(4 * (1 - content_reveal))).opacity(content_reveal);
         if (collapses) card = card.ml(px(activity_text_gap)) else card = card.rounded(px(9)).border1()
             .borderColor(theme.hairline(0.07)).bg(theme.ink(0.03));
         return zpui.intoAnyElement(r.child(card.child(chipHeaderRow(t, null, collapses, theme))));
@@ -269,6 +446,7 @@ fn chipRow(self: *TranscriptView, row: *const rows.Row, t: ToolItem, ix: usize, 
     var card = div().my(px((base_row_height - chip_card_height) / 2)).minW0().flex1().flex().flexCol().overflowHidden();
     if (collapses) card = card.ml(px(activity_text_gap)) else card = card.rounded(px(9)).border1()
         .borderColor(theme.hairline(0.07)).bg(theme.ink(0.03));
+    if (collapses and content_reveal < 1) card = card.relative().top(px(4 * (1 - content_reveal))).opacity(content_reveal);
     card = card.child(div().id(.{ "chip-hdr", dkey }).role(.button).ariaExpanded(open).h(px(if (collapses) chip_card_height else chip_header_height)).flexNone()
         .flex().itemsCenter().cursorPointer()
         .onClick(cx.listenerWith(DetailToggle{ .key = dkey, .height = height - base_row_height + chip_card_height, .open = open }, TranscriptView.onToggleDetail))
@@ -297,7 +475,7 @@ fn chipRow(self: *TranscriptView, row: *const rows.Row, t: ToolItem, ix: usize, 
     }
     card = card.h(px(height - base_row_height + chip_card_height));
     var r = div().wFull().flexNone().flex().flexRow();
-    if (collapses) r = r.child(activityRail(t, has_pred, continues, base_row_height, theme));
+    if (collapses) r = r.child(activityRail(t, has_pred, continues, base_row_height, rv, theme));
     return zpui.intoAnyElement(r.child(div().minW0().flex1().child(card)));
 }
 
@@ -365,10 +543,10 @@ fn subagentChip(t: ToolItem, row_key: u64, ix: usize, rail: bool, theme: *const 
 
 /// The task-tree gutter: trunk + rounded elbow to the branch tip, then the
 /// tool glyph (one hairline color; quads instead of a path union).
-fn activityRail(t: ToolItem, has_pred: bool, continues: bool, row_height: f32, theme: *const Theme) zpui.Div {
-    _ = has_pred;
-    const Ctx = struct { color: Hsla, row_height: f32, continues: bool };
-    const ctx: Ctx = .{ .color = theme.hairline(0.12), .row_height = row_height, .continues = continues };
+fn activityRail(t: ToolItem, has_pred: bool, continues: bool, row_height: f32, rv: Reveal, theme: *const Theme) zpui.Div {
+    const parts = connectorParts(rv.connector, has_pred);
+    const Ctx = struct { color: Hsla, row_height: f32, continues: bool, incoming: f32, branch: f32, continuation: f32 };
+    const ctx: Ctx = .{ .color = theme.hairline(0.12), .row_height = row_height, .continues = continues, .incoming = parts[0], .branch = parts[1], .continuation = rv.continuation };
     const tint = if (t.is_error) theme.danger else theme.text_muted;
     return div().relative().w(px(activity_gutter_width)).flexNone()
         .child(zpui.canvas(ctx, struct {
@@ -377,6 +555,29 @@ fn activityRail(t: ToolItem, has_pred: bool, continues: bool, row_height: f32, t
                 const branch_y = b.origin.y + c.row_height / 2;
                 const r = activity_bend_radius;
                 const bend_top = branch_y - r;
+                const settled = c.incoming >= 1 and c.branch >= 1 and (!c.continues or c.continuation >= 1);
+                if (!settled) {
+                    // [motion] Mid-arrival: the incoming leg grows down, then the
+                    // elbow + branch draw by arc length (`activity_branch_points`).
+                    if (c.incoming > 0) {
+                        var bottom = b.origin.y + (c.row_height / 2 - r) * c.incoming;
+                        if (c.incoming >= 1 and c.continues and c.continuation > 0) {
+                            const cont_h = @max(b.size.height - (c.row_height / 2 - r), 0);
+                            bottom = bend_top + cont_h * c.continuation;
+                        }
+                        w.paintQuad(zpui.fill(.{ .origin = .{ .x = x - 0.5, .y = b.origin.y }, .size = .{ .width = 1, .height = @max(bottom - b.origin.y, 0) } }, c.color));
+                    }
+                    if (c.branch > 0) {
+                        var buf: [32][2]f32 = undefined;
+                        const pts = branchPoints(c.branch, &buf);
+                        if (pts.len >= 2) {
+                            var path = zpui.scene.Path.init(.{ .x = b.origin.x, .y = b.origin.y });
+                            ribbon(&path, pts, x, bend_top);
+                            w.paintPath(path, c.color);
+                        }
+                    }
+                    return;
+                }
                 if (c.continues) {
                     // Straight trunk through the whole row (expanded rows included).
                     w.paintQuad(zpui.fill(.{ .origin = .{ .x = x - 0.5, .y = b.origin.y }, .size = .{ .width = 1, .height = b.size.height } }, c.color));
@@ -389,7 +590,32 @@ fn activityRail(t: ToolItem, has_pred: bool, continues: bool, row_height: f32, t
                     .{ .top = 0, .right = 0, .bottom = 1, .left = 1 }, c.color, .solid));
             }
         }.paint).absolute().inset0())
-        .child(md.icon(t.icon, activity_icon_size, tint).absolute().left(px(activity_icon_left)).top(px(row_height / 2 - activity_icon_size / 2)));
+        .child(md.icon(t.icon, activity_icon_size, tint).opacity(parts[1]).absolute().left(px(activity_icon_left)).top(px(row_height / 2 - activity_icon_size / 2)));
+}
+
+/// `activity_ribbon`: a 1 px ribbon along `pts` (relative to the bend),
+/// tessellated as quads between the left and right offset curves.
+fn ribbon(path: *zpui.scene.Path, pts: []const [2]f32, ox: f32, oy: f32) void {
+    const a = zpui.window.arena_mod.frameAllocator();
+    var prev_l: [2]f32 = undefined;
+    var prev_r: [2]f32 = undefined;
+    for (pts, 0..) |p, ix| {
+        const pa = pts[if (ix == 0) 0 else ix - 1];
+        const pb = pts[@min(ix + 1, pts.len - 1)];
+        const dx = pb[0] - pa[0];
+        const dy = pb[1] - pa[1];
+        const len = @max(@sqrt(dx * dx + dy * dy), 0.0001);
+        const n = [2]f32{ -dy / len * 0.5, dx / len * 0.5 };
+        const l = [2]f32{ ox + p[0] + n[0], oy + p[1] + n[1] };
+        const rr = [2]f32{ ox + p[0] - n[0], oy + p[1] - n[1] };
+        if (ix > 0) {
+            const uv = [3]zpui.Point(f32){ .{ .x = 0, .y = 1 }, .{ .x = 0, .y = 1 }, .{ .x = 0, .y = 1 } };
+            path.pushTriangle(a, .{ .{ .x = prev_l[0], .y = prev_l[1] }, .{ .x = l[0], .y = l[1] }, .{ .x = rr[0], .y = rr[1] } }, uv) catch {};
+            path.pushTriangle(a, .{ .{ .x = prev_l[0], .y = prev_l[1] }, .{ .x = rr[0], .y = rr[1] }, .{ .x = prev_r[0], .y = prev_r[1] } }, uv) catch {};
+        }
+        prev_l = l;
+        prev_r = rr;
+    }
 }
 
 /// An open chip's body: output lines, thought lines, stats or an inline diff.

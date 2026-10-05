@@ -43,6 +43,8 @@ pub const Slots = struct {
     git_row: Entity(pickers_mod.PickerRow),
     /// Theme the composer was last configured with.
     theme_key: u64 = 0,
+    /// [motion] The dock's glided composer width (`layout_width`); null = target.
+    width_override: ?f32 = null,
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, cx: anytype) !Slots {
         tr.view.theme_provider = provideTheme;
@@ -131,12 +133,7 @@ pub const Slots = struct {
     /// gutters, capped by the panel (the composer pads itself).
     pub fn composer(self: *Slots, width: f32, cx: anytype) zpui.AnyElement {
         self.syncTheme(cx);
-        const panel = @max(width, 0);
-        const docked = self.state.read(cx).workspace.read(cx).selected_chat != null;
-        const w = if (docked)
-            @min(@import("prefs.zig").get(cx).transcript_width + 2 * layout.space_lg, panel)
-        else
-            @min(panel, layout.composer_max_width);
+        const w = self.width_override orelse self.composerTargetWidth(width, cx);
         self.composer_view.update(cx, composer_mod.ComposerView.setAvailableWidth, .{@as(?f32, w)});
         {
             const plan = self.pickers.read(cx).checkoutPlan();
@@ -146,5 +143,15 @@ pub const Slots = struct {
         }
         return zpui.intoAnyElement(div().wFull().flex().flexCol().itemsCenter()
             .child(div().wFull().maxW(px(w)).child(self.composer_view)));
+    }
+
+    /// `composer_target_width` for this route.
+    pub fn composerTargetWidth(self: *Slots, width: f32, cx: anytype) f32 {
+        const panel = @max(width, 0);
+        const docked = self.state.read(cx).workspace.read(cx).selected_chat != null;
+        return if (docked)
+            @min(@import("prefs.zig").get(cx).transcript_width + 2 * layout.space_lg, panel)
+        else
+            @min(panel, layout.composer_max_width);
     }
 };

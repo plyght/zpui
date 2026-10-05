@@ -27,6 +27,7 @@ pub const todo_panel = @import("todo_panel.zig");
 pub const completions = @import("completions.zig");
 pub const extras = @import("extras.zig");
 pub const account_usage = @import("account_usage.zig"); // plan-usage ring + account switcher
+pub const dock = @import("dock.zig"); // [motion] composer route choreography (composer_dock.rs)
 
 pub const ComposerView = composer.ComposerView;
 pub const ComposerEvent = composer.ComposerEvent;
@@ -38,5 +39,6 @@ test {
     _ = @import("tests.zig");
     _ = @import("extras_test.zig"); // [wiring]
     _ = @import("attachments_test.zig");
+    _ = @import("dock.zig");
     _ = @import("dictation_test.zig"); // [dictation]
 }

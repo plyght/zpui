@@ -191,6 +191,9 @@ pub const ChangesPane = struct {
 
     scope_menu_open: bool = false,
     ref_menu: ?RefMenu = null,
+    /// [motion] Closing phases (MENU_OUT) of the scope and ref menus.
+    scope_exit: ui.popover.Exit = .{},
+    ref_exit: ui.popover.Exit = .{},
     discard: ?DiscardFlow = null,
     discard_inflight: bool = false,
     /// In-flight `GetCheckoutFileDiffText` calls (FIFO with their replies).
@@ -1133,18 +1136,18 @@ pub const ChangesPane = struct {
 
     fn onScopeTrigger(self: *ChangesPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ChangesPane)) void {
         cx.stopPropagation();
-        self.scope_menu_open = !self.scope_menu_open;
+        ui.popover.toggle(ChangesPane, &self.scope_menu_open, &self.scope_exit, cx);
         cx.notify();
     }
 
     fn onScopeOutside(self: *ChangesPane, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(ChangesPane)) void {
         if (!self.scope_menu_open) return;
-        self.scope_menu_open = false;
+        ui.popover.shut(ChangesPane, &self.scope_menu_open, &self.scope_exit, cx);
         cx.notify();
     }
 
     fn onScopeRow(self: *ChangesPane, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ChangesPane)) void {
-        self.scope_menu_open = false;
+        ui.popover.shut(ChangesPane, &self.scope_menu_open, &self.scope_exit, cx);
         self.setScope(m.DiffScope.menu[ix], cx);
     }
 
@@ -1155,15 +1158,32 @@ pub const ChangesPane = struct {
             r.search.release(app);
         }
         self.ref_menu = null;
+        self.ref_exit.clear();
+    }
+
+    /// The ref menu only while genuinely open (`Popup::as_open`).
+    fn liveRef(self: *ChangesPane) ?*RefMenu {
+        if (self.ref_exit.isClosing()) return null;
+        return if (self.ref_menu) |*r| r else null;
+    }
+
+    /// `begin_close`: the ref menu plays MENU_OUT, then `refMenu`'s render
+    /// releases it (reduced motion releases it at once).
+    fn beginRefClose(self: *ChangesPane, cx: *Context(ChangesPane)) void {
+        if (self.liveRef() == null) return;
+        if (ui.popover.appReduced(cx.app)) return self.closeRefMenu(cx.app);
+        if (self.ref_exit.begin(cx.app.executor.now())) ui.popover.reap(ChangesPane, cx);
     }
 
     fn onRefTrigger(self: *ChangesPane, _: *const zpui.ClickEvent, window: *Window, cx: *Context(ChangesPane)) void {
         cx.stopPropagation();
-        if (self.ref_menu != null) {
-            self.closeRefMenu(cx.app);
+        if (self.liveRef() != null) {
+            self.beginRefClose(cx);
             cx.notify();
             return;
         }
+        // Reopened mid-exit: drop the dying menu and mount a fresh one.
+        self.closeRefMenu(cx.app);
         const theme = ui.theme.get(cx).forPopup();
         const search = cx.newWith(input.TextInput, input.TextInput.init, .{input.Options{
             .placeholder = "Search branches…",
@@ -1194,11 +1214,11 @@ pub const ChangesPane = struct {
     fn onRefSearch(self: *ChangesPane, _: Entity(input.TextInput), ev: *const input.TextInputEvent, cx: *Context(ChangesPane)) void {
         switch (ev.*) {
             .edited => {
-                if (self.ref_menu) |*r| r.active = 0;
+                if (self.liveRef()) |r| r.active = 0;
                 cx.notify();
             },
             .escape => {
-                self.closeRefMenu(cx.app);
+                self.beginRefClose(cx);
                 cx.notify();
             },
             .submitted => self.pickActiveRef(cx),
@@ -1219,7 +1239,7 @@ pub const ChangesPane = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const n = self.refRows(arena.allocator(), cx).len;
-        const r = if (self.ref_menu) |*rm| rm else return;
+        const r = self.liveRef() orelse return;
         if (std.mem.eql(u8, key, "down")) {
             if (n > 0) r.active = (r.active + 1) % n;
         } else if (std.mem.eql(u8, key, "up")) {
@@ -1238,7 +1258,7 @@ pub const ChangesPane = struct {
                 self.sync(cx);
             }
         }
-        self.closeRefMenu(cx.app);
+        self.beginRefClose(cx);
         cx.notify();
     }
 
@@ -1247,8 +1267,8 @@ pub const ChangesPane = struct {
     }
 
     fn onRefOutside(self: *ChangesPane, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(ChangesPane)) void {
-        if (self.ref_menu == null) return;
-        self.closeRefMenu(cx.app);
+        if (self.liveRef() == null) return;
+        self.beginRefClose(cx);
         cx.notify();
     }
 
@@ -1288,9 +1308,9 @@ pub const ChangesPane = struct {
         const key = ev.keystroke.key;
         const page: f32 = @max(self.list.viewportBounds().size.height - 2 * m.line_height, m.line_height);
         if (std.mem.eql(u8, key, "escape")) {
-            if (!self.scope_menu_open and self.ref_menu == null and self.discard == null) return;
-            self.scope_menu_open = false;
-            self.closeRefMenu(cx.app);
+            if (!self.scope_menu_open and self.liveRef() == null and self.discard == null) return;
+            ui.popover.shut(ChangesPane, &self.scope_menu_open, &self.scope_exit, cx);
+            self.beginRefClose(cx);
             self.clearDiscard();
         } else if (std.mem.eql(u8, key, "down")) {
             self.list.scrollBy(m.line_height * 3);
@@ -1352,7 +1372,8 @@ pub const ChangesPane = struct {
             .onClick(cx.listener(onScopeTrigger))
             .child(div().textSize(px(12)).lineHeight(px(14)).textColor(theme.text).whitespaceNowrap().child(self.scope.label()))
             .child(ui.icon.of(.alt_arrow_down, 12, theme.text_muted.opacity(0.7)));
-        if (self.scope_menu_open) trigger = trigger.relative().child(self.scopeMenu(theme, cx));
+        const scope_exit = ui.popover.settle(self.scope_menu_open, &self.scope_exit, cx.app.executor.now());
+        if (self.scope_menu_open or scope_exit != null) trigger = trigger.relative().child(self.scopeMenu(theme, scope_exit, cx));
         row = row.child(trigger);
         if (self.renderRefSelector(theme, cx)) |sel| row = row.child(sel);
         row = row.child(div().flex1());
@@ -1370,14 +1391,15 @@ pub const ChangesPane = struct {
         return row.child(trailing);
     }
 
-    fn anchoredBelow(id: []const u8, gap: f32, card: zpui.Div) zpui.Div {
+    /// `anchored_menu_below_gap`, with the closing phase (`exit`).
+    fn anchoredBelow(comptime id: []const u8, gap: f32, card: zpui.Div, exit: ?f32) zpui.Div {
         return div().absolute().bottom(px(0)).left(px(0)).size(px(0)).child(zpui.deferred(
             zpui.anchored().anchorCorner(.top_left).snapToWindowWithMargin(.all(8))
-                .child(ui.anim.menuIn(id, div().occlude().pt(px(gap)).child(ui.popover.frostedCard(card)), -2)),
+                .child(ui.popover.menuMotion(id, exit, div().occlude().pt(px(gap)).child(ui.popover.frostedCardExit(card, exit)), -2)),
         ).withPriority(1));
     }
 
-    fn scopeMenu(self: *ChangesPane, base_theme: *const Theme, cx: *Context(ChangesPane)) zpui.Div {
+    fn scopeMenu(self: *ChangesPane, base_theme: *const Theme, exit: ?f32, cx: *Context(ChangesPane)) zpui.Div {
         const theme = zpui.window.arena_mod.current().create(Theme, base_theme.forPopup());
         var col = div().flex().flexCol().gap(px(2));
         for (m.DiffScope.menu, 0..) |scope, ix| {
@@ -1386,7 +1408,7 @@ pub const ChangesPane = struct {
                 .child(div().flex1().child(scope.label())));
         }
         const card = ui.popover.card(theme).w(px(180)).onMouseDownOut(cx.listener(onScopeOutside)).child(col);
-        return anchoredBelow("changes-scope-menu", 10, card);
+        return anchoredBelow("changes-scope-menu", 10, card, exit);
     }
 
     fn renderRefSelector(self: *ChangesPane, theme: *const Theme, cx: *Context(ChangesPane)) ?zpui.Div {
@@ -1402,14 +1424,15 @@ pub const ChangesPane = struct {
             .onClick(cx.listener(onRefTrigger))
             .child(div().minW0().truncate().whitespaceNowrap().fontFamily(theme.font_mono).textSize(px(11.5)).textColor(theme.text).child(base))
             .child(ui.icon.of(.alt_arrow_down, 11, theme.text_muted.opacity(0.7)));
-        if (self.ref_menu != null) trigger = trigger.relative().child(self.refMenu(theme, cx));
+        if (self.ref_exit.done(cx.app.executor.now())) self.closeRefMenu(cx.app);
+        if (self.ref_menu != null) trigger = trigger.relative().child(self.refMenu(theme, self.ref_exit.progress(cx.app.executor.now()), cx));
         return div().minW0().flex().flexRow().itemsCenter().gap(px(6)).ml(px(m.control_gap))
             .child(div().minW0().truncate().whitespaceNowrap().fontFamily(theme.font_mono).textSize(px(11.5)).textColor(theme.text_dim).child(branch))
             .child(ui.icon.of(.arrow_right, 12, theme.text_faint))
             .child(trigger);
     }
 
-    fn refMenu(self: *ChangesPane, base_theme: *const Theme, cx: *Context(ChangesPane)) zpui.Div {
+    fn refMenu(self: *ChangesPane, base_theme: *const Theme, exit: ?f32, cx: *Context(ChangesPane)) zpui.Div {
         const theme = zpui.window.arena_mod.current().create(Theme, base_theme.forPopup());
         const r = self.ref_menu.?;
         const list = self.refRows(frame(), cx);
@@ -1434,7 +1457,7 @@ pub const ChangesPane = struct {
             .captureKeyDown(cx.listener(onRefKey))
             .onMouseDownOut(cx.listener(onRefOutside))
             .child(search_frame).child(rows_col);
-        return anchoredBelow("changes-ref-menu", 10, card);
+        return anchoredBelow("changes-ref-menu", 10, card, exit);
     }
 
     /// `surface_chrome::toolbar` with the header controls inside.

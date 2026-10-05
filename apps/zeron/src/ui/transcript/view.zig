@@ -24,6 +24,7 @@ const md = @import("zeron_ui_markdown");
 const assets = @import("zeron_assets");
 const rows = @import("rows.zig");
 const tools = @import("tools.zig");
+const stick = @import("stick.zig");
 const files = md.file_icons;
 const wl = @import("workspace_links.zig");
 const subagents = @import("subagents.zig"); // [wiring] spawn chips → subagent tabs
@@ -54,6 +55,14 @@ pub const stick_threshold_px: f32 = 70;
 pub const overdraw_px: f32 = 320;
 pub const user_collapsed_lines: usize = 5;
 pub const user_line_height: f32 = 22;
+
+/// `OwnTurnAnchor`: the sent prompt's row and its hold state.
+pub const OwnTurn = struct {
+    key: u64,
+    held: bool = true,
+    positioned: bool = false,
+    last_tick: ?u64 = null,
+};
 
 /// One user message's open/close resize (`FoldState` for user rows).
 pub const UserFold = struct {
@@ -129,6 +138,10 @@ pub const TranscriptView = struct {
     user_folds: std.AutoHashMapUnmanaged(u64, UserFold) = .empty,
     /// Row key → entrance start (ns) for rows that arrived live.
     entrance: std.AutoHashMapUnmanaged(u64, u64) = .empty,
+    /// [motion] Tool arrival starts per (row, part) and group header starts
+    /// (`tool_group_reveals`); null = historical / settled.
+    tool_starts: std.AutoHashMapUnmanaged(u64, ?u64) = .empty,
+    tool_headers: std.AutoHashMapUnmanaged(u64, ?u64) = .empty,
     hovered_entry: u64 = 0,
     hovered_row: u64 = 0,
     copied_entry: u64 = 0,
@@ -186,6 +199,20 @@ pub const TranscriptView = struct {
     /// live offset, so the landing is exact once the row is measured.
     rail_glide: ?struct { row: usize, from: f32, start_ns: u64 } = null,
     rail_glide_task: zpui.Task(void) = .none,
+    /// [motion] The stick-to-bottom spring (`engage_pin` / `step_spring`):
+    /// glides back to the end instead of snapping; lands in tail-follow.
+    spring: stick.StickSpring = .{},
+    spring_on: bool = false,
+    spring_last: ?u64 = null,
+    spring_settled_at: ?u64 = null,
+    /// [motion] A locally-sent prompt's hold (`OwnTurnAnchor`): the list
+    /// reserves the reply's runway below it and the prompt glides to the top
+    /// inset; filled runway hands off to the bottom pin.
+    own_turn: ?OwnTurn = null,
+    /// [motion] `retain_for_route_exit`: leaving for Home keeps the old
+    /// conversation mounted while the dock fades it out; the main panel
+    /// calls `finishRouteExit` once its fade has run out.
+    exit_pending: bool = false,
 
     /// Streaming fade veils, one per live markdown row (dropped on the
     /// live→complete flip).
@@ -247,6 +274,8 @@ pub const TranscriptView = struct {
         self.user_heights.deinit(self.gpa);
         self.user_folds.deinit(self.gpa);
         self.entrance.deinit(self.gpa);
+        self.tool_starts.deinit(self.gpa);
+        self.tool_headers.deinit(self.gpa);
         self.list.release();
         self.blobs.deinit(self.gpa); // [wiring]
         for (self.blob_requests.items) |r| r.release(app);
@@ -528,6 +557,12 @@ pub const TranscriptView = struct {
         self.veil_baseline.clearRetainingCapacity();
         self.veil_attach_pending = true;
         self.entrance.clearRetainingCapacity();
+        self.tool_starts.clearRetainingCapacity();
+        self.tool_headers.clearRetainingCapacity();
+        self.own_turn = null;
+        self.spring_on = false;
+        self.spring.reset();
+        self.list.setTailReservation(null);
         self.user_expanded.clearRetainingCapacity();
         self.clearUserHeights();
         self.user_folds.clearRetainingCapacity();
@@ -549,7 +584,21 @@ pub const TranscriptView = struct {
         const ws = state.read(cx).workspace.read(cx);
         const cwd: ?[]const u8 = if (ws.selectedChatRow()) |c| c.cwd else null;
         self.setWorkspaceRoot(cwd);
-        if (state.read(cx).transcript) |t| self.attach(t, cx) catch {} else if (self.store != null) self.detach(cx);
+        if (state.read(cx).transcript) |t| {
+            self.exit_pending = false;
+            self.attach(t, cx) catch {};
+        } else if (self.store != null) {
+            if (appReduced(cx.app)) return self.detach(cx);
+            self.exit_pending = true;
+            cx.notify();
+        }
+    }
+
+    /// `finish_route_exit`: drop the departed conversation.
+    pub fn finishRouteExit(self: *TranscriptView, cx: *Context(TranscriptView)) void {
+        if (!self.exit_pending) return;
+        self.exit_pending = false;
+        if (self.store != null) self.detach(cx);
     }
 
     fn onStoreChanged(_: *TranscriptView, _: Entity(TranscriptStore), _: *const model.transcript_store.Changed, cx: *Context(TranscriptView)) void {
@@ -635,6 +684,17 @@ pub const TranscriptView = struct {
         if (self.loaded) {
             // Compact-fold body rows reveal under the fold tween, not the entrance.
             for (new_rows) |r| if (!old_keys.contains(r.key) and r.compact_fold == null) try self.entrance.put(gpa, r.key, now_ns);
+        }
+        // [motion] Tool arrival bookkeeping (what streamed before attach is history).
+        try tools.updateReveals(self, new_rows, &old_keys, !self.loaded, now_ns);
+        // [motion] `on_own_send`: a pending (optimistic) user row that just
+        // appeared is our own send; hold it at the top with the reply runway.
+        if (self.loaded) {
+            var sent: ?u64 = null;
+            for (new_rows) |r| if (r.kind == .user and r.kind.user.pending and !old_keys.contains(r.key)) {
+                sent = r.key;
+            };
+            if (sent) |key| self.onOwnSend(key);
         }
         if (new_rows.len > 0 and !self.loaded and self.start_at_top) {
             self.list.setFollowMode(.normal);
@@ -1035,6 +1095,13 @@ pub const TranscriptView = struct {
     pub fn render(self: *TranscriptView, window: *Window, cx: *Context(TranscriptView)) AnyElement {
         self.syncCompactSetting(cx.app);
         self.sync(cx);
+        // [motion] Scroll motion steps once per frame, after the last layout.
+        {
+            const now = cx.app.executor.now();
+            const reduced = window.prefersReducedMotion();
+            if (self.own_turn != null) self.stepOwnTurn(reduced, now, window);
+            if (self.spring_on) self.stepSpring(now, window);
+        }
         md.setClock(cx.app);
         {
             const list_width = self.list.viewportBounds().size.width;
@@ -1073,21 +1140,153 @@ pub const TranscriptView = struct {
     }
 
     fn updateJump(self: *TranscriptView) void {
-        self.show_jump = jumpVisibility(self.show_jump, self.distanceFromEnd());
+        const held = if (self.own_turn) |t| t.held else false;
+        self.show_jump = jumpVisibility(self.show_jump, self.distanceFromEnd()) and !self.spring_on and !held;
     }
 
     fn onListScroll(self: *TranscriptView, _: *const zpui.elements.list_mod.ListScrollEvent, _: *Window, cx: *Context(TranscriptView)) void {
+        // [motion] A wheel takes the viewport back from automatic scrolling
+        // (`handle_scroll` → `cancel_user_hold`; the hold stands down).
+        if (self.own_turn) |*t| t.held = false;
+        if (self.spring_on) self.stopSpring();
         const was = self.show_jump;
         self.updateJump();
         if (was != self.show_jump) cx.notify();
     }
 
-    /// The pill's click: back to the end, re-pinned to the tail.
+    /// The pill's click: back to the end, re-pinned to the tail
+    /// (`jump_to_bottom` → `engage_pin`: a spring glide, not a snap).
     pub fn jumpToBottom(self: *TranscriptView, cx: *Context(TranscriptView)) void {
-        self.list.setFollowMode(.tail);
-        self.list.scrollToEnd();
+        if (self.own_turn) |*t| t.held = false;
         self.show_jump = false;
+        self.engagePin(appReduced(cx.app), cx.app.executor.now());
         cx.notify();
+    }
+
+    // ---- [motion] stick-to-bottom spring + own-turn hold -------------------------------
+
+    fn appReduced(app: *App) bool {
+        if (app.windows.items.len == 0) return false;
+        const w = app.windows.items[0] orelse return false;
+        return w.prefersReducedMotion();
+    }
+
+    /// `engage_pin`: long jumps teleport to within 2.5 viewports, then the
+    /// spring glides the rest; reduced motion snaps to the tail.
+    fn engagePin(self: *TranscriptView, reduced: bool, now: u64) void {
+        if (reduced) {
+            self.stopSpring();
+            self.list.setFollowMode(.tail);
+            self.list.scrollToEnd();
+            return;
+        }
+        // Tail-follow would snap on the next layout; the spring owns it now.
+        self.list.setFollowMode(.normal);
+        const viewport = self.list.viewportBounds().size.height;
+        const distance = self.distanceFromEnd();
+        const glide_max = stick.glide_max_viewports * viewport;
+        if (viewport > 0 and distance > glide_max) self.list.scrollBy(distance - glide_max);
+        if (self.spring_settled_at) |at| if (now -| at >= stick.settle_grace_ms * std.time.ns_per_ms) {
+            self.spring.reset();
+            self.spring_last = null;
+        };
+        self.spring_settled_at = null;
+        self.spring_on = true;
+    }
+
+    fn stopSpring(self: *TranscriptView) void {
+        self.spring_on = false;
+        self.spring.reset();
+        self.spring_last = null;
+        self.spring_settled_at = null;
+    }
+
+    /// `step_spring`: one frame of the glide toward the end (after the
+    /// previous layout); landing re-enters tail-follow.
+    fn stepSpring(self: *TranscriptView, now: u64, window: *Window) void {
+        const frames = stick.framesSince(self.spring_last, now);
+        self.spring_last = now;
+        const target = self.list.maxOffsetForScrollbar().y;
+        var distance = self.distanceFromEnd();
+        const viewport = self.list.viewportBounds().size.height;
+        const glide_max = stick.glide_max_viewports * viewport;
+        if (viewport > 0 and distance > glide_max) {
+            self.list.scrollBy(distance - glide_max);
+            distance = glide_max;
+        }
+        const pos = target - distance;
+        const next = self.spring.step(pos, target, frames);
+        if (next > pos) self.list.scrollBy(next - pos);
+        if (target - next <= 0.5) {
+            // Land on the final item, not the estimated pixel total.
+            self.list.setFollowMode(.tail);
+            self.list.scrollToEnd();
+            self.spring_on = false;
+            self.spring_settled_at = now;
+            return;
+        }
+        window.requestAnimationFrame();
+    }
+
+    /// `on_own_send`: un-glue the offset (a glued offset re-snaps to the end
+    /// every layout, skipping the glide), then hold the prompt.
+    fn onOwnSend(self: *TranscriptView, key: u64) void {
+        self.stopSpring();
+        self.list.setFollowMode(.normal);
+        self.list.scrollBy(-1);
+        self.own_turn = .{ .key = key };
+        self.show_jump = false;
+    }
+
+    /// `own_send_inset`: row 0 carries the titlebar chrome in its own gap.
+    fn ownSendInset(ix: usize) f32 {
+        return if (ix == 0) 0 else layout.titlebar_height + 10;
+    }
+
+    /// `update_runway_minimum` + `step_own_turn`: size the reservation, hand
+    /// a filled runway to the bottom pin, glide the prompt to its inset
+    /// (`1 − 0.85^frames` per tick, snapping within 1 px), then hold it.
+    fn stepOwnTurn(self: *TranscriptView, reduced: bool, now: u64, window: *Window) void {
+        const turn = if (self.own_turn) |*t| t else return;
+        const ix = self.indexOfKey(turn.key) orelse return; // the echo may land next frame
+        const inset = ownSendInset(ix);
+        self.list.setTailReservation(.{ .start = ix, .inset = inset - stick.own_send_scroll_slack_px });
+        if (self.list.tailReservationFilled()) {
+            const held = turn.held;
+            self.own_turn = null;
+            self.list.setTailReservation(null);
+            if (held or self.distanceFromEnd() <= stick.at_bottom_px) self.engagePin(reduced, now);
+            window.requestAnimationFrame();
+            return;
+        }
+        if (!turn.held) return;
+        const viewport = self.list.viewportBounds();
+        if (viewport.size.height <= 0) {
+            window.requestAnimationFrame();
+            return;
+        }
+        const err: f32 = if (self.list.boundsForItem(ix)) |b|
+            b.origin.y - (viewport.origin.y + inset)
+        else
+            (self.list.offsetForItem(ix) - inset) - (-self.list.scrollPxOffsetForScrollbar().y);
+        if (turn.positioned) {
+            // Landed: re-assert only real drift (the slack below is legal rest).
+            if (err > 0.5 or err < -(stick.own_send_scroll_slack_px + 2.0)) {
+                const frames = stick.framesSince(turn.last_tick, now);
+                turn.last_tick = now;
+                if (@abs(err) <= stick.own_send_glide_snap_px or reduced) self.list.scrollBy(err) else self.list.scrollBy(err * stick.glideEase(frames));
+                window.requestAnimationFrame();
+            } else turn.last_tick = null;
+            return;
+        }
+        const frames = stick.framesSince(turn.last_tick, now);
+        turn.last_tick = now;
+        if (reduced or @abs(err) <= stick.own_send_glide_snap_px) {
+            self.list.scrollBy(err);
+            turn.positioned = true;
+            turn.last_tick = null;
+        } else self.list.scrollBy(err * stick.glideEase(frames));
+        window.requestAnimationFrame();
     }
 
     fn onJumpClick(self: *TranscriptView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(TranscriptView)) void {

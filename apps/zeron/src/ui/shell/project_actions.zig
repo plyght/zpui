@@ -225,6 +225,8 @@ pub const Controller = struct {
     mutation_generation: u64 = 0,
     cache: std.ArrayList(Entry) = .empty,
     menu_open: bool = false,
+    /// [motion] The menu's closing phase (MENU_OUT).
+    menu_exit: ui.popover.Exit = .{},
     menu_scroll: ?zpui.ScrollHandle = null,
     editor: ?Editor = null,
     /// In-flight list replies, oldest first (replies carry no context).
@@ -478,10 +480,11 @@ fn onList(shell: *Shell, result: model.engine_state.CallResult, cx: *Ctx) void {
 fn toggleMenu(shell: *Shell, cx: *Ctx) void {
     const c = ctl(shell);
     if (c.menu_open) {
-        c.menu_open = false;
+        ui.popover.shut(Shell, &c.menu_open, &c.menu_exit, cx);
         return cx.notify();
     }
     c.menu_open = true;
+    c.menu_exit.clear();
     if (c.menu_scroll) |s| s.setOffset(.{ .x = 0, .y = 0 });
     if (actionContext(shell, cx)) |context| refresh(shell, context, cx);
     cx.notify();
@@ -493,7 +496,8 @@ fn onChevron(shell: *Shell, _: *const zpui.ClickEvent, _: *Window, cx: *Ctx) voi
 }
 
 fn onMenuOutside(shell: *Shell, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Ctx) void {
-    ctl(shell).menu_open = false;
+    const c = ctl(shell);
+    ui.popover.shut(Shell, &c.menu_open, &c.menu_exit, cx);
     cx.notify();
 }
 
@@ -584,7 +588,7 @@ fn onEditorInput(_: *Shell, _: Entity(TextInput), _: *const input_mod.TextInputE
 pub fn openEditor(shell: *Shell, action_id: ?[]const u8, draft: ?Draft, cx: *Ctx) void {
     const c = ctl(shell);
     const key = c.active orelse return;
-    c.menu_open = false;
+    ui.popover.shut(Shell, &c.menu_open, &c.menu_exit, cx);
     c.closeEditor(cx.app);
     const d: Draft = draft orelse .{ .name = "", .command = "", .icon = .play };
     const name = newInput(cx, "Action name", d.name, false) orelse return;
@@ -751,7 +755,7 @@ pub fn runAction(shell: *Shell, action_id: []const u8, _: *Window, cx: *Ctx) voi
         if (std.mem.eql(u8, a.id, action_id)) break a;
     } else return;
     if (!attached(engineOf(shell, cx).read(cx))) return;
-    c.menu_open = false;
+    ui.popover.shut(Shell, &c.menu_open, &c.menu_exit, cx);
     // The run's tab is reserved (named, no PTY yet) in the chat's bottom
     // terminal drawer, which opens on it.
     const panel = shell.main.read(cx).terminal;
@@ -934,8 +938,9 @@ pub fn control(shell: *Shell, available_width: f32, theme: *const Theme, liquid:
         if (has_imports) ctrl = ctrl.child(divider(theme)).child(chevron(theme, true, cx));
     }
 
-    if (!loading and c.menu_open and (has_actions or has_imports or !can_run)) {
-        ctrl = ctrl.child(ui.popover.anchoredBelow(renderMenu(shell, status, snapshot, theme, cx)));
+    const menu_exit = ui.popover.settle(c.menu_open, &c.menu_exit, cx.app.executor.now());
+    if (!loading and (c.menu_open or menu_exit != null) and (has_actions or has_imports or !can_run)) {
+        ctrl = ctrl.child(ui.popover.anchoredBelowExit(renderMenu(shell, status, snapshot, theme, cx), menu_exit));
     }
     return ctrl;
 }

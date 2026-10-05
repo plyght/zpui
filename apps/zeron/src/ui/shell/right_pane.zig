@@ -238,6 +238,8 @@ pub const RightPane = struct {
     chats: std.StringHashMapUnmanaged(ChatTabs) = .empty,
     seq: u64 = 0,
     plus_open: bool = false,
+    /// [motion] The "+" menu's closing phase (MENU_OUT).
+    plus_exit: ui.popover.Exit = .{},
     drag: ?DragState = null,
     strip_scroll: zpui.ScrollHandle,
     /// A fresh chat's open flag (fixtures can open every chat's pane).
@@ -359,7 +361,7 @@ pub const RightPane = struct {
         const t = self.current(cx) orelse return;
         if (t.open == open) return;
         t.open = open;
-        if (!open) self.plus_open = false;
+        if (!open) ui.popover.shut(RightPane, &self.plus_open, &self.plus_exit, cx);
         self.ensureActiveContent(cx);
         cx.notify();
     }
@@ -384,7 +386,7 @@ pub const RightPane = struct {
         t.tabs.append(self.gpa, .{ .id = self.seq, .surface = surface }) catch return null;
         t.visit(self.gpa, self.seq);
         t.open = true;
-        self.plus_open = false;
+        ui.popover.shut(RightPane, &self.plus_open, &self.plus_exit, cx);
         self.syncBrowsers(t, cx);
         cx.notify();
         return &t.tabs.items[t.tabs.items.len - 1];
@@ -746,19 +748,19 @@ pub const RightPane = struct {
 
     fn onPlus(self: *RightPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(RightPane)) void {
         cx.stopPropagation();
-        self.plus_open = !self.plus_open;
+        ui.popover.toggle(RightPane, &self.plus_open, &self.plus_exit, cx);
         cx.notify();
     }
 
     fn onPlusOut(self: *RightPane, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(RightPane)) void {
         if (!self.plus_open) return;
-        self.plus_open = false;
+        ui.popover.shut(RightPane, &self.plus_open, &self.plus_exit, cx);
         cx.notify();
     }
 
     fn onMenuRow(self: *RightPane, kind: Kind, _: *const zpui.ClickEvent, window: *Window, cx: *Context(RightPane)) void {
         cx.stopPropagation();
-        self.plus_open = false;
+        ui.popover.shut(RightPane, &self.plus_open, &self.plus_exit, cx);
         self.add(kind, window, cx);
     }
 
@@ -913,7 +915,8 @@ pub const RightPane = struct {
             .child(ui.icon.of(.plus, 13, theme.text_muted));
         plus = (if (self.plus_open) plus.bg(theme.wash(0.11)) else plus.hover(sb.bg(theme.wash(0.11))))
             .tooltipWith(@as([]const u8, "New tab"), ui.tooltip.build);
-        if (self.plus_open) plus = plus.child(self.plusMenu(theme, cx));
+        const plus_exit = ui.popover.settle(self.plus_open, &self.plus_exit, cx.app.executor.now());
+        if (self.plus_open or plus_exit != null) plus = plus.child(self.plusMenu(theme, plus_exit, cx));
         strip = strip.child(plus);
 
         // Edge fades on whichever side hides chips.
@@ -926,7 +929,7 @@ pub const RightPane = struct {
         }));
     }
 
-    fn plusMenu(self: *RightPane, theme: *const Theme, cx: *Context(RightPane)) zpui.Div {
+    fn plusMenu(self: *RightPane, theme: *const Theme, exit: ?f32, cx: *Context(RightPane)) zpui.Div {
         const pt = zpui.window.arena_mod.current().create(Theme, theme.forPopup());
         var rows = div().flex().flexCol().gap(px(2));
         const entries = [_]struct { Kind, []const u8, Icon }{
@@ -948,7 +951,7 @@ pub const RightPane = struct {
         // `anchored_menu_below_gap(…, 10)`: a dropdown 10px under the button.
         return div().absolute().top(zpui.relative(1)).left(px(0)).child(zpui.deferred(
             zpui.anchored().anchorCorner(.top_left).snapToWindowWithMargin(.all(8))
-                .child(ui.anim.menuIn("right-plus-menu", div().occlude().pt(px(10)).child(ui.popover.frostedCard(card)), -2)),
+                .child(ui.popover.menuMotion("right-plus-menu", exit, div().occlude().pt(px(10)).child(ui.popover.frostedCardExit(card, exit)), -2)),
         ).withPriority(1));
     }
 

@@ -190,6 +190,8 @@ pub const FileEditor = struct {
     goto_sub: ?zpui.Subscription = null,
 
     context_menu: ?ContextMenu = null,
+    /// [motion] The context menu's closing phase (MENU_OUT).
+    context_exit: ui.popover.Exit = .{},
     pending_focus: bool = false,
     /// [wiring] A transcript link's `:line[:col]`, applied once the document loads.
     pending_goto: ?struct { line: usize, col: ?usize } = null,
@@ -740,7 +742,7 @@ pub const FileEditor = struct {
         self.scheduleAutosave(cx);
         self.reveal_cursor = true;
         self.blink_anchor = self.now(cx);
-        self.context_menu = null;
+        self.closeContextMenu(cx);
         cx.emit(StateChanged{});
         cx.notify();
     }
@@ -748,7 +750,7 @@ pub const FileEditor = struct {
     fn afterMove(self: *FileEditor, cx: *Context(FileEditor)) void {
         self.reveal_cursor = true;
         self.blink_anchor = self.now(cx);
-        self.context_menu = null;
+        self.closeContextMenu(cx);
         cx.notify();
     }
 
@@ -1178,7 +1180,7 @@ pub const FileEditor = struct {
 
     fn onMouseDown(self: *FileEditor, ev: *const zpui.input.MouseDownEvent, window: *Window, cx: *Context(FileEditor)) void {
         window.focus(self.focus);
-        self.context_menu = null;
+        self.closeContextMenu(cx);
         const off = self.offsetAt(ev.position, window);
         self.core.preferred_x = null;
         if (ev.click_count >= 3) {
@@ -1269,6 +1271,7 @@ pub const FileEditor = struct {
         const r = self.core.sel.range();
         if (r.isEmpty() or off < r.start or off > r.end) self.core.moveTo(off);
         self.context_menu = .{ .position = ev.position };
+        self.context_exit.clear();
         window.preventDefault();
         cx.stopPropagation();
         cx.notify();
@@ -1616,7 +1619,7 @@ pub const FileEditor = struct {
     }
 
     fn onContextRow(self: *FileEditor, ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(FileEditor)) void {
-        self.context_menu = null;
+        self.closeContextMenu(cx);
         window.focus(self.focus);
         switch (ix) {
             0 => self.copySelection(cx, true),
@@ -1632,7 +1635,7 @@ pub const FileEditor = struct {
     }
 
     fn onContextOutside(self: *FileEditor, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(FileEditor)) void {
-        self.context_menu = null;
+        self.closeContextMenu(cx);
         cx.notify();
     }
 
@@ -1932,6 +1935,10 @@ pub const FileEditor = struct {
         for (review.overlays(self, theme, cx)) |o| body = body.child(o);
         if (self.find_open) body = body.child(self.renderFindBar(theme, cx));
         if (self.goto_open) body = body.child(self.renderGoTo(theme, cx));
+        if (self.context_exit.done(cx.app.executor.now())) {
+            self.context_exit.clear();
+            self.context_menu = null;
+        }
         if (self.context_menu) |m| body = body.child(self.renderContextMenu(m, theme, cx));
         return zpui.intoAnyElement(body);
     }
@@ -2054,7 +2061,17 @@ pub const FileEditor = struct {
             row = if (r[1]) row.onClick(cx.listenerWith(i, onContextRow)) else row.opacity(0.38);
             card = card.child(row);
         }
-        return ui.popover.anchoredAt(m.position, card);
+        return ui.popover.anchoredAtExit(m.position, card, self.context_exit.progress(cx.app.executor.now()));
+    }
+
+    /// `begin_close`: the context menu plays MENU_OUT before it is dropped.
+    fn closeContextMenu(self: *FileEditor, cx: *Context(FileEditor)) void {
+        if (self.context_menu == null or self.context_exit.isClosing()) return;
+        if (ui.popover.appReduced(cx.app)) {
+            self.context_menu = null;
+            return;
+        }
+        if (self.context_exit.begin(cx.app.executor.now())) ui.popover.reap(FileEditor, cx);
     }
 };
 
