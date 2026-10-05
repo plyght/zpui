@@ -603,7 +603,7 @@ test "native controls (the macOS path): Appearance switch, pop-up and width slid
     const pause = tw.findNativeControl(.switch_, "Pause animations in background") orelse return error.NoNativeSwitch;
     const before = h.settings().theme.pause_animations_in_background;
     try testing.expectEqual(before, tw.control_state[@intFromEnum(pause)].?.on);
-    try testing.expectEqual(zpui.platform.NativeControlSize.mini, tw.control_state[@intFromEnum(pause)].?.size);
+    try testing.expectEqual(zpui.platform.NativeControlSize.small, tw.control_state[@intFromEnum(pause)].?.size);
     tw.simulateNativeControl(pause, .{ .kind = .switch_, .on = !before });
     h.app.runUntilParked();
     h.frames(1);

@@ -133,7 +133,7 @@ pub fn render(v: *SettingsView, t: *const Theme, window: *zpui.Window, cx: *Cont
     var cards = div().flex().flexRow().itemsStart().gap(px(16)).wFull();
     for ([_]AppearanceMode{ .system, .light, .dark }) |mode| {
         const selected = mode == ts.appearance;
-        const sel_t = v.travel(cx, 0x30000 | @as(u32, @intFromEnum(mode)), if (selected) 1 else 0, 150);
+        const sel_t = v.tabTravel(cx, 0x30000 | @as(u32, @intFromEnum(mode)), if (selected) 1 else 0);
         cards = cards.child(w.optionCard(t, modeIcon(mode), mode.label(), selected, sel_t, preview(mode, s))
             .id(.{ "appearance-mode", @intFromEnum(mode) }).role(.button).ariaLabel(mode.label()).ariaSelected(selected)
             .onClick(cx.listenerWith(mode, onMode)));

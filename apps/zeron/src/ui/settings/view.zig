@@ -120,7 +120,54 @@ pub fn scratch(gpa: std.mem.Allocator) Scratch {
 }
 
 /// A per-key travel (`SwitchTravel` / `TabSelectionTravel`).
-const Tween = struct { from: f32, target: f32, start: u64, ms: u64 };
+/// A retargetable settings tween: `.cubic_out` over `ms` (the switch travel,
+/// `SwitchTravel`, unscaled as in Rust) or `.tab_slide` (`TabSelectionTravel`:
+/// TAB_SLIDE's ease-out over its span stretched by `ZERON_MOTION_SCALE`).
+const Tween = struct { from: f32, target: f32, start: u64, ms: u64, curve: TweenCurve = .cubic_out };
+
+/// [motion] A settings popup's closing phase (`Popup::begin_close` through the
+/// shared `ui.popover.Exit`): which popup is dying, so its owner keeps rendering
+/// it with MENU_OUT (`menuMotion`, blur ride-down, occluded rows) until the exit
+/// span has passed; `reap` schedules the render that drops it. Reduced motion
+/// closes at once.
+pub fn Closing(comptime K: type) type {
+    return struct {
+        key: ?K = null,
+        exit: ui.popover.Exit = .{},
+
+        const Self = @This();
+
+        /// The popup keyed `key` was just dismissed.
+        pub fn start(self: *Self, key: K, cx: *Context(SettingsView)) void {
+            self.cancel();
+            if (SettingsView.reducedMotion(cx)) return;
+            self.key = key;
+            _ = self.exit.begin(cx.app.executor.now());
+            ui.popover.reap(SettingsView, cx);
+        }
+
+        pub fn cancel(self: *Self) void {
+            self.key = null;
+            self.exit.clear();
+        }
+
+        /// The eased exit progress to render `key`'s dying popup with, or null
+        /// (not closing, or the exit ran its course: the state is dropped).
+        pub fn progress(self: *Self, key: K, now_ns: u64) ?f32 {
+            const k = self.key orelse return null;
+            if (self.exit.done(now_ns)) {
+                self.cancel();
+                return null;
+            }
+            if (!std.meta.eql(k, key)) return null;
+            return self.exit.progress(now_ns);
+        }
+    };
+}
+
+/// Which drawn select menu is closing (`update_policy` menus are per harness row).
+pub const SelectKey = struct { id: SelectId, harness: ?protocol.HarnessId = null };
+const TweenCurve = enum { cubic_out, tab_slide };
 
 pub const RenameDialog = struct {
     device_id: []u8,
@@ -144,6 +191,8 @@ pub const SettingsView = struct {
 
     // ---- select dropdowns ----
     open_select: ?SelectId = null,
+    /// [motion] The drawn select menu playing its exit.
+    select_closing: Closing(SelectKey) = .{},
     highlighted: usize = 0,
     /// The select a mouse-down-outside just closed (so the trigger's own
     /// click does not reopen it).
@@ -301,21 +350,32 @@ pub const SettingsView = struct {
     /// Animate `key` toward `target` over `ms` (ease-out cubic), returning
     /// the current value; keeps frames coming while in flight.
     pub fn travel(self: *SettingsView, cx: anytype, key: u32, target: f32, ms: u64) f32 {
+        return self.travelCurve(cx, key, target, ms, .cubic_out);
+    }
+
+    /// The selected-state fade of a settings tab or option card
+    /// (`tab_selection_t`): TAB_SLIDE (150 ms ease-out, motion-scaled).
+    pub fn tabTravel(self: *SettingsView, cx: anytype, key: u32, target: f32) f32 {
+        return self.travelCurve(cx, key, target, zt.motion.tab_slide.duration_ms, .tab_slide);
+    }
+
+    fn travelCurve(self: *SettingsView, cx: anytype, key: u32, target: f32, ms: u64, curve: TweenCurve) f32 {
         const t_now = now(cx);
         const gop = self.tweens.getOrPut(self.gpa, key) catch return target;
-        if (!gop.found_existing) gop.value_ptr.* = .{ .from = target, .target = target, .start = t_now, .ms = ms };
+        if (!gop.found_existing) gop.value_ptr.* = .{ .from = target, .target = target, .start = t_now, .ms = ms, .curve = curve };
         const tw = gop.value_ptr;
         if (tw.target != target) {
             const cur = tweenValue(tw.*, t_now);
-            tw.* = .{ .from = cur, .target = target, .start = t_now, .ms = ms };
+            tw.* = .{ .from = cur, .target = target, .start = t_now, .ms = ms, .curve = curve };
         }
-        if (reducedMotion(cx)) tw.* = .{ .from = target, .target = target, .start = t_now, .ms = ms };
+        if (reducedMotion(cx)) tw.* = .{ .from = target, .target = target, .start = t_now, .ms = ms, .curve = curve };
         const v = tweenValue(tw.*, t_now);
         if (@abs(v - target) > 0.001) self.animating = true;
         return v;
     }
 
     fn tweenValue(tw: Tween, t_now: u64) f32 {
+        if (tw.curve == .tab_slide) return tw.from + (tw.target - tw.from) * zt.motion.tab_slide.progressAt(t_now -| tw.start, 1.0);
         const dur = @as(f32, @floatFromInt(tw.ms * std.time.ns_per_ms));
         const elapsed = @as(f32, @floatFromInt(t_now -| tw.start));
         const t = if (dur <= 0) 1 else @min(elapsed / dur, 1);
@@ -323,9 +383,11 @@ pub const SettingsView = struct {
         return tw.from + (tw.target - tw.from) * eased;
     }
 
+    /// The resolved reduced-motion flag (preference × OS setting × "pause in
+    /// background" with the window focus last seen), as Rust's `reduce_motion`.
     pub fn reducedMotion(cx: anytype) bool {
-        const t = store.current(cx).theme;
-        return zt.motion.resolveReduced(t.reduce_motion, false, false, true);
+        const app: *zpui.App = if (@TypeOf(cx) == *zpui.App) cx else cx.app;
+        return @import("motion.zig").reduced(app);
     }
 
     pub fn theme(cx: anytype) Theme {
@@ -337,7 +399,10 @@ pub const SettingsView = struct {
     pub fn openSection(self: *SettingsView, section: Section, cx: *Context(SettingsView)) void {
         if (self.section == section) return;
         self.closeSelect();
+        self.select_closing.cancel();
         self.fonts.open = null;
+        self.fonts.closing.cancel();
+        self.accounts.menu_closing.cancel();
         self.stopRecording(cx);
         self.clearNotice();
         self.section = section;
@@ -391,7 +456,7 @@ pub const SettingsView = struct {
         if (self.open_select) |sel| {
             const count = select_mod.optionCount(self, sel, cx);
             if (std.mem.eql(u8, key, "escape")) {
-                self.closeSelect();
+                self.dismissSelect(cx);
             } else if (std.mem.eql(u8, key, "up")) {
                 self.highlighted = if (self.highlighted == 0) count -| 1 else self.highlighted - 1;
                 self.menu_scroll.scrollToItem(self.highlighted);
@@ -404,7 +469,7 @@ pub const SettingsView = struct {
                 self.highlighted = count -| 1;
             } else if (std.mem.eql(u8, key, "enter") or std.mem.eql(u8, key, "space")) {
                 const ix = self.highlighted;
-                self.closeSelect();
+                self.dismissSelect(cx);
                 select_mod.commit(self, sel, ix, cx);
             } else return;
             cx.stopPropagation();
@@ -466,13 +531,31 @@ pub const SettingsView = struct {
         self.open_select = null;
     }
 
+    /// Dismiss the open drawn select menu with its exit (escape, a pick, an
+    /// outside press, the trigger again).
+    pub fn dismissSelect(self: *SettingsView, cx: *Context(SettingsView)) void {
+        const id = self.open_select orelse return;
+        self.closeSelect();
+        self.select_closing.start(self.selectKey(id), cx);
+    }
+
+    fn selectKey(self: *const SettingsView, id: SelectId) SelectKey {
+        return .{ .id = id, .harness = if (id == .update_policy) self.policy_harness else null };
+    }
+
+    /// The exit progress of select `id`'s dying menu (null: not closing).
+    pub fn selectExit(self: *SettingsView, id: SelectId, cx: *Context(SettingsView)) ?f32 {
+        if (self.open_select == id) return null;
+        return self.select_closing.progress(self.selectKey(id), cx.app.executor.now());
+    }
+
     pub fn onSelectTrigger(self: *SettingsView, id: SelectId, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
         var sc = scratch(self.gpa);
         sc.begin();
         defer sc.end();
         self.fonts.open = null;
         if (self.open_select == id) {
-            self.closeSelect();
+            self.dismissSelect(cx);
         } else if (self.closed_select == id and now(cx) -| self.closed_at < 250 * std.time.ns_per_ms) {
             // The outside-press that just closed it was this trigger.
         } else {
@@ -490,7 +573,7 @@ pub const SettingsView = struct {
         if (self.open_select) |id| {
             self.closed_select = id;
             self.closed_at = now(cx);
-            self.closeSelect();
+            self.dismissSelect(cx);
             cx.notify();
         }
     }
@@ -498,7 +581,7 @@ pub const SettingsView = struct {
     pub fn onSelectOption(self: *SettingsView, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
         cx.stopPropagation();
         const id = self.open_select orelse return;
-        self.closeSelect();
+        self.dismissSelect(cx);
         select_mod.commit(self, id, ix, cx);
         cx.notify();
     }
@@ -1101,7 +1184,7 @@ pub const SettingsView = struct {
             .flex().flexCol().gap(px(2));
         for (navItems()) |item| {
             const selected = item == self.section;
-            const sel_t = self.travel(cx, 0x20000 | @as(u32, @intFromEnum(item)), if (selected) 1 else 0, 150);
+            const sel_t = self.tabTravel(cx, 0x20000 | @as(u32, @intFromEnum(item)), if (selected) 1 else 0);
             const key = navHoverKey(item);
             const text = ui.hover.blend(cx, key, w.mix(t.text_muted, t.text, sel_t), t.text);
             var tab = self.sectionTab(t, selected, sel_t, key, cx).id(.{ "settings-nav", @intFromEnum(item) })

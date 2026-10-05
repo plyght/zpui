@@ -1685,7 +1685,7 @@ pub const Sidebar = struct {
             .onHover(cx.listenerWith(@as(u8, 3), Sidebar.onViewGroupHover))
             .onClick(cx.listenerWith(@as(u8, 10), Sidebar.onToggleView))
             .child(div().flex1().child("Compact"))
-            .child(zpui.nativeSwitch("sidebar-view-compact-switch", .{ .on = prefs.sidebar_compact, .label = "Compact", .size = .mini }, cx.listener(Sidebar.onNativeCompact), ui.switch_.toggle(theme, prefs.sidebar_compact))));
+            .child(zpui.nativeSwitch("sidebar-view-compact-switch", .{ .on = prefs.sidebar_compact, .label = "Compact", .size = .small }, cx.listener(Sidebar.onNativeCompact), ui.switch_.toggle(theme, prefs.sidebar_compact))));
         card = card.child(ui.popover.separator(theme));
         card = card.child(ui.popover.menuRow(theme, false).id("sidebar-create-section").role(.menu_item)
             .onHover(cx.listenerWith(@as(u8, 4), Sidebar.onViewGroupHover))

@@ -201,7 +201,7 @@ fn harnessSwitch(v: *SettingsView, ix: usize, h: HarnessId, name: []const u8, en
         .child(w.switchVisual(t, pos));
     if (!interactive and !enabled) d = d.opacity(0.55);
     if (interactive) d = d.cursorPointer().onClick(cx.listenerWith(ix, SettingsView.onHarnessToggle));
-    return zpui.nativeSwitch(.{ "harness-native-toggle", ix }, .{ .on = enabled, .enabled = interactive, .label = name, .size = .mini }, cx.listenerWith(SettingsView.NativeIndex{ .ix = @intCast(ix), .shown = enabled }, SettingsView.onNativeHarnessToggle), d);
+    return zpui.nativeSwitch(.{ "harness-native-toggle", ix }, .{ .on = enabled, .enabled = interactive, .label = name, .size = .small }, cx.listenerWith(SettingsView.NativeIndex{ .ix = @intCast(ix), .shown = enabled }, SettingsView.onNativeHarnessToggle), d);
 }
 
 /// Expanded agent preferences (`render_agent_details`): no box of its own,
@@ -221,7 +221,7 @@ fn details(v: *SettingsView, ix: usize, t: *const Theme, d: *const protocol.Harn
             .flex().flexRow().itemsCenter().gap(px(16)).cursorPointer()
             .onClick(cx.listenerWith(SettingsView.CompletionKey{ .ix = @intCast(ix), .dollar = r[0] }, SettingsView.onCompletionToggle))
             .child(div().flex1().minW0().child(w.rowTitle(t, r[1])).child(w.metaLine(t, &.{.{ .text = r[2] }})))
-            .child(zpui.nativeSwitch(.{ "completion-native", ix * 2 + i }, .{ .on = r[3], .label = zpui.fmt("{s}: {s}", .{ d.name, r[1] }), .size = .mini }, cx.listenerWith(SettingsView.NativeCompletion{ .key = .{ .ix = @intCast(ix), .dollar = r[0] }, .shown = r[3] }, SettingsView.onNativeCompletionToggle), w.switchVisual(t, pos)));
+            .child(zpui.nativeSwitch(.{ "completion-native", ix * 2 + i }, .{ .on = r[3], .label = zpui.fmt("{s}: {s}", .{ d.name, r[1] }), .size = .small }, cx.listenerWith(SettingsView.NativeCompletion{ .key = .{ .ix = @intCast(ix), .dollar = r[0] }, .shown = r[3] }, SettingsView.onNativeCompletionToggle), w.switchVisual(t, pos)));
         if (i > 0) row = row.borderT1().borderColor(w.rowDivider(t));
         completion = completion.child(row);
     }
@@ -270,6 +270,10 @@ fn drawnPolicyTrigger(v: *SettingsView, ix: usize, policy: types.HarnessUpdatePo
         .onClick(cx.listenerWith(ix, SettingsView.onPolicyTrigger))
         .child(div().flex1().minW0().truncate().child(select.update_policies[select.policyIndex(policy)][1]))
         .child(w.selectChevron(t, open));
-    if (open) trigger = trigger.child(select.menuFor(v, .update_policy, t, cx));
+    if (open) {
+        trigger = trigger.child(select.menuFor(v, .update_policy, t, cx));
+    } else if (v.select_closing.key != null and v.policy_harness == visibleHarnesses(v, cx)[ix].id) {
+        if (select.closingMenuFor(v, .update_policy, t, cx)) |m| trigger = trigger.child(m);
+    }
     return trigger;
 }

@@ -562,7 +562,7 @@ fn modal(id: []const u8, window: *Window, card: anytype) zpui.AnyElement {
     return zpui.intoAnyElement(zpui.deferred(zpui.anchored().position(.{ .x = 0, .y = 0 }).child(
         div().id(id).occlude().w(px(vp.width)).h(px(vp.height)).bg(zpui.color.black.alpha(0.35))
             .flex().itemsCenter().justifyCenter()
-            .child(ui.anim.menuIn(id, div().child(ui.effects.frosted(16, zt.layout.menu_blur, card)), 2)),
+            .child(ui.anim.dialogIn(id, div().child(ui.effects.frosted(16, zt.layout.menu_blur, card)))),
     )).withPriority(3));
 }
 

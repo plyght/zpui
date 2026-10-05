@@ -367,7 +367,7 @@ pub fn render(v: *SettingsView, window: *Window, cx: *Context(SettingsView)) ?zp
             .bg(zpui.color.black.alpha(0.35)).flex().itemsCenter().justifyCenter()
             .onMouseMove(cx.listener(onMove))
             .onMouseUp(.left, cx.listener(onUp))
-            .child(ui.anim.menuIn("background-adjust-in", div().child(ui.effects.frosted(16, zt.layout.menu_blur, card)), 2)),
+            .child(ui.anim.dialogIn("background-adjust-in", div().child(ui.effects.frosted(16, zt.layout.menu_blur, card)))),
     )).withPriority(3));
 }
 

@@ -206,7 +206,9 @@ fn chip(v: *SettingsView, t: *const Theme, cx: *Context(SettingsView)) zpui.Stat
         .onClick(cx.listenerWith(select.SelectId.thread_naming, SettingsView.onSelectTrigger))
         .child(icon_el)
         .child(chipLabel(v, cx));
-    if (open) c = c.child(select.menuFor(v, .thread_naming, t, cx));
+    if (open) {
+        c = c.child(select.menuFor(v, .thread_naming, t, cx));
+    } else if (select.closingMenuFor(v, .thread_naming, t, cx)) |m| c = c.child(m);
     return c;
 }
 

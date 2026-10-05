@@ -177,6 +177,8 @@ pub fn ensureLoaded(app: *App) void {
 
 pub const Picker = struct {
     open: ?FontKind = null,
+    /// [motion] The family menu playing its exit.
+    closing: view_mod.Closing(FontKind) = .{},
     /// Keyboard highlight (borrowed from the catalog / static).
     highlight: UiFontFamily = .geist,
     search: ?zpui.Entity(input.TextInput) = null,
@@ -282,8 +284,11 @@ pub fn toggle(v: *SettingsView, kind: FontKind, window: *Window, cx: *Context(Se
     cx.notify();
 }
 
+/// Close the open menu with its exit (`Popup::begin_close`).
 pub fn close(v: *SettingsView, cx: *Context(SettingsView)) void {
+    const kind = v.fonts.open orelse return cx.notify();
     v.fonts.open = null;
+    v.fonts.closing.start(kind, cx);
     cx.notify();
 }
 
@@ -377,7 +382,8 @@ pub fn picker(v: *SettingsView, kind: FontKind, t: *const Theme, cx: *Context(Se
         .onClick(cx.listenerWith(kind, onTrigger))
         .child(div().flex1().minW0().truncate().child(eff.label()))
         .child(w.selectChevron(t, open));
-    if (open) trigger = trigger.child(menu(v, kind, t, cx));
+    const exit = if (open) null else v.fonts.closing.progress(kind, cx.app.executor.now());
+    if (open or exit != null) trigger = trigger.child(menu(v, kind, t, exit, cx));
     return trigger;
 }
 
@@ -385,7 +391,7 @@ fn onHover(_: *SettingsView, kind: FontKind, hovered: *const bool, _: *Window, c
     ui.hover.set(cx, zpui.fmt("settings-font-{s}", .{kind.slug()}), hovered.*);
 }
 
-fn menu(v: *SettingsView, kind: FontKind, t_page: *const Theme, cx: *Context(SettingsView)) zpui.Div {
+fn menu(v: *SettingsView, kind: FontKind, t_page: *const Theme, exit: ?f32, cx: *Context(SettingsView)) zpui.Div {
     const t_val = t_page.forPopup();
     const t = &t_val;
     const list = visible(v, kind, cx);
@@ -416,7 +422,7 @@ fn menu(v: *SettingsView, kind: FontKind, t_page: *const Theme, cx: *Context(Set
         .child(body);
     return div().absolute().top(zpui.relative(1)).right(px(0)).child(zpui.deferred(
         zpui.anchored().anchorCorner(.top_right).snapToWindowWithMargin(.all(8))
-            .child(ui.anim.menuIn("settings-font-menu", div().occlude().pt(px(6)).child(ui.popover.frostedCard(card)), -2)),
+            .child(ui.popover.menuMotion("settings-font-menu", exit, div().occlude().pt(px(6)).child(ui.popover.frostedCardExit(card, exit)), -2)),
     ).withPriority(1));
 }
 

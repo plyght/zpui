@@ -48,6 +48,12 @@ pub fn reducedFor(app: *App, active: bool) bool {
     return zt.motion.resolveReduced(s.reduce_motion, stateMut(app).system, s.pause_animations_in_background, active);
 }
 
+/// `resolve` under the focus last seen by `sync` (for hand-driven tweens
+/// that have no window at hand).
+pub fn reduced(app: *App) bool {
+    return reducedFor(app, stateMut(app).active);
+}
+
 /// Bring `window`'s flag in line with the settings. Regaining focus re-reads
 /// the OS setting (changing it means visiting System Settings).
 pub fn sync(window: *Window, app: *App) void {

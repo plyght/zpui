@@ -354,6 +354,21 @@ pub const ModelPicker = struct {
         cx.notify();
     }
 
+    /// The native (macOS 26+ Liquid Glass) effort slider moved: its value is the
+    /// ladder index (tick marks only). Continuous drags report every movement, so
+    /// only an actual level change is picked and remembered.
+    fn onNativeEffort(self: *ModelPicker, ev: *const zpui.NativeControlEvent, _: *Window, cx: *Context(ModelPicker)) void {
+        const in = self.inputs(cx);
+        const ladder = rc.traitLadder(&in);
+        if (ladder.len == 0) return;
+        const next: usize = @intFromFloat(std.math.clamp(@round(ev.value), 0, @as(f64, @floatFromInt(ladder.len - 1))));
+        if (rc.effectiveReasoning(&in) == ladder[next]) return;
+        self.draft.reasoning = ladder[next];
+        self.rememberReasoning(ladder[next], cx);
+        cx.emit(Picked{});
+        cx.notify();
+    }
+
     fn showModels(self: *ModelPicker, window: *Window, cx: *Context(ModelPicker)) void {
         self.page = .models;
         self.favorites_view = false;
@@ -793,7 +808,24 @@ pub const ModelPicker = struct {
                 .child(div().absolute().left(px(thumb_width / 2)).right(px(thumb_width / 2)).top(px((slider_height - thumb_height) / 2)).h(px(thumb_height))
                     .child(chrome.thumbPlate(theme).apply(div().absolute().left(zpui.relative(fraction)).ml(px(-thumb_width / 2)).w(px(thumb_width)).h(px(thumb_height)).roundedFull())))
                 .child(hits);
-            panel = panel.child(div().px(px(8)).pt(px(2)).pb(px(4)).child(slider));
+            // macOS 26+: AppKit's NSSlider (Liquid Glass knob that lifts while
+            // dragging) with a tick mark per level, values on the ticks only. It
+            // sits in the popover's deferred pass, so it floats above the overlay
+            // plane with the card. Elsewhere (Linux, macOS < 26, tests) the drawn
+            // glass slider above. Keys stay with the panel (the control refuses
+            // first responder).
+            const effort_slider = if (ladder.len > 1 and zpui.liquidGlassRevision(cx) >= 26)
+                zpui.intoAnyElement(div().h(px(slider_height)).flex().flexCol().justifyCenter().child(zpui.nativeSlider("compact-effort-native", .{
+                    .value = @floatFromInt(selected_ix),
+                    .min = 0,
+                    .max = @floatFromInt(ladder.len - 1),
+                    .step = 1,
+                    .label = "Reasoning effort",
+                    .width = px(slider_width),
+                }, cx.listener(ModelPicker.onNativeEffort), slider)))
+            else
+                zpui.intoAnyElement(slider);
+            panel = panel.child(div().px(px(8)).pt(px(2)).pb(px(4)).child(effort_slider));
         }
         if (m) |mm| {
             var opts = div().mt(px(4)).flex().flexCol().gap(px(2)).pt(px(2)).pb(px(2));

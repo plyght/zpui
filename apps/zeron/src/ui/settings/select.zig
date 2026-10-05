@@ -542,16 +542,23 @@ fn drawnTrigger(v: *SettingsView, id: SelectId, sp: Spec, t: *const Theme, cx: *
     };
     trigger = trigger.child(div().flex1().minW0().truncate().child(if (current) |c| c.label else ""))
         .child(w.selectChevron(t, open));
-    if (open) trigger = trigger.child(menu(v, sp, t, cx));
+    const exit = v.selectExit(id, cx);
+    if (open or exit != null) trigger = trigger.child(menu(v, sp, t, exit, cx));
     return trigger;
 }
 
 /// The open menu for `id`, for custom triggers (mount inside a `relative` trigger).
 pub fn menuFor(v: *SettingsView, id: SelectId, t: *const Theme, cx: *Context(SettingsView)) zpui.Div {
-    return menu(v, spec(v, id, cx), t, cx);
+    return menu(v, spec(v, id, cx), t, null, cx);
 }
 
-fn menu(v: *SettingsView, sp: Spec, t: *const Theme, cx: *Context(SettingsView)) zpui.Div {
+/// `id`'s menu while it plays its exit (`SettingsView.selectExit`), else null.
+pub fn closingMenuFor(v: *SettingsView, id: SelectId, t: *const Theme, cx: *Context(SettingsView)) ?zpui.Div {
+    const exit = v.selectExit(id, cx) orelse return null;
+    return menu(v, spec(v, id, cx), t, exit, cx);
+}
+
+fn menu(v: *SettingsView, sp: Spec, t: *const Theme, exit: ?f32, cx: *Context(SettingsView)) zpui.Div {
     const menu_w = @max(sp.menu_width orelse sp.width orelse 0, w.select_menu_min_width);
     var card = ui.popover.card(t).w(px(menu_w)).maxH(px(320)).onMouseDownOut(cx.listener(SettingsView.onSelectOutside));
     if (sp.mono) card = card.fontFamily(t.font_mono);
@@ -571,7 +578,7 @@ fn menu(v: *SettingsView, sp: Spec, t: *const Theme, cx: *Context(SettingsView))
     card = card.child(ui.effects.edgeFaded(rows, .{ .band = 12, .top = true, .bottom = true, .scroll = v.menu_scroll }));
     return div().absolute().top(zpui.relative(1)).right(px(0)).child(zpui.deferred(
         zpui.anchored().anchorCorner(.top_right).snapToWindowWithMargin(.all(8))
-            .child(ui.anim.menuIn("settings-select-menu", div().occlude().pt(px(6)).child(ui.popover.frostedCard(card)), -2)),
+            .child(ui.popover.menuMotion("settings-select-menu", exit, div().occlude().pt(px(6)).child(ui.popover.frostedCardExit(card, exit)), -2)),
     ).withPriority(1));
 }
 

@@ -125,5 +125,5 @@ pub fn renameDialog(v: *SettingsView, window: *zpui.Window, cx: *zpui.Context(Se
     return zpui.intoAnyElement(zpui.deferred(zpui.anchored().position(.{ .x = 0, .y = 0 })
         .child(div().occlude().w(px(vs.width)).h(px(vs.height)).bg(zt.theme.scrimFor(t.appearance, 0.35))
         .flex().itemsCenter().justifyCenter()
-        .child(ui.anim.menuIn("rename-device-dialog", div().child(ui.effects.frosted(16, zt.layout.menu_blur, card_shadowed)), 2)))).withPriority(2));
+        .child(ui.anim.dialogIn("rename-device-dialog", div().child(ui.effects.frosted(16, zt.layout.menu_blur, card_shadowed)))))).withPriority(2));
 }

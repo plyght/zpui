@@ -339,6 +339,8 @@ pub const State = struct {
     load_seq: u64 = 0,
     busy_account: ?[]u8 = null,
     row_menu: ?[]u8 = null,
+    /// [motion] The row menu playing its exit, keyed by the account id's hash.
+    menu_closing: @import("view.zig").Closing(u64) = .{},
     login: ?LoginFlow = null,
     login_attempts: u64 = 0,
     err: ?[]u8 = null,
@@ -726,20 +728,30 @@ fn onMore(v: *SettingsView, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx
     cx.stopPropagation();
     const a = rowAccount(v, ix) orelse return;
     const open = if (v.accounts.row_menu) |m| std.mem.eql(u8, m, a.id) else false;
-    setOwned(v.gpa, &v.accounts.row_menu, if (open) null else a.id);
+    if (open) return closeMenu(v, cx);
+    closeMenu(v, cx);
+    setOwned(v.gpa, &v.accounts.row_menu, a.id);
+    cx.notify();
+}
+
+/// Close the open row menu with its exit (`Popup::begin_close`).
+fn closeMenu(v: *SettingsView, cx: *Context(SettingsView)) void {
+    const id = v.accounts.row_menu orelse return;
+    const key = std.hash.Wyhash.hash(0, id);
+    setOwned(v.gpa, &v.accounts.row_menu, null);
+    v.accounts.menu_closing.start(key, cx);
     cx.notify();
 }
 
 fn onMenuOutside(v: *SettingsView, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(SettingsView)) void {
-    setOwned(v.gpa, &v.accounts.row_menu, null);
-    cx.notify();
+    closeMenu(v, cx);
 }
 
 const MenuPick = struct { ix: u16, activate: bool };
 
 fn onMenuPick(v: *SettingsView, pick: MenuPick, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
     cx.stopPropagation();
-    setOwned(v.gpa, &v.accounts.row_menu, null);
+    closeMenu(v, cx);
     const a = rowAccount(v, pick.ix) orelse return;
     const id = v.gpa.dupe(u8, a.id) catch return;
     defer v.gpa.free(id);
@@ -816,7 +828,8 @@ fn accountRow(v: *SettingsView, a: *const Account, ix: usize, first: bool, t: *c
     var more = w.actionButton(t, .quiet).id(.{ "account-more", ix }).role(.button).ariaLabel(zpui.fmt("Actions for {s}", .{email})).ariaExpanded(menu_open).w(px(28)).px(px(0)).justifyCenter().relative()
         .onClick(cx.listenerWith(ix, onMore))
         .child(ui.icon.of(.more_horizontal, 16, t.text_muted));
-    if (menu_open) {
+    const menu_exit = if (menu_open) null else v.accounts.menu_closing.progress(std.hash.Wyhash.hash(0, a.id), cx.app.executor.now());
+    if (menu_open or menu_exit != null) {
         const pt_val = t.forPopup();
         const pt = &pt_val;
         var menu = ui.popover.card(pt).w(px(208)).flex().flexCol().onMouseDownOut(cx.listener(onMenuOutside));
@@ -825,9 +838,10 @@ fn accountRow(v: *SettingsView, a: *const Account, ix: usize, first: bool, t: *c
             .onClick(cx.listenerWith(MenuPick{ .ix = i, .activate = true }, onMenuPick)).child("Switch to this account"));
         if (a.switchable) menu = menu.child(ui.popover.menuRow(pt, false).id(.{ "account-menu-remove", ix }).role(.menu_item).textColor(pt.danger_muted)
             .onClick(cx.listenerWith(MenuPick{ .ix = i, .activate = false }, onMenuPick)).child("Remove account"));
-        more = more.bg(t.glassHover()).child(div().absolute().top(zpui.relative(1)).right(px(0)).child(zpui.deferred(
+        if (menu_open) more = more.bg(t.glassHover());
+        more = more.child(div().absolute().top(zpui.relative(1)).right(px(0)).child(zpui.deferred(
             zpui.anchored().anchorCorner(.top_right).snapToWindowWithMargin(.all(8))
-                .child(ui.anim.menuIn("account-menu", div().occlude().pt(px(6)).child(ui.popover.frostedCard(menu)), -2)),
+                .child(ui.popover.menuMotion("account-menu", menu_exit, div().occlude().pt(px(6)).child(ui.popover.frostedCardExit(menu, menu_exit)), -2)),
         ).withPriority(1)));
     }
     const hover_key = zpui.fmt("account-row-{d}-hover", .{ix});
@@ -966,7 +980,7 @@ pub fn loginDialog(v: *SettingsView, window: *Window, cx: *Context(SettingsView)
     return zpui.intoAnyElement(zpui.deferred(zpui.anchored().position(.{ .x = 0, .y = 0 }).child(
         div().id("add-account-dialog").occlude().w(px(vp.width)).h(px(vp.height)).bg(zpui.color.black.alpha(0.35))
             .flex().itemsCenter().justifyCenter()
-            .child(ui.anim.menuIn("add-account-dialog", div().child(ui.effects.frosted(16, @import("zeron_theme").layout.menu_blur, card)), 2)),
+            .child(ui.anim.dialogIn("add-account-dialog", div().child(ui.effects.frosted(16, @import("zeron_theme").layout.menu_blur, card)))),
     )).withPriority(3));
 }
 
