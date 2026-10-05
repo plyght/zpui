@@ -233,6 +233,12 @@ const SettingsStress = struct {
                 v.update(app, settings_ui.SettingsView.openSection, .{which});
                 next.step = .poke;
                 next.wait = 2 + next.cycle % 2;
+                // Every 3rd cycle lingers on its first page past the idle detach of the
+                // chrome Settings hides (titlebar glass group, sidebar controls).
+                if (next.cycle % 3 == 1 and next.section == (next.cycle * 3) % sections.len) {
+                    std.debug.print("zeron smoke: stress: cycle {d}: linger in Settings\n", .{next.cycle});
+                    next.wait = zpui.window.native_controls_mod.keep_idle_presents + 30;
+                }
             },
             .poke, .unpoke => {
                 next.pokes += poke(win, next.cycle, next.section, next.step == .unpoke);
