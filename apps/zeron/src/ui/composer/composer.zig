@@ -1448,7 +1448,8 @@ pub const ComposerView = struct {
 
     fn nowMs(self: *const ComposerView, cx: anytype) f32 {
         const ns = cx.app.executor.now() -| self.clock_origin;
-        return @as(f32, @floatFromInt(ns / std.time.ns_per_us)) / 1000.0;
+        // `morph_clock / speed_scale`: ZERON_MOTION_SCALE stretches the morphs.
+        return @as(f32, @floatFromInt(ns / std.time.ns_per_us)) / 1000.0 / zt.motion.speed_scale;
     }
 
     fn prelayout(input: *TextInput, window: *Window, cx: *Context(TextInput)) void {
@@ -1592,19 +1593,20 @@ pub const ComposerView = struct {
         };
 
         // [wiring] a pending question replaces the pill; completions float above it.
-        const pill_surface = extras.renderWizard(self, window, cx) orelse div().relative().id("composer-surface")
+        // [motion] the wizard swaps in with FADE_QUICK ("composer-wizard").
+        const pill_surface = if (extras.renderWizard(self, window, cx)) |w| zpui.intoAnyElement(fadeQuick("composer-wizard", div().child(w))) else zpui.intoAnyElement(div().relative().id("composer-surface")
             .child(chrome.frosted(theme, m.composer_radius, zt.layout.menu_blur, body))
             .child(zpui.canvas(&self.surface_bounds, noPaint).withPrepaint(*?zpui.Bounds(f32), measureSurface).absolute().inset0())
-            .child(extras.renderPopup(self, window, cx));
+            .child(extras.renderPopup(self, window, cx)));
 
         var container = div().wFull().maxW(px(self.available_width orelse m.composer_max_width)).mxAuto()
             .flex().flexCol().gap(px(zt.layout.space_sm)).px(px(zt.layout.space_lg)).pb(px(zt.layout.space_lg))
             .fontFamily(theme.font_sans);
         if (self.failure.items.len > 0) container = container.child(self.renderFailure(cx));
         const queue_tray = self.renderQueue(cx);
-        if (extras.renderTodo(self, queue_tray != null, cx)) |t| container = container.child(t); // [wiring] todo tray
+        if (extras.renderTodo(self, queue_tray != null, cx)) |t| container = container.child(fadeQuick("composer-todo", div().child(t))); // [wiring] todo tray
         if (queue_tray) |q| {
-            container = container.child(div().mx(px(m.queue_side_inset)).mb(px(-(zt.layout.space_sm + m.queue_composer_overlap))).child(q));
+            container = container.child(fadeQuick("composer-queue", div().mx(px(m.queue_side_inset)).mb(px(-(zt.layout.space_sm + m.queue_composer_overlap))).child(q)));
         }
         if (new_chat) container = container.child(self.renderTargetSelectors(cx));
         // [dictation] Only leaving the pill + status region cancels capture;
@@ -1615,6 +1617,15 @@ pub const ComposerView = struct {
         container = container.child(self.renderFooter(new_chat, cx));
         if (self.lightbox) |lb| container = container.child(lb);
         return container;
+    }
+
+    /// [motion] `motion::fade_quick`: FADE_QUICK opacity entrance.
+    fn fadeQuickFrame(el: zpui.Div, t: f32) zpui.Div {
+        return el.opacity(t);
+    }
+
+    fn fadeQuick(id: anytype, el: zpui.Div) @TypeOf(zpui.withAnimation(el, id, zt.motion.fade_quick.animation(), fadeQuickFrame)) {
+        return zpui.withAnimation(el, id, zt.motion.fade_quick.animation(), fadeQuickFrame);
     }
 
     /// Microphone (when available) + Send: an absent mic must not leave an
@@ -1727,7 +1738,7 @@ pub const ComposerView = struct {
                 .child(chrome.icon(.close_circle, 15, theme.text_muted))));
             // Entity-owned timestamps keep the entrance from replaying on remount.
             if (self.appshot_entrances.get(shot.id)) |start| if (!reduced) {
-                const raw = std.math.clamp(@as(f32, @floatFromInt(now -| start)) / @as(f32, @floatFromInt(appshot_entrance_ns)), 0, 1);
+                const raw = std.math.clamp(@as(f32, @floatFromInt(now -| start)) / @as(f32, @floatFromInt(zt.motion.scaledNs(appshot_entrance_ns))), 0, 1);
                 if (raw < 1) {
                     const p = 1 - std.math.pow(f32, 2, -10 * raw); // ease-out expo
                     card = card.opacity(p).top(px(8 * (1 - p)));

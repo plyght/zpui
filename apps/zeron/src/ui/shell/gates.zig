@@ -38,10 +38,12 @@ pub fn gridBackdrop(theme: *const Theme) zpui.Div {
         .child(div().absolute().top(px(0)).bottom(px(0)).right(px(0)).w(px(200)).bg(color.linearGradient(270, stop(bg, 0), stop(bg.opacity(0), 1))));
 }
 
-fn page(theme: *const Theme, content: zpui.Div) zpui.Div {
+/// Keyed per phase (zeron App.tsx `<div key={phase} className="animate-in">`):
+/// every gate swap replays the 0.5 s FADE_IN entrance.
+fn page(theme: *const Theme, key: []const u8, content: zpui.Div) zpui.Div {
     return div().absolute().inset0().bg(theme.bg)
         .child(gridBackdrop(theme))
-        .child(div().absolute().inset0().flex().itemsCenter().justifyCenter().child(ui.anim.fadeIn("gate-card", content)));
+        .child(div().absolute().inset0().flex().itemsCenter().justifyCenter().child(ui.anim.fadeIn(key, content)));
 }
 
 fn onRetry(shell: *Shell, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Shell)) void {
@@ -60,7 +62,7 @@ fn onCancelAuth(shell: *Shell, _: *const zpui.ClickEvent, _: *Window, cx: *Conte
 }
 
 pub fn failedGate(_: *Shell, message: []const u8, theme: *const Theme, cx: *Context(Shell)) zpui.Div {
-    return page(theme, div().flex().flexCol().itemsCenter().gap(px(zt.layout.space_md))
+    return page(theme, "gate-card-failed", div().flex().flexCol().itemsCenter().gap(px(zt.layout.space_md))
         .child(div().textSize(ui.rems(14)).textColor(theme.text_muted).child(message))
         .child(ui.button.outline("retry-engine", "Retry", theme).onClick(cx.listener(onRetry))));
 }
@@ -78,7 +80,7 @@ pub fn signInGate(_: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div 
         .child(div().mt(px(6)).mb(px(24)).textSize(ui.rems(13)).lineHeight(px(19)).textColor(theme.text_muted)
         .child("This opens your browser to finish logging in — you'll come right back."))
         .child(ui.button.solid("sign-in", "Log in", theme).wFull().onClick(cx.listener(onSignIn)));
-    return page(theme, card);
+    return page(theme, "gate-card-signin", card);
 }
 
 pub fn orgGate(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div {
@@ -122,5 +124,5 @@ pub fn orgGate(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div
         .child(div().id("org-signout").role(.button).textSize(ui.rems(12)).textColor(theme.text_muted.opacity(0.6)).cursorPointer()
         .hover(sb.textColor(theme.text)).onClick(cx.listener(onCancelAuth))
         .child(if (local_setup) "Cancel sync setup" else "Use a different account")));
-    return page(theme, card);
+    return page(theme, "org-gate-card", card);
 }

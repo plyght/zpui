@@ -91,7 +91,8 @@ pub const Tween = struct {
     start: u64 = 0,
 
     pub fn value(self: Tween, now: u64) f32 {
-        const raw = @as(f32, @floatFromInt(now -| self.start)) / @as(f32, @floatFromInt(morph_ns));
+        // `VOICE_MORPH * speed_scale` (ZERON_MOTION_SCALE stretches the morph).
+        const raw = @as(f32, @floatFromInt(now -| self.start)) / @as(f32, @floatFromInt(zt.motion.scaledNs(morph_ns)));
         return self.from + (self.to - self.from) * morph_curve.eval(raw);
     }
 
@@ -669,7 +670,7 @@ fn fadeInFrame(el: zpui.Div, t: f32) zpui.Div {
 
 /// `render_dictation_status`: live dictation renders inside the composer;
 /// only outcomes that need reading (no speech, errors) appear below it.
-pub fn renderStatus(self: *ComposerView, cx: *Ctx) ?@TypeOf(zpui.withAnimation(div(), "dictation-message-enter", zpui.Animation.ms(500), fadeInFrame)) {
+pub fn renderStatus(self: *ComposerView, cx: *Ctx) ?@TypeOf(zpui.withAnimation(div(), "dictation-message-enter", zt.motion.fade_in.animation(), fadeInFrame)) {
     const phase = &self.input.read(cx).dictation.phase;
     if (phase.active()) return null;
     const st = phase.status() orelse return null;
@@ -693,7 +694,7 @@ pub fn renderStatus(self: *ComposerView, cx: *Ctx) ?@TypeOf(zpui.withAnimation(d
         .child(div().textColor(theme.text).child(zpui.fmt("{s}", .{st.title})))
         .child(div().minW0().textColor(theme.text_muted).child(zpui.fmt("{s}", .{st.detail}))))
         .child(dismiss_btn);
-    return zpui.withAnimation(body, "dictation-message-enter", zpui.Animation.ms(500).withEasing(zpui.easing.ease_out_expo), fadeInFrame);
+    return zpui.withAnimation(body, "dictation-message-enter", zt.motion.fade_in.animation(), fadeInFrame);
 }
 
 fn onFocusKey(self: *ComposerView, ev: *const zpui.input.KeyDownEvent, _: *Window, cx: *Ctx) void {

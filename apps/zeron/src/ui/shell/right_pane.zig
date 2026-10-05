@@ -898,7 +898,7 @@ pub const RightPane = struct {
                         return el.left(px(c[0] + (c[1] - c[0]) * p));
                     }
                 };
-                strip = strip.child(div().relative().child(zpui.withAnimationCtx(chip.relative(), .{ "right-tab-slide", (ix & 0xffff) | (d.epoch << 16) }, zpui.Animation.ms(150).withEasing(zpui.easing.ease_out_quint), [2]f32{ start, target }, Slide.f)));
+                strip = strip.child(div().relative().child(zpui.withAnimationCtx(chip.relative(), .{ "right-tab-slide", (ix & 0xffff) | (d.epoch << 16) }, zt.motion.tab_slide.animation(), [2]f32{ start, target }, Slide.f)));
                 continue;
             }
             strip = strip.child(chip);

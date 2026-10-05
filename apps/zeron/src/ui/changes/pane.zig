@@ -1480,7 +1480,7 @@ pub const ChangesPane = struct {
         const chevron = div().flexNone().size(px(14)).flex().itemsCenter()
             .child(ui.icon.of(if (fold.collapsed) .alt_arrow_right else .alt_arrow_down, 13, theme.text_muted.opacity(0.7)));
         const chev_el: AnyElement = if (fold.animating(nowNs(cx)))
-            zpui.intoAnyElement(zpui.withAnimationCtx(chevron, .{ if (sticky) "chev-sticky" else "chev", ix * 65536 + fold.epoch }, zpui.Animation.ms(200).withEasing(zpui.easing.cubicBezier(0.25, 0.1, 0.25, 1)), {}, chevronFrame))
+            zpui.intoAnyElement(zpui.withAnimationCtx(chevron, .{ if (sticky) "chev-sticky" else "chev", ix * 65536 + fold.epoch }, zt.motion.chevron.animation(), {}, chevronFrame))
         else
             zpui.intoAnyElement(chevron);
         var row = div().id(.{ if (sticky) "sticky-file-hdr" else "file-hdr", ix }).role(.button).ariaLabel(file.path).ariaExpanded(!fold.collapsed)
@@ -1569,7 +1569,7 @@ pub const ChangesPane = struct {
                 const body = rows.fileBodyUpto(file, hlx, theme, cap, self.mode, self.codeWidth(fi, self.mode == .split), scroll, zpui.fmt("changes-fold-code-{d}-{d}", .{ fi, fold.epoch }));
                 const clipped = div().wFull().overflowHidden().child(body);
                 if (fold.animating(nowNs(cx))) {
-                    break :blk zpui.intoAnyElement(zpui.withAnimationCtx(clipped, .{ "fold", fi * 65536 + fold.epoch }, zpui.Animation.ms(m.fold_tween_ms).withEasing(zpui.easing.cubicBezier(0, 0, 0.58, 1)), [2]f32{ fold.from, fold.to }, foldFrame));
+                    break :blk zpui.intoAnyElement(zpui.withAnimationCtx(clipped, .{ "fold", fi * 65536 + fold.epoch }, zt.motion.collapse.animation(), [2]f32{ fold.from, fold.to }, foldFrame));
                 }
                 break :blk zpui.intoAnyElement(clipped.h(px(fold.to)));
             },

@@ -698,7 +698,13 @@ pub fn renderTodo(self: *ComposerView, below_queue: bool, cx: *Ctx) ?zpui.Div {
                     .child(chrome.icon(if ((f.side == .earlier) != f.open) .alt_arrow_up else .alt_arrow_down, 12, theme.text_faint)))
                 .child(div().textSize(px(11.5)).textColor(theme.text_faint).child(zpui.fmt("{d} {s}", .{ f.count, if (f.side == .earlier) "earlier" else "later" })))),
         };
-        surface = surface.child(col);
+        // [motion] `todo-rows-{epoch}`: the rows fade in (FADE_QUICK) per toggle.
+        const Fade = struct {
+            fn f(el: zpui.Div, t: f32) zpui.Div {
+                return el.opacity(t);
+            }
+        };
+        surface = surface.child(zpui.withAnimation(col, .{ "todo-rows", @as(u64, st.epoch) }, zt.motion.fade_quick.animation(), Fade.f));
     }
     const inset: f32 = if (below_queue) 32 else 16;
     return div().mx(px(inset)).mb(px(-(zt.layout.space_sm + m.queue_composer_overlap)))
@@ -807,19 +813,28 @@ pub fn moveQueued(self: *ComposerView, from: usize, to: usize, cx: *Ctx) void {
 }
 
 /// Decorate one queue row (drag source + slide offset + editing wash).
-pub fn queueRow(self: *ComposerView, row: zpui.StatefulDiv, ix: usize, item_id: []const u8, cx: *Ctx) zpui.StatefulDiv {
+pub fn queueRow(self: *ComposerView, row: zpui.StatefulDiv, ix: usize, item_id: []const u8, cx: *Ctx) zpui.AnyElement {
     _ = cx;
     const e = ext(self);
     const editing = if (e.edit) |ed| std.mem.eql(u8, ed.id, item_id) else false;
     var r = row;
-    if (editing) return r.bg(self.theme.ink(0.06));
+    if (editing) return zpui.intoAnyElement(r.bg(self.theme.ink(0.06)));
     if (e.edit == null and e.edit_pending == null) r = r.onDrag(QueueDrag{ .key_hash = keyHash(self), .from = ix }, buildGhost);
     if (e.drag) |d| {
-        const off = queueDragOffset(ix, d.from, d.over);
-        if (off != 0) r = r.relative().top(px(off));
         if (ix == d.from) r = r.opacity(0.9);
+        // `queue-row-slide`: TAB_SLIDE between the previous and the current
+        // committed offsets (reduced motion lands on the target).
+        const start = queueDragOffset(ix, d.from, d.prev_over);
+        const target = queueDragOffset(ix, d.from, d.over);
+        if (start == 0 and target == 0) return zpui.intoAnyElement(r);
+        const Slide = struct {
+            fn f(c: [2]f32, el: zpui.Div, t: f32) zpui.Div {
+                return el.relative().top(px(c[0] + (c[1] - c[0]) * t));
+            }
+        };
+        return zpui.intoAnyElement(zpui.withAnimationCtx(div().flexNone().child(r), .{ "queue-row-slide", (ix & 0xffff) | (d.epoch << 16) }, zt.motion.tab_slide.animation(), [2]f32{ start, target }, Slide.f));
     }
-    return r;
+    return zpui.intoAnyElement(r);
 }
 
 /// Make the whole queue surface the drop target.

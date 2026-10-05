@@ -68,6 +68,21 @@ pub fn buildGhost(_: *const SessionDrag, _: zpui.Point(f32), _: *Window, app: *A
 /// Where a transfer would land.
 pub const Target = union(enum) { pinned, section: usize, regular };
 
+/// A row's place in the list (`render_sidebar_gap_row`'s `group`/`index`):
+/// its drop target, which accordion of that target (project / device
+/// groups all drop on `.regular`), and its index inside that group.
+pub const Slot = struct { target: Target, group: u32 = 0, index: u32 };
+
+/// The preview's insertion point inside the destination group
+/// (`SidebarSessionGap.group` + `.index`).
+pub const Insertion = struct {
+    target: Target,
+    group: u32 = 0,
+    index: u32 = 0,
+    /// The moving row's index when it lives in this same group.
+    source: ?u32 = null,
+};
+
 const Transfer = struct {
     chat_id: []u8,
     height: f32,
@@ -86,6 +101,10 @@ const Transfer = struct {
     /// A pinned row (pin-to-pin keeps the sibling slide; no edge scroll).
     pinned: bool = false,
     pointer_x: f32 = 0,
+    /// The row-level insertion point (siblings at/after it slide apart).
+    insertion: ?Insertion = null,
+    /// The moving row's own slot (recorded while its source slot renders).
+    source_slot: ?Slot = null,
 };
 
 const Return = struct {
@@ -96,6 +115,10 @@ const Return = struct {
     epoch: u64,
     /// The source slot's collapse when cancelled (re-expands on the way home).
     removed: f32 = 0,
+    /// The insertion the siblings had slid apart for; they slide back.
+    insertion: ?Insertion = null,
+    /// The destination group's extra gap when cancelled (closes on the way home).
+    gap: ?Target = null,
 };
 
 const Dialog = struct {
@@ -134,6 +157,9 @@ pub const State = struct {
     write_timer_id: u64 = 0,
     /// The transfer's 16 ms frame loop (layout tweens + edge autoscroll).
     scroll_task: zpui.Task(void) = .none,
+    /// The window's resolved reduced-motion flag, sampled each render
+    /// (Rust `Shell::reduced_motion`: preference × OS × focus).
+    reduced: bool = false,
 
     pub fn deinit(self: *State, gpa: std.mem.Allocator, app: *App) void {
         self.write_timer.cancel();
@@ -173,12 +199,12 @@ pub const Motion = struct {
     started: u64,
 
     pub fn animating(m: Motion, now: u64) bool {
-        return now -| m.started < collapse_ns + tween_grace_ns;
+        return now -| m.started < zt.motion.collapse.totalNs(1.0) + tween_grace_ns;
     }
 
     /// The tweened height right now (`current`).
     pub fn current(m: Motion, now: u64) f32 {
-        const raw = @min(@as(f32, @floatFromInt(now -| m.started)) / @as(f32, @floatFromInt(collapse_ns)), 1);
+        const raw = @min(@as(f32, @floatFromInt(now -| m.started)) / @as(f32, @floatFromInt(@max(zt.motion.collapse.totalNs(1.0), 1))), 1);
         const t = zpui.easing.css_ease_out.apply(raw);
         return m.from + (m.to - m.from) * t;
     }
@@ -228,10 +254,50 @@ fn disclosureChevron(self: *const Sidebar, id: []const u8, key_hash: u64, open: 
     if (liveMotion(self, id, now)) |m| {
         const denom = @max(@max(m.from, m.to), 1);
         const ctx = [2]f32{ std.math.clamp(m.from / denom, 0, 1), std.math.clamp(m.to / denom, 0, 1) };
-        return zpui.intoAnyElement(frame.child(zpui.withAnimationCtx(chevron, .{ "sidebar-chevron", key_hash +% m.epoch }, zpui.Animation.ms(180).withEasing(zpui.easing.css_ease_out), ctx, chevronFrame)));
+        return zpui.intoAnyElement(frame.child(zpui.withAnimationCtx(chevron, .{ "sidebar-chevron", key_hash +% m.epoch }, zt.motion.collapse.animation(), ctx, chevronFrame)));
     }
     const resting: f32 = if (open) 1 else 0;
     return zpui.intoAnyElement(frame.child(chevron.withTransformation(.rotate(resting * std.math.pi / 2.0))));
+}
+
+// ---- built-in disclosures (Pinned / Sessions / Archived / project & device groups) ----
+
+/// Record a disclosure's open body height this frame (the next toggle
+/// tweens from / to it; `begin_queued_sidebar_reveal`'s measured height).
+pub fn noteHeight(self: *Sidebar, id: []const u8, height: f32) void {
+    if (self.sec.body_heights.getPtr(id)) |h| {
+        h.* = height;
+        return;
+    }
+    const k = self.gpa.dupe(u8, id) catch return;
+    self.sec.body_heights.put(self.gpa, k, height) catch self.gpa.free(k);
+}
+
+/// A header click (`begin_sidebar_disclosure_motion`): tween from the open
+/// height to 0 or back. Reduced motion skips the tween.
+pub fn toggleMotion(self: *Sidebar, id: []const u8, was_open: bool, cx: *Ctx) void {
+    if (self.sec.reduced) return;
+    const h = self.sec.body_heights.get(id) orelse return;
+    beginMotion(self, id, if (was_open) h else 0, if (was_open) 0 else h, cx.app.executor.now());
+}
+
+/// Whether a disclosure body is mid-tween (a closing body stays mounted).
+pub fn disclosureAnimating(self: *const Sidebar, id: []const u8, now: u64) bool {
+    return liveMotion(self, id, now) != null;
+}
+
+/// `sidebar_disclosure_chevron` for a built-in disclosure.
+pub fn headerChevron(self: *const Sidebar, id: []const u8, open: bool, tone: zpui.Hsla, now: u64) zpui.AnyElement {
+    return disclosureChevron(self, id, std.hash.Wyhash.hash(0, id), open, tone, now);
+}
+
+/// `render_sidebar_disclosure_body`: mid-tween the body is clipped to the
+/// COLLAPSE height (fading from 0.35 and settling 3 px down), else as is.
+pub fn disclosureBody(self: *const Sidebar, id: []const u8, height: f32, content: anytype, now: u64) zpui.AnyElement {
+    const m = liveMotion(self, id, now) orelse return zpui.intoAnyElement(content);
+    const frame = div().wFull().flexNone().overflowHidden().child(content);
+    const tween: BodyTween = .{ .from = m.from, .to = m.to, .full = height };
+    return zpui.intoAnyElement(zpui.withAnimationCtx(frame, .{ "sidebar-disclosure", std.hash.Wyhash.hash(0, id) +% m.epoch }, zt.motion.collapse.animation(), tween, bodyFrame));
 }
 
 fn dropDialog(st: *State, gpa: std.mem.Allocator, app: *App) void {
@@ -731,7 +797,7 @@ pub fn renderSection(self: *Sidebar, ix: usize, section: Section, body_rows: zpu
         if (motion) |m| {
             const frame = div().wFull().flexNone().overflowHidden().child(content);
             const tween: BodyTween = .{ .from = m.from, .to = m.to, .full = height };
-            out = out.child(zpui.withAnimationCtx(frame, .{ "sidebar-disclosure", key_hash +% m.epoch }, zpui.Animation.ms(180).withEasing(zpui.easing.css_ease_out), tween, bodyFrame));
+            out = out.child(zpui.withAnimationCtx(frame, .{ "sidebar-disclosure", key_hash +% m.epoch }, zt.motion.collapse.animation(), tween, bodyFrame));
         } else out = out.child(content);
     }
     return out;
@@ -869,7 +935,14 @@ fn onDragFrame(self: *Sidebar, cx: *Ctx) void {
 pub fn extraHeight(self: *const Sidebar, target: Target) f32 {
     const t = self.sec.transfer orelse return 0;
     const p = t.preview orelse return 0;
-    return if (std.meta.eql(p, target)) t.height + 2 else 0;
+    return if (std.meta.eql(p, target) and !isSource(t, target)) t.height + 2 else 0;
+}
+
+/// The destination is the row's own group (no extra gap: the source slot
+/// stays open there).
+fn isSource(t: Transfer, target: Target) bool {
+    const src = t.source orelse return false;
+    return std.meta.eql(src, target);
 }
 
 fn collapsesFrom(src: Target, target: ?Target) bool {
@@ -883,44 +956,59 @@ fn collapsesFrom(src: Target, target: ?Target) bool {
 /// preview returns or the row slides home.
 pub fn sourceSlot(self: *const Sidebar, h: f32, gap: f32) zpui.AnyElement {
     const full = h + gap;
-    const Slot = struct {
+    const SlotAnim = struct {
         fn f(c: [3]f32, el: zpui.Div, k: f32) zpui.Div {
             const left = c[0] - (c[1] + (c[2] - c[1]) * k);
             return el.h(px(@max(left, 0))).mb(px(@min(left, 0)));
         }
     };
-    const anim = zpui.Animation.ms(150).withEasing(zpui.easing.ease_out_quint);
+    const anim = zt.motion.tab_slide.animation();
     if (self.sec.transfer) |t| {
         const src = t.source orelse return zpui.intoAnyElement(div().h(px(h)).flexNone());
         const now = collapsesFrom(src, t.preview);
         const was = collapsesFrom(src, t.prev);
         if (!now and !was) return zpui.intoAnyElement(div().h(px(h)).flexNone());
         const range = [3]f32{ h, if (was) full else 0, if (now) full else 0 };
-        return zpui.intoAnyElement(zpui.withAnimationCtx(div().flexNone(), .{ "session-source-slot", t.epoch }, anim, range, Slot.f));
+        return zpui.intoAnyElement(zpui.withAnimationCtx(div().flexNone(), .{ "session-source-slot", t.epoch }, anim, range, SlotAnim.f));
     }
     if (self.sec.returning) |r| if (r.removed > 0) {
-        return zpui.intoAnyElement(zpui.withAnimationCtx(div().flexNone(), .{ "session-source-return", r.epoch }, anim, [3]f32{ h, full, 0 }, Slot.f));
+        return zpui.intoAnyElement(zpui.withAnimationCtx(div().flexNone(), .{ "session-source-return", r.epoch }, anim, [3]f32{ h, full, 0 }, SlotAnim.f));
     };
     return zpui.intoAnyElement(div().h(px(h)).flexNone());
 }
 
 /// The extra gap a destination group opens for the incoming row.
 pub fn extraGap(self: *const Sidebar, target: Target) ?zpui.AnyElement {
-    const t = self.sec.transfer orelse return null;
-    const into = if (t.preview) |p| std.meta.eql(p, target) else false;
-    const was = if (t.prev) |p| std.meta.eql(p, target) else false;
-    if (!into and !was) return null;
-    const full = t.height + 2;
+    return extraGapIn(self, target, 0);
+}
+
+/// `extraGap` for accordion `group` of `target` (project / device groups
+/// share `.regular`; only the previewed one opens).
+pub fn extraGapIn(self: *const Sidebar, target: Target, group: u32) ?zpui.AnyElement {
     const Grow = struct {
         fn f(c: [2]f32, el: zpui.Div, k: f32) zpui.Div {
             return el.h(px(c[0] + (c[1] - c[0]) * k));
         }
     };
+    const t = self.sec.transfer orelse {
+        // Cancelled: the destination's gap closes while the row slides home.
+        const r = self.sec.returning orelse return null;
+        const g = r.gap orelse return null;
+        if (!std.meta.eql(g, target) or self.sec.reduced) return null;
+        if (r.insertion) |ins| if (ins.group != group) return null;
+        return zpui.intoAnyElement(zpui.withAnimationCtx(div().flexNone(), .{ "session-gap-return", r.epoch }, zt.motion.tab_slide.animation(), [2]f32{ r.height + 2, 0 }, Grow.f));
+    };
+    if (t.insertion) |ins| if (std.meta.eql(ins.target, target) and ins.group != group) return null;
+    const into = if (t.preview) |p| std.meta.eql(p, target) and !isSource(t, target) else false;
+    const was = if (t.prev) |p| std.meta.eql(p, target) and !isSource(t, target) else false;
+    if (!into and !was) return null;
+    const full = t.height + 2;
+    if (self.sec.reduced) return if (into) zpui.intoAnyElement(div().flexNone().h(px(full))) else null;
     const range = if (into) [2]f32{ 0, full } else [2]f32{ full, 0 };
     return zpui.intoAnyElement(zpui.withAnimationCtx(div().flexNone(), .{ "session-gap", @intFromEnum(std.meta.activeTag(target)) | (switch (target) {
         .section => |i| i << 2,
         else => 0,
-    }) | (t.epoch << 16) }, zpui.Animation.ms(150).withEasing(zpui.easing.ease_out_quint), range, Grow.f));
+    }) | (t.epoch << 16) }, zt.motion.tab_slide.animation(), range, Grow.f));
 }
 
 /// The moving row (`render_moving_sidebar_session`): follows the pointer on a
@@ -937,7 +1025,7 @@ pub fn renderMoving(self: *Sidebar, row: zpui.AnyElement, height: f32, theme: *c
             return el.top(px(c[0] + (c[1] - c[0]) * k));
         }
     };
-    return zpui.intoAnyElement(zpui.withAnimationCtx(frame.child(row), .{ "sidebar-session-slide", r.epoch }, zpui.Animation.ms(150).withEasing(zpui.easing.ease_out_quint), [2]f32{ r.from, r.to }, Slide.f));
+    return zpui.intoAnyElement(zpui.withAnimationCtx(frame.child(row), .{ "sidebar-session-slide", r.epoch }, zt.motion.tab_slide.animation(), [2]f32{ r.from, r.to }, Slide.f));
 }
 
 /// `cancel_sidebar_session_transfer`: the row slides home.
@@ -948,13 +1036,14 @@ pub fn cancelTransfer(self: *Sidebar, cx: *Ctx) void {
     self.sec.scroll_task.cancel();
     self.sec.scroll_task = .none;
     const from = contentY(self, t.pointer_y - t.grab_y);
-    if (t.origin_top) |to| if (@abs(to - from) > 0.5 and !reducedMotion(cx)) {
+    if (t.origin_top) |to| if (@abs(to - from) > 0.5 and !reducedMotion(self, cx)) {
         if (self.sec.returning) |r| self.gpa.free(r.chat_id);
         self.sec.return_epoch += 1;
         const removed: f32 = if (t.source) |src| (if (collapsesFrom(src, t.preview)) t.height + 2 else 0) else 0;
-        self.sec.returning = .{ .chat_id = t.chat_id, .height = t.height, .from = from, .to = to, .epoch = self.sec.return_epoch, .removed = removed };
+        const gap: ?Target = if (t.preview) |p| (if (isSource(t, p) or p == .pinned) null else p) else null;
+        self.sec.returning = .{ .chat_id = t.chat_id, .height = t.height, .from = from, .to = to, .epoch = self.sec.return_epoch, .removed = removed, .insertion = t.insertion, .gap = gap };
         self.sec.return_task.cancel();
-        self.sec.return_task = cx.timer(170 * std.time.ns_per_ms, onReturned) catch .none;
+        self.sec.return_task = cx.timer(zt.motion.tab_slide.totalNs(1.0) + 20 * std.time.ns_per_ms, onReturned) catch .none;
         cx.notify();
         return;
     };
@@ -962,9 +1051,81 @@ pub fn cancelTransfer(self: *Sidebar, cx: *Ctx) void {
     cx.notify();
 }
 
-fn reducedMotion(cx: *Ctx) bool {
+fn reducedMotion(self: *const Sidebar, cx: *Ctx) bool {
+    if (self.sec.reduced) return true;
     const s = model.settings_store.current(cx.app) orelse return false;
     return s.theme.reduce_motion == .on;
+}
+
+// ---- destination sibling slide (`render_sidebar_gap_row`) -------------------------------
+
+/// `sidebar_gap_offset`: how far row `row` of a group moves to open the
+/// insertion `boundary` (`source` = the moving row's index when it lives in
+/// the same group).
+pub fn gapOffset(row: u32, source: ?u32, boundary: u32, height: f32) f32 {
+    if (source) |src| {
+        if (row == src) return 0;
+        if (row < src and row >= boundary) return height;
+        if (row > src and row < boundary) return -height;
+        return 0;
+    }
+    return if (row >= boundary) height else 0;
+}
+
+/// A destination row's vertical offset for the live preview: siblings at
+/// and after the insertion point slide apart by one slot. Pin-to-pin keeps
+/// its own sibling slide; a row never offsets in another accordion.
+fn liveOffset(t: Transfer, slot: Slot) f32 {
+    const ins = t.insertion orelse return 0;
+    if (slot.target == .pinned) return 0;
+    if (!std.meta.eql(ins.target, slot.target) or ins.group != slot.group) return 0;
+    const p = t.preview orelse return 0;
+    if (!std.meta.eql(p, slot.target)) return 0;
+    return gapOffset(slot.index, ins.source, ins.index, t.height + 2);
+}
+
+/// Wrap a placed row: the hit region (and its insertion listener) stays at
+/// the natural slot while the content slides. While dragging the offset is
+/// applied directly (Rust: `frame.top(px(to))`); a cancelled drop slides the
+/// siblings back over TAB_SLIDE.
+pub fn placeRow(self: *Sidebar, row: zpui.AnyElement, slot: Slot, cx: *Ctx) zpui.AnyElement {
+    const outer = div().flexNone().onDragMove(SessionDrag, cx.listenerWith(slot, onRowDragMove));
+    if (self.sec.transfer) |t| {
+        const dy = liveOffset(t, slot);
+        if (dy == 0) return zpui.intoAnyElement(outer.child(row));
+        return zpui.intoAnyElement(outer.child(div().relative().top(px(dy)).child(row)));
+    }
+    if (self.sec.returning) |r| if (r.insertion) |ins| if (!self.sec.reduced) {
+        if (slot.target != .pinned and std.meta.eql(ins.target, slot.target) and ins.group == slot.group) {
+            const from = gapOffset(slot.index, ins.source, ins.index, r.height + 2);
+            if (from != 0) {
+                const Slide = struct {
+                    fn f(c: [2]f32, el: zpui.Div, k: f32) zpui.Div {
+                        return el.top(px(c[0] + (c[1] - c[0]) * k));
+                    }
+                };
+                return zpui.intoAnyElement(outer.child(zpui.withAnimationCtx(div().relative().child(row), .{ "session-gap-row", (slot.index & 0xffff) | (r.epoch << 16) }, zt.motion.tab_slide.animation(), [2]f32{ from, 0 }, Slide.f)));
+            }
+        }
+    };
+    return zpui.intoAnyElement(outer.child(row));
+}
+
+/// Record the moving row's own slot (its source slot is rendering).
+pub fn noteSource(self: *Sidebar, slot: Slot) void {
+    if (self.sec.transfer) |*t| t.source_slot = slot;
+}
+
+/// Row-level insertion tracking: past a row's centre inserts after it.
+fn onRowDragMove(self: *Sidebar, slot: Slot, ev: *const zpui.DragMoveEvent(SessionDrag), _: *Window, cx: *Ctx) void {
+    if (!ev.bounds.contains(ev.event.position)) return;
+    const t = if (self.sec.transfer) |*x| x else return;
+    const after = ev.event.position.y >= ev.bounds.origin.y + ev.bounds.size.height / 2;
+    const src: ?u32 = if (t.source_slot) |s| (if (std.meta.eql(s.target, slot.target) and s.group == slot.group) s.index else null) else null;
+    const next: Insertion = .{ .target = slot.target, .group = slot.group, .index = slot.index + @intFromBool(after), .source = src };
+    if (t.insertion) |cur| if (std.meta.eql(cur, next)) return;
+    t.insertion = next;
+    cx.notify();
 }
 
 fn onReturned(self: *Sidebar, cx: *Ctx) void {

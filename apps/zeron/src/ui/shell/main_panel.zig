@@ -19,6 +19,7 @@ const settings_store_ui = @import("../settings/store.zig");
 const harness_updates = @import("harness_updates.zig");
 const right_pane = @import("right_pane.zig");
 const files = @import("../files/root.zig");
+const dock_mod = @import("dock.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -47,6 +48,18 @@ pub const MainPanel = struct {
     artwork_ready: background.hero.Readiness = .{},
     /// Home's agent-update island (`render_harness_update_card`).
     harness_updates: Entity(harness_updates.HarnessUpdateIsland),
+    /// The drawer's open/close height tween (`terminal_tween`, RESIZE 200 ms).
+    terminal_tween: ?zt.motion.Tween = null,
+    /// The open flag the drawer last rendered for (a flip starts the tween).
+    terminal_shown: bool = false,
+    /// The drawer height painted last frame (a reversal starts from it).
+    terminal_painted: f32 = 0,
+    /// [motion] The composer's route choreography (`composer_dock`): the
+    /// hero ↔ thread glide, staged fades, and their probes (last frame's
+    /// composer slot and content area, window coordinates).
+    dock: dock_mod.DockState = .{},
+    composer_probe: ?zpui.Bounds(f32) = null,
+    col_probe: ?zpui.Bounds(f32) = null,
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, cx: *Context(MainPanel)) !MainPanel {
         var self: MainPanel = .{
@@ -101,7 +114,14 @@ pub const MainPanel = struct {
             .onDrop(right_pane.TabDrag, cx.listener(MainPanel.onDropTab))
             .onDrop(files.WorkspacePathDrag, cx.listener(MainPanel.onDropWorkspacePath));
         const width = self.width;
-        if (has_chat) {
+        // [motion] `composer_dock`: one clock for the hero ↔ thread hand-off.
+        const reduced = window.prefersReducedMotion();
+        const t_now = cx.app.executor.now();
+        const frame = self.dock.tick(has_chat, reduced, t_now);
+        const in_flight = (frame.active or self.dock.moving) and has_spaces and self.composer_probe != null and self.col_probe != null;
+        if (in_flight) {
+            col = col.child(self.renderDockTransition(frame, reduced, t_now, window, cx));
+        } else if (has_chat) {
             const stack = self.slots.composer_view.read(cx).last_rendered_height;
             const clearance = (if (stack > 0) stack else layout.composer_compact_height) + 64;
             col = col.child(div().relative().flex1().minH0()
@@ -113,7 +133,7 @@ pub const MainPanel = struct {
                     .band_top = layout.transcript_fade_band,
                     .band_bottom = @max(clearance - 64 + 40 - layout.status_strip_height, 1),
                 })))
-                .child(div().absolute().bottom(px(0)).left(px(0)).right(px(0)).child(self.slots.composer(width, cx))));
+                .child(div().absolute().bottom(px(0)).left(px(0)).right(px(0)).child(self.slots.composer(width, cx)).child(self.composerProbe())));
         } else if (!has_spaces and ws.spaces_synced) {
             col = col.child(onboarding(theme));
         } else {
@@ -121,7 +141,7 @@ pub const MainPanel = struct {
             if (self.newThreadHero(window, theme, cx)) |hero| col = col.child(hero);
             // The canvas composer sits a touch above center (the dock's home slot).
             col = col.child(div().flex1().minH0())
-                .child(div().mb(px(12)).child(self.slots.composer(width, cx)))
+                .child(div().relative().mb(px(12)).child(self.slots.composer(width, cx)).child(self.composerProbe()))
                 .child(div().flex1().minH0());
         }
         const terminal_open = prefs_mod.get(cx).terminal_open;
@@ -141,25 +161,101 @@ pub const MainPanel = struct {
                 .flex().justifyCenter().child(self.harness_updates));
         }
         if (self.terminal.read(cx).open != terminal_open) self.terminal.update(cx, terminal_panel.TerminalPanel.setOpen, .{ terminal_open, window });
-        if (terminal_open) {
+        // `toggle_terminal`: the drawer's height animates 200 ms (RESIZE) from
+        // what is painted now; closing keeps the panel mounted until it lands.
+        const content_h = terminalHeight(window, cx);
+        const target_h: f32 = if (terminal_open) content_h else 0;
+        if (terminal_open != self.terminal_shown) {
+            self.terminal_shown = terminal_open;
+            self.terminal_tween = if (reduced) null else .{ .from = self.terminal_painted, .to = target_h, .start_ns = t_now };
+        }
+        if (self.terminal_tween) |tw| if (tw.to != target_h or !zt.motion.Tween.active(tw, t_now, zt.motion.resize, reduced)) {
+            self.terminal_tween = null;
+        };
+        const drawer_h = zt.motion.Tween.eval(self.terminal_tween, target_h, t_now, zt.motion.resize, reduced);
+        self.terminal_painted = drawer_h;
+        if (self.terminal_tween != null) window.requestAnimationFrame();
+        if (drawer_h > 0) {
             // `terminal_height` (Settings, persisted), limited to the viewport
-            // share; the top edge drags it, a double-click resets it.
-            const h = terminalHeight(window, cx);
-            col = col.child(div().relative().flexNone().h(px(h)).wFull().child(self.terminal)
+            // share; the top edge drags it, a double-click resets it. A fixed
+            // height inner clipped by the animated container: the panel never
+            // reflows mid-transition.
+            var drawer = div().relative().flexNone().h(px(drawer_h)).wFull();
+            // Clip only mid-flight: at rest the handle's hitbox straddles the seam.
+            if (self.terminal_tween != null) drawer = drawer.overflowHidden();
+            col = col.child(drawer.child(div().relative().h(px(content_h)).wFull().child(self.terminal)
                 .child(div().id("terminal-resize").role(.separator).ariaLabel("Resize terminal").absolute().left(px(0)).right(px(0))
                 .top(px(-terminal_resize_hitbox / 2)).h(px(terminal_resize_hitbox)).cursorRowResize()
                 .onMouseDown(.left, cx.listener(MainPanel.onTerminalResizeDown))
                 .onClick(cx.listener(MainPanel.onTerminalResizeClick))
                 .onDrag(TerminalResize{}, buildResizeGhost)
                 .child(div().absolute().top(px(terminal_resize_hitbox / 2)).left(px(0)).right(px(0)).h(px(1))
-                .hover(sb.bg(theme.border_strong)))));
+                .hover(sb.bg(theme.border_strong))))));
         }
         // Last child: the overlay covers the terminal dock too (Rust order).
         // A file tab dragged out of the right-pane strip reveals it as well;
         // other surfaces never do (Rust's `drag_over::<RightTabDrag>` predicate).
         const tab_file = if (cx.app.activeDrag(right_pane.TabDrag)) |d| d.workspacePath() != null else false;
         col = col.child(attachmentDropOverlay(theme, tab_file));
-        return col;
+        // [motion] Settled routes still feed the dock its slot (last frame's
+        // measured composer top), so the next hand-off starts from what is
+        // painted; in flight, `renderDockTransition` steps the glide.
+        if (!in_flight) if (self.composer_probe) |cb| if (self.col_probe) |colb| {
+            _ = self.dock.place(0, cb.origin.y - colb.origin.y, reduced, t_now);
+        };
+        if (in_flight or frame.active) window.requestAnimationFrame();
+        return col.child(zpui.canvas(&self.col_probe, noPaint).withPrepaint(*?zpui.Bounds(f32), measure).absolute().inset0());
+    }
+
+    fn measure(cell: *?zpui.Bounds(f32), bounds: zpui.Bounds(f32), _: *Window, _: *App) void {
+        cell.* = bounds;
+    }
+
+    fn noPaint(_: *?zpui.Bounds(f32), _: zpui.Bounds(f32), _: *Window, _: *App) void {}
+
+    /// A paint probe recording the composer slot's window bounds.
+    fn composerProbe(self: *MainPanel) zpui.elements.Canvas {
+        return zpui.canvas(&self.composer_probe, noPaint).withPrepaint(*?zpui.Bounds(f32), measure).absolute().inset0();
+    }
+
+    /// The hand-off in flight (`DockedComposer` + `render_main`'s outlet):
+    /// the composer glides between the hero slot and the thread dock on the
+    /// critically damped route clock; the transcript fades and rises in
+    /// (`transcript`), the hero artwork dissolves (`dissolve`, as opacity).
+    fn renderDockTransition(self: *MainPanel, frame: dock_mod.DockFrame, reduced: bool, t_now: u64, window: *Window, cx: *Context(MainPanel)) zpui.Div {
+        const theme = ui.theme.get(cx);
+        const width = self.width;
+        const colb = self.col_probe.?;
+        const h = self.composer_probe.?.size.height;
+        const content_h = @max(colb.size.height - self.terminal_painted, 0);
+        // Slots: docked at the content bottom; the hero a touch above centre
+        // (the settled canvas: flex1 / composer + 12px / flex1).
+        const target_y = if (frame.docked) content_h - h else (content_h - h - 12) / 2;
+        const placed = self.dock.place(0, target_y, reduced, t_now);
+        var area = div().relative().flex1().minH0();
+        const has_chat = frame.docked;
+        const transcript_t = frame.transcript();
+        if (frame.dissolve() < 1) {
+            if (self.newThreadHero(window, theme, cx)) |hero| area = area.child(div().absolute().inset0().opacity(1 - frame.dissolve()).child(hero));
+        }
+        if (has_chat or transcript_t > 0) {
+            const stack = self.slots.composer_view.read(cx).last_rendered_height;
+            const clearance = (if (stack > 0) stack else layout.composer_compact_height) + 64;
+            var layer = div().absolute().inset0().overflowHidden().child(div().relative().top(px(8 * (1 - transcript_t))).sizeFull().opacity(transcript_t)
+                .child(ui.effects.edgeFaded(div().sizeFull().child(self.slots.transcript(clearance, width, cx)), .{
+                .band = layout.transcript_fade_band,
+                .top = true,
+                .bottom = true,
+                .inset_top = layout.titlebar_height,
+                .band_top = layout.transcript_fade_band,
+                .band_bottom = @max(clearance - 64 + 40 - layout.status_strip_height, 1),
+            })));
+            // A departing transcript is visual history, not an interaction surface.
+            if (!has_chat) layer = layer.child(div().absolute().inset0().occlude());
+            area = area.child(layer);
+        }
+        return area.child(div().absolute().left(px(0)).right(px(0)).top(px(placed.y)).opacity(self.dock.opacity())
+            .child(self.slots.composer(width, cx)).child(self.composerProbe()));
     }
 
     /// Prepare the configured artwork (decode/effects run once off-thread,
@@ -224,6 +320,7 @@ pub const MainPanel = struct {
             }
         };
         _ = model.settings_store.update(cx.app, .debounced, next, W.f);
+        self.terminal_tween = null; // live drag tracks the pointer
         cx.notify();
     }
 
@@ -307,9 +404,9 @@ pub fn dropOverlay(theme: *const Theme, tab_file: bool, external: bool) zpui.Sta
 /// First boot: no folders to work in yet.
 fn onboarding(theme: *const Theme) zpui.Div {
     return div().sizeFull().flex().flexCol().itemsCenter().justifyCenter()
-        .child(div().flex().flexCol().itemsCenter()
+        .child(ui.anim.fadeIn("no-spaces-canvas", div().flex().flexCol().itemsCenter()
             .child(zpui.svg().source(ui.icon.Icon.zeron_logo.path(), ui.icon.Icon.zeron_logo.svg()).w(px(41.9)).h(px(48)).textColor(theme.text.opacity(0.09)))
             .child(div().mt(px(24)).textSize(ui.rems(16)).fontWeight(500).textColor(theme.text).child("Add a project to get started"))
             .child(div().mt(px(6)).textSize(ui.rems(13)).textColor(theme.text_muted.opacity(0.7)).child("A project is a folder on one of your devices."))
-            .child(ui.button.solid("onboarding-add-space", "Add a project", theme).mt(px(20)).h(px(32)).px(px(14)).textSize(ui.rems(13))));
+            .child(ui.button.solid("onboarding-add-space", "Add a project", theme).mt(px(20)).h(px(32)).px(px(14)).textSize(ui.rems(13)))));
 }

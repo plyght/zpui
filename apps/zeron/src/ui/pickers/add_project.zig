@@ -887,7 +887,8 @@ pub const AddProject = struct {
             .child(div().occlude().w(px(vp.width)).h(px(vp.height))
             .bg(zt.theme.scrimFor(theme.appearance, 0.35))
             .flex().itemsCenter().justifyCenter()
-            .child(ui.anim.menuIn("add-project-in", div().child(ui.effects.frosted(16, zt.layout.menu_blur, card_el)), 2)))).withPriority(2));
+            // `palette_overlay`: no entrance motion (Rust mounts the card as is).
+            .child(ui.effects.frosted(16, zt.layout.menu_blur, card_el)))).withPriority(2));
     }
 };
 

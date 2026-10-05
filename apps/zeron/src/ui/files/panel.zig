@@ -104,6 +104,25 @@ pub const SectionRow = struct {
 
 const SectionKind = enum { subagents, chats };
 
+/// A files-panel section's open / close tween (`SectionMotion` in
+/// `files/sections.rs`): COLLAPSE plus a 120 ms settle grace.
+const SectionMotion = struct {
+    from: f32,
+    to: f32,
+    epoch: usize,
+    started: u64,
+
+    fn live(m: SectionMotion, now: u64) bool {
+        return now -| m.started < zt.motion.collapse.totalNs(1.0) + 120 * std.time.ns_per_ms;
+    }
+
+    fn current(m: SectionMotion, now: u64) f32 {
+        const total = @max(zt.motion.collapse.totalNs(1.0), 1);
+        const raw: f32 = @floatCast(@min(@as(f64, @floatFromInt(now -| m.started)) / @as(f64, @floatFromInt(total)), 1));
+        return zt.motion.lerp(m.from, m.to, zt.motion.collapse.progress(raw));
+    }
+};
+
 const Rename = struct {
     path: []u8,
     input: Entity(TextInput),
@@ -191,6 +210,10 @@ pub const FilesPanel = struct {
     event_arena: std.heap.ArenaAllocator,
     subagents_open: bool = true,
     chats_open: bool = true,
+    /// [motion] Section open / close tweens (`live_motion`, COLLAPSE) and
+    /// each section's last open body height.
+    section_motion: [2]?SectionMotion = .{ null, null },
+    section_heights: [2]f32 = .{ 0, 0 },
 
     pub const Events = .{ OpenFile, AddToChat, ShowAllFilesChanged, EntryRenamed, EntryDeleted, OpenSubagent, OpenChildChat, NewChildChat, ForkChat };
 
@@ -1181,8 +1204,17 @@ pub const FilesPanel = struct {
 
     // ---- sections ------------------------------------------------------------------
 
-    fn onSectionToggle(self: *FilesPanel, which: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(FilesPanel)) void {
+    fn onSectionToggle(self: *FilesPanel, which: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(FilesPanel)) void {
+        const was_open = if (which == 0) self.subagents_open else self.chats_open;
         if (which == 0) self.subagents_open = !self.subagents_open else self.chats_open = !self.chats_open;
+        // `files-section-body`: tween from the live height (COLLAPSE).
+        if (which < 2 and !window.prefersReducedMotion()) {
+            const now = cx.app.executor.now();
+            const h = self.section_heights[which];
+            const prev = self.section_motion[which];
+            const from = if (prev) |m| (if (m.live(now)) m.current(now) else if (was_open) h else 0) else if (was_open) h else 0;
+            self.section_motion[which] = .{ .from = from, .to = if (was_open) 0 else h, .epoch = if (prev) |m| m.epoch +% 1 else 1, .started = now };
+        }
         cx.notify();
     }
     fn onFork(_: *FilesPanel, _: *const zpui.ClickEvent, _: *Window, cx: *Context(FilesPanel)) void {
@@ -1520,8 +1552,34 @@ pub const FilesPanel = struct {
                 .child(headerAction("files-sections-new-chat", .plus, "New side chat", theme).onClick(cx.listener(onNewSideChat)))
                 .child(headerAction("files-sections-fork", .git_branch, "Fork this chat", theme).onClick(cx.listener(onFork))));
         }
-        header = header.child(div().flexNone().size(px(20)).flex().itemsCenter().justifyCenter()
-            .child(ui.icon.of(if (open) .alt_arrow_down else .alt_arrow_right, 12, theme.text_muted.opacity(0.5))));
+        // [motion] `render_chevron` / `render_disclosure_body`: the right
+        // chevron turns a quarter while the body tweens (COLLAPSE).
+        const k: usize = @intFromEnum(kind);
+        if (open) self.section_heights[k] = height;
+        const now = cx.app.executor.now();
+        const live: ?SectionMotion = if (self.section_motion[k]) |m| (if (m.live(now)) m else null) else null;
+        const chevron = ui.icon.of(.alt_arrow_right, 12, theme.text_muted.opacity(0.5));
+        const chevron_frame = div().flexNone().size(px(20)).flex().itemsCenter().justifyCenter();
+        if (live) |m| {
+            const denom = @max(@max(m.from, m.to), 1);
+            const Turn = struct {
+                fn f(c: [2]f32, el: zpui.elements.Svg, t: f32) zpui.elements.Svg {
+                    return el.withTransformation(.rotate((c[0] + (c[1] - c[0]) * t) * std.math.pi / 2.0));
+                }
+            };
+            header = header.child(chevron_frame.child(zpui.withAnimationCtx(chevron, .{ "files-section-chevron", k * 65536 + m.epoch }, zt.motion.collapse.animation(), [2]f32{ std.math.clamp(m.from / denom, 0, 1), std.math.clamp(m.to / denom, 0, 1) }, Turn.f)));
+            const Body = struct {
+                fn f(c: [3]f32, el: zpui.Div, t: f32) zpui.Div {
+                    const h = c[0] + (c[1] - c[0]) * t;
+                    const reveal = std.math.clamp(h / c[2], 0, 1);
+                    return el.h(px(h)).opacity(0.35 + 0.65 * reveal).relative().top(px(-3 * (1 - reveal)));
+                }
+            };
+            const body = div().wFull().flexNone().overflowHidden().child(self.sectionBody(kind, rows, theme, cx));
+            return div().flexNone().flex().flexCol().child(header)
+                .child(zpui.withAnimationCtx(body, .{ "files-section-body", k * 65536 + m.epoch }, zt.motion.collapse.animation(), [3]f32{ m.from, m.to, denom }, Body.f));
+        }
+        header = header.child(chevron_frame.child(chevron.withTransformation(.rotate(if (open) std.math.pi / 2.0 else 0))));
         var body = div().wFull().flexNone().overflowHidden().h(px(if (open) height else 0));
         if (open) body = body.child(self.sectionBody(kind, rows, theme, cx));
         return div().flexNone().flex().flexCol().child(header).child(body);

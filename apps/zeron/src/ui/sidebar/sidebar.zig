@@ -206,6 +206,13 @@ pub const Sidebar = struct {
     /// Pinned rows rendered last frame: count and slot heights (row + gap).
     pinned_count: usize = 0,
     pin_slots: std.ArrayList(f32) = .empty,
+    /// [motion] Resort glide (`sidebar_prev_order` / `sidebar_resort` /
+    /// `sidebar_new_keys`): last frame's keyed order, the FLIP offsets of
+    /// rows whose order changed, and rows that newly appeared (owned keys).
+    resort_prev: std.ArrayList(ResortItem) = .empty,
+    resort_offsets: std.StringHashMapUnmanaged(f32) = .empty,
+    resort_new: std.StringHashMapUnmanaged(void) = .empty,
+    resort_epoch: u64 = 0,
 
     // [wiring] context-menu page, inline rename, inline notice (Rust `sidebar_notice`).
     ctx_page: chat_menu.Page = .root,
@@ -238,6 +245,10 @@ pub const Sidebar = struct {
     }
 
     pub fn deinit(self: *Sidebar, app: *App) void {
+        self.clearResort();
+        self.resort_prev.deinit(self.gpa);
+        self.resort_offsets.deinit(self.gpa);
+        self.resort_new.deinit(self.gpa);
         self.subs.deinit(self.gpa);
         self.scroll.release();
         self.clearIds(&self.row_ids);
@@ -658,6 +669,13 @@ pub const Sidebar = struct {
     }
 
     fn toggleSection(self: *Sidebar, which: u8, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+        // [motion] `begin_sidebar_disclosure_motion`: the body tweens (COLLAPSE).
+        const was_open = switch (which) {
+            0 => self.pinned_open,
+            1 => self.sessions_open,
+            else => self.archived_open,
+        };
+        sections_ui.toggleMotion(self, disclosureId(which), was_open, cx);
         switch (which) {
             0 => self.pinned_open = !self.pinned_open,
             1 => self.sessions_open = !self.sessions_open,
@@ -838,6 +856,8 @@ pub const Sidebar = struct {
         const app_state = self.state.read(cx);
         const ws = app_state.workspace.read(cx);
         const now = prefs.now(ws.io);
+        self.sec.reduced = window.prefersReducedMotion();
+        const now_ns = cx.app.executor.now();
         const arena = zpui.window.arena_mod.frameAllocator();
         self.prs = app_state.change_requests.read(cx); // [pr-status]
 
@@ -892,6 +912,38 @@ pub const Sidebar = struct {
             }
         }.lt);
 
+        // [motion] The keyed order this frame (`sidebar_prev_order`): rows
+        // of open groups plus header slots, for the resort glide. Drags own
+        // the movement while they run.
+        if (!transfer and self.pin_drag == null) {
+            var order: std.ArrayList(ResortItem) = .empty;
+            const rh = struct {
+                fn f(p: *const prefs_mod.Prefs, r: *const RowData) f32 {
+                    return rowHeight(p.sidebar_compact, p.show_project_label, r.branch != null, r.pr != null);
+                }
+            }.f;
+            if (pinned.items.len > 0) {
+                order.append(arena, .{ .key = "\x00pinned", .height = disclosure_header_height }) catch {};
+                if (self.pinned_open) for (pinned.items) |*r| order.append(arena, .{ .key = r.chat.id, .height = rh(prefs, r) }) catch {};
+            }
+            for (secs, 0..) |sec, si| {
+                order.append(arena, .{ .key = zpui.fmt("\x00section:{s}", .{sec.id}), .height = disclosure_header_height + 12 }) catch {};
+                if (!sec.collapsed and si < section_rows.len) for (section_rows[si].items) |*r| order.append(arena, .{ .key = r.chat.id, .height = rh(prefs, r) }) catch {};
+            }
+            if (regular.items.len > 0) {
+                order.append(arena, .{ .key = "\x00sessions", .height = disclosure_header_height + section_gap }) catch {};
+                const grouped = prefs.organization != .in_one_list;
+                if (grouped or self.sessions_open) for (regular.items) |*r| {
+                    if (grouped) {
+                        const key: []const u8 = if (prefs.organization == .by_device) r.chat.deviceId else (r.chat.spaceId orelse "~");
+                        if (self.isCollapsed(key)) continue;
+                    }
+                    order.append(arena, .{ .key = r.chat.id, .height = rh(prefs, r) }) catch {};
+                };
+            }
+            self.updateResort(order.items);
+        }
+
         var any_working = false;
         var list = div().flex().flexCol().gap(px(list_gap)).pb(px(zt.layout.space_sm));
         const show_pinned = pinned.items.len > 0 or transfer;
@@ -905,9 +957,11 @@ pub const Sidebar = struct {
                     .onDragMove(SessionDrag, cx.listener(Sidebar.onPinDragMove))
                     .onDrop(SessionDrag, cx.listener(Sidebar.onPinDrop));
                 if (pinned.items.len == 0) body = body.minH(px(if (self.pin_drag) |d| d.slot else 32));
+                var pinned_h: f32 = disclosure_body_inset;
                 for (pinned.items, 0..) |*r, pi| {
                     any_working = any_working or r.status == .working;
                     const h = rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null);
+                    pinned_h += h + (if (pi > 0) list_gap else 0);
                     self.pin_slots.append(self.gpa, h + list_gap) catch {};
                     const row = self.activeRow(r, h, pi, theme, prefs, cx).onDrop(SessionDrag, cx.listener(Sidebar.onPinDrop));
                     if (sections_ui.isMoving(self, r.chat.id)) {
@@ -926,19 +980,21 @@ pub const Sidebar = struct {
                                 return el.relative().top(px(c[0] + (c[1] - c[0]) * t));
                             }
                         };
-                        body = body.child(zpui.withAnimationCtx(row, .{ "pin-slide", (pi & 0xffff) | (d.epoch << 16) }, zpui.Animation.ms(150).withEasing(zpui.easing.ease_out_quint), [2]f32{ start, target }, Slide.f));
+                        body = body.child(zpui.withAnimationCtx(row, .{ "pin-slide", (pi & 0xffff) | (d.epoch << 16) }, zt.motion.tab_slide.animation(), [2]f32{ start, target }, Slide.f));
                         continue;
                     }
-                    body = body.child(row);
+                    body = body.child(self.resortRow(r.chat.id, zpui.intoAnyElement(row)));
                 }
                 // A joining row grows the list by one slot.
                 if (self.pin_drag) |d| if (d.from >= pinned.items.len and pinned.items.len > 0) {
                     body = body.child(div().h(px(d.slot - list_gap)).flexNone());
                 };
                 self.pinned_count = pinned.items.len;
+                sections_ui.noteHeight(self, "pinned", pinned_h);
+                const pinned_tween = sections_ui.disclosureAnimating(self, "pinned", now_ns);
                 list = list.child(div().flex().flexCol()
                     .child(self.sectionHeader(0, if (self.pinned_open) "Pinned" else zpui.fmt("Pinned ({d})", .{pinned.items.len}), self.pinned_open, theme, cx))
-                    .child(if (self.pinned_open or transfer) body else null));
+                    .child(if (self.pinned_open or transfer or pinned_tween) sections_ui.disclosureBody(self, "pinned", pinned_h, body, now_ns) else null));
             }
             // Custom sections (account-synced), between Pinned and Sessions.
             for (secs, 0..) |sec, si| {
@@ -951,7 +1007,7 @@ pub const Sidebar = struct {
                     rows_height += rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null) + (if (ri > 0) list_gap else 0);
                     if (!show_rows) continue;
                     any_working = any_working or r.status == .working;
-                    body = body.child(self.placedRow(r, rows.len > 1, theme, prefs, cx));
+                    body = body.child(self.placedRow(r, rows.len > 1, .{ .target = .{ .section = si }, .index = @intCast(ri) }, theme, prefs, cx));
                 }
                 const extra = sections_ui.extraHeight(self, .{ .section = si });
                 list = list.child(sections_ui.renderSection(self, si, sec, body, rows.len == 0, rows_height, sections_ui.extraGap(self, .{ .section = si }), if (extra > 0) extra + list_gap else 0, theme, cx));
@@ -963,14 +1019,18 @@ pub const Sidebar = struct {
                 var body = div().flex().flexCol().gap(px(list_gap)).pt(px(disclosure_body_inset));
                 if (regular.items.len == 0) body = body.child(div().h(px(48)).flex().itemsCenter().px(px(10))
                     .textColor(theme.text_muted).textSize(rems(12)).child("Drop here to unpin"));
-                for (regular.items) |*r| {
+                var sessions_h: f32 = disclosure_body_inset + (if (regular.items.len == 0) @as(f32, 48) else 0);
+                for (regular.items, 0..) |*r, ri| {
                     any_working = any_working or r.status == .working;
-                    body = body.child(self.placedRow(r, regular.items.len > 1, theme, prefs, cx));
+                    sessions_h += rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null) + (if (ri > 0) list_gap else 0);
+                    body = body.child(self.placedRow(r, regular.items.len > 1, .{ .target = .regular, .index = @intCast(ri) }, theme, prefs, cx));
                 }
                 body = body.child(sections_ui.extraGap(self, .regular));
+                sections_ui.noteHeight(self, "sessions", sessions_h);
+                const sessions_tween = sections_ui.disclosureAnimating(self, "sessions", now_ns);
                 list = list.child(self.dropRegion(div().flex().flexCol().pt(px(if (follows) section_gap else 0))
                     .child(self.sectionHeader(1, if (self.sessions_open) "Sessions" else zpui.fmt("Sessions ({d})", .{regular.items.len}), self.sessions_open, theme, cx))
-                    .child(if (self.sessions_open or transfer) body else null), cx));
+                    .child(if (self.sessions_open or transfer or sessions_tween) sections_ui.disclosureBody(self, "sessions", sessions_h, body, now_ns) else null), cx));
             }
         }
 
@@ -978,12 +1038,16 @@ pub const Sidebar = struct {
         if (archived.items.len > 0) {
             var sec = div().flex().flexCol()
                 .child(self.sectionHeader(2, if (self.archived_open) "Archived" else zpui.fmt("Archived ({d})", .{archived.items.len}), self.archived_open, theme, cx));
-            if (self.archived_open) {
+            const archived_tween = sections_ui.disclosureAnimating(self, "archived", now_ns);
+            if (self.archived_open or archived_tween) {
                 var body = div().flex().flexCol().gap(px(list_gap)).pt(px(disclosure_body_inset));
+                var archived_h: f32 = disclosure_body_inset;
                 for (archived.items, 0..) |*r, i| {
                     if (i >= self.archived_shown) break;
+                    archived_h += rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null) + (if (i > 0) list_gap else 0);
                     body = body.child(self.renderRow(r, theme, prefs, cx));
                 }
+                if (archived.items.len > self.archived_shown) archived_h += list_gap + @as(f32, if (prefs.sidebar_compact) 29 else 36);
                 if (archived.items.len > self.archived_shown) {
                     body = body.child(div().id("archived-more").role(.button).h(px(if (prefs.sidebar_compact) 29 else 36))
                         .flex().itemsCenter().px(px(8)).rounded(px(8)).cursorPointer()
@@ -992,7 +1056,8 @@ pub const Sidebar = struct {
                         .onClick(cx.listener(Sidebar.onShowMoreArchived))
                         .child("Show more"));
                 }
-                sec = sec.child(body);
+                sections_ui.noteHeight(self, "archived", archived_h);
+                sec = sec.child(sections_ui.disclosureBody(self, "archived", archived_h, body, now_ns));
             }
             archived_section = sec;
         }
@@ -1041,15 +1106,92 @@ pub const Sidebar = struct {
             .onDrop(SessionDrag, cx.listenerWith(@as(sections_ui.Target, .regular), sections_ui.onGroupDrop));
     }
 
+    // ---- [motion] resort glide ----------------------------------------------------------
+
+    fn clearResortMaps(self: *Sidebar) void {
+        var it = self.resort_offsets.keyIterator();
+        while (it.next()) |k| self.gpa.free(k.*);
+        self.resort_offsets.clearRetainingCapacity();
+        var nit = self.resort_new.keyIterator();
+        while (nit.next()) |k| self.gpa.free(k.*);
+        self.resort_new.clearRetainingCapacity();
+    }
+
+    fn clearResort(self: *Sidebar) void {
+        self.clearResortMaps();
+        for (self.resort_prev.items) |it| self.gpa.free(it.key);
+        self.resort_prev.clearRetainingCapacity();
+    }
+
+    /// The keyed order changed (not just heights): FLIP every surviving row
+    /// from its old y and fade in rows that are new (`render_chat_sidebar`).
+    fn updateResort(self: *Sidebar, order: []const ResortItem) void {
+        if (resortSame(self.resort_prev.items, order)) return;
+        const key_order_changed = keyOrderChanged(self.resort_prev.items, order);
+        if (self.resort_prev.items.len > 0 and key_order_changed) {
+            const a = zpui.window.arena_mod.frameAllocator();
+            const offsets = resortOffsets(a, self.resort_prev.items, order, list_gap) catch return;
+            var any_new = false;
+            for (order) |o| {
+                if (!containsKey(self.resort_prev.items, o.key)) any_new = true;
+            }
+            if (offsets.len > 0 or any_new) {
+                self.clearResortMaps();
+                self.resort_epoch +%= 1;
+                for (offsets) |o| {
+                    const k = self.gpa.dupe(u8, o.key) catch continue;
+                    self.resort_offsets.put(self.gpa, k, o.height) catch self.gpa.free(k);
+                }
+                for (order) |o| if (!containsKey(self.resort_prev.items, o.key) and !std.mem.startsWith(u8, o.key, "\x00")) {
+                    const k = self.gpa.dupe(u8, o.key) catch continue;
+                    self.resort_new.put(self.gpa, k, {}) catch self.gpa.free(k);
+                };
+            }
+        }
+        for (self.resort_prev.items) |it| self.gpa.free(it.key);
+        self.resort_prev.clearRetainingCapacity();
+        for (order) |o| {
+            const k = self.gpa.dupe(u8, o.key) catch continue;
+            self.resort_prev.append(self.gpa, .{ .key = k, .height = o.height }) catch self.gpa.free(k);
+        }
+    }
+
+    /// RESORT glide (`resort-{epoch}-{key}`: top dy → 0) or a FADE_QUICK
+    /// entrance (`row-in-{epoch}-{key}`) for a row placed in the list.
+    fn resortRow(self: *const Sidebar, key: []const u8, row: zpui.AnyElement) zpui.AnyElement {
+        const id_hash = std.hash.Wyhash.hash(self.resort_epoch, key);
+        if (self.resort_offsets.get(key)) |dy| {
+            const Glide = struct {
+                fn f(d: f32, el: zpui.Div, t: f32) zpui.Div {
+                    return el.relative().top(px(d * (1 - t)));
+                }
+            };
+            return zpui.intoAnyElement(zpui.withAnimationCtx(div().child(row), .{ "resort", id_hash }, resort_spec.animation(), dy, Glide.f));
+        }
+        if (self.resort_new.contains(key)) {
+            const Fade = struct {
+                fn f(el: zpui.Div, t: f32) zpui.Div {
+                    return el.opacity(t);
+                }
+            };
+            return zpui.intoAnyElement(zpui.withAnimation(div().child(row), .{ "row-in", id_hash }, zt.motion.fade_quick.animation(), Fade.f));
+        }
+        return row;
+    }
+
     /// An active (draggable) row: rendered in place, or — while it moves —
     /// an empty slot here and the row in the movement layer.
     /// `multi`: the row shares its group with others (a collapsing source
     /// slot also gives back its list gap).
-    fn placedRow(self: *Sidebar, r: *const RowData, multi: bool, theme: *const Theme, prefs: *const prefs_mod.Prefs, cx: *Context(Sidebar)) zpui.AnyElement {
+    fn placedRow(self: *Sidebar, r: *const RowData, multi: bool, slot: sections_ui.Slot, theme: *const Theme, prefs: *const prefs_mod.Prefs, cx: *Context(Sidebar)) zpui.AnyElement {
         const h = rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null);
         const row = self.activeRow(r, h, null, theme, prefs, cx);
-        if (sections_ui.isMoving(self, r.chat.id)) return sections_ui.sourceSlot(self, h, if (multi) list_gap else 0);
-        return zpui.intoAnyElement(row);
+        if (sections_ui.isMoving(self, r.chat.id)) {
+            sections_ui.noteSource(self, slot);
+            return sections_ui.sourceSlot(self, h, if (multi) list_gap else 0);
+        }
+        // Destination siblings slide apart around the insertion point.
+        return sections_ui.placeRow(self, self.resortRow(r.chat.id, zpui.intoAnyElement(row)), slot, cx);
     }
 
     /// `renderRow` + the session drag (`SidebarSessionDrag`); stashes the
@@ -1109,16 +1251,21 @@ pub const Sidebar = struct {
                         .child(icon.of(.plus, 13, tone))
                 else
                     null)
-                .child(icon.of(if (open) .alt_arrow_down else .alt_arrow_right, 12, tone));
+                .child(sections_ui.headerChevron(self, groupMotionId(g.key), open, tone, cx.app.executor.now()));
             var sec = div().flex().flexCol().pt(px(if (follows or gi > 0) section_gap else 0)).child(header);
-            if (open) {
+            const motion_id = groupMotionId(g.key);
+            const now_ns = cx.app.executor.now();
+            if (open or sections_ui.disclosureAnimating(self, motion_id, now_ns)) {
                 var body = div().flex().flexCol().gap(px(list_gap)).pt(px(disclosure_body_inset));
-                for (g.rows.items) |r| {
+                var body_h: f32 = disclosure_body_inset;
+                for (g.rows.items, 0..) |r, ri| {
+                    body_h += rowHeight(prefs.sidebar_compact, prefs.show_project_label, r.branch != null, r.pr != null) + (if (ri > 0) list_gap else 0);
                     any_working.* = any_working.* or r.status == .working;
-                    body = body.child(self.placedRow(r, g.rows.items.len > 1, theme, prefs, cx));
+                    body = body.child(self.placedRow(r, g.rows.items.len > 1, .{ .target = .regular, .group = @intCast(gi), .index = @intCast(ri) }, theme, prefs, cx));
                 }
-                body = body.child(sections_ui.extraGap(self, .regular));
-                sec = sec.child(body);
+                body = body.child(sections_ui.extraGapIn(self, .regular, @intCast(gi)));
+                sections_ui.noteHeight(self, motion_id, body_h);
+                sec = sec.child(sections_ui.disclosureBody(self, motion_id, body_h, body, now_ns));
             }
             out = out.child(sec);
         }
@@ -1144,6 +1291,8 @@ pub const Sidebar = struct {
     fn toggleGroup(self: *Sidebar, gi: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
         if (gi >= self.group_keys.items.len) return;
         const key = self.group_keys.items[gi];
+        var id_buf: [256]u8 = undefined;
+        if (std.fmt.bufPrint(&id_buf, "group:{s}", .{key})) |id| sections_ui.toggleMotion(self, id, !self.isCollapsed(key), cx) else |_| {}
         for (self.collapsed_groups.items, 0..) |k, i| if (std.mem.eql(u8, k, key)) {
             self.gpa.free(self.collapsed_groups.orderedRemove(i));
             cx.notify();
@@ -1153,8 +1302,22 @@ pub const Sidebar = struct {
         cx.notify();
     }
 
+    /// [motion] A project / device group's disclosure motion key
+    /// (`group:{collapse_key}`), in the frame arena.
+    fn groupMotionId(key: []const u8) []const u8 {
+        return zpui.fmt("group:{s}", .{key});
+    }
+
+    /// [motion] The disclosure motion key of a built-in group header.
+    fn disclosureId(which: u8) []const u8 {
+        return switch (which) {
+            0 => "pinned",
+            1 => "sessions",
+            else => "archived",
+        };
+    }
+
     fn sectionHeader(self: *Sidebar, which: u8, label: []const u8, open: bool, theme: *const Theme, cx: *Context(Sidebar)) zpui.StatefulDiv {
-        _ = self;
         const tone = theme.text_muted.opacity(0.5);
         return div().id(.{ "sidebar-disclosure", which }).role(.button).ariaLabel(label).ariaExpanded(open)
             .flex().flexRow().itemsCenter().gap(px(8))
@@ -1163,7 +1326,7 @@ pub const Sidebar = struct {
             .onClick(cx.listenerWith(which, Sidebar.toggleSection))
             .child(div().textSize(rems(12)).fontWeight(500).textColor(tone).whitespaceNowrap().child(label))
             .child(div().flex1())
-            .child(icon.of(if (open) .alt_arrow_down else .alt_arrow_right, 12, tone));
+            .child(sections_ui.headerChevron(self, disclosureId(which), open, tone, cx.app.executor.now()));
     }
 
     /// [pr-status] The live PR for a chat's checkout (`change_request_for_chat`).
@@ -1647,4 +1810,82 @@ test "pinned drop index and reorder" {
     movePin(&ids, 3, 0);
     try std.testing.expectEqualStrings("d", ids[0]);
     try std.testing.expectEqualStrings("a", ids[3]);
+}
+
+
+// ---- [motion] resort glide (`resort_offsets`, `sidebar_key_order_changed`) ----------------
+
+/// `RESORT`: 260 ms `cubic-bezier(0.22, 1, 0.36, 1)` (§1.6 View Transitions).
+pub const resort_spec: zt.motion.MotionSpec = .init(260, zt.motion.ease_resort);
+
+pub const ResortItem = struct { key: []const u8, height: f32 };
+
+fn containsKey(items: []const ResortItem, key: []const u8) bool {
+    for (items) |it| if (std.mem.eql(u8, it.key, key)) return true;
+    return false;
+}
+
+fn resortSame(a: []const ResortItem, b: []const ResortItem) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (!std.mem.eql(u8, x.key, y.key) or x.height != y.height) return false;
+    return true;
+}
+
+/// Height changes do not constitute a reorder (disclosures animate their own).
+pub fn keyOrderChanged(old: []const ResortItem, new: []const ResortItem) bool {
+    if (old.len != new.len) return true;
+    for (old, new) |a, b| if (!std.mem.eql(u8, a.key, b.key)) return true;
+    return false;
+}
+
+/// `resort_offsets`: old y − new y for every surviving key that moved more
+/// than half a pixel (returned as `{key, dy}` in `height`).
+pub fn resortOffsets(a: std.mem.Allocator, old: []const ResortItem, new: []const ResortItem, gap: f32) ![]ResortItem {
+    var out: std.ArrayList(ResortItem) = .empty;
+    var y: f32 = 0;
+    for (new) |n| {
+        var oy: f32 = 0;
+        const prev: ?f32 = for (old) |o| {
+            if (std.mem.eql(u8, o.key, n.key)) break oy;
+            oy += o.height + gap;
+        } else null;
+        if (prev) |p| if (@abs(p - y) > 0.5) try out.append(a, .{ .key = n.key, .height = p - y });
+        y += n.height + gap;
+    }
+    return out.items;
+}
+
+test "resort offsets match shell.rs" {
+    const a = std.testing.allocator;
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const aa = arena.allocator();
+    const K = ResortItem;
+    const same = [_]K{ .{ .key = "a", .height = 29 }, .{ .key = "b", .height = 29 }, .{ .key = "c", .height = 45 } };
+    try std.testing.expectEqual(@as(usize, 0), (try resortOffsets(aa, &same, &same, 2)).len);
+    // c jumps to the top: +62; a and b shift down by 31.
+    const old1 = [_]K{ .{ .key = "a", .height = 29 }, .{ .key = "b", .height = 29 }, .{ .key = "c", .height = 29 } };
+    const new1 = [_]K{ .{ .key = "c", .height = 29 }, .{ .key = "a", .height = 29 }, .{ .key = "b", .height = 29 } };
+    const o1 = try resortOffsets(aa, &old1, &new1, 2);
+    try std.testing.expectEqual(@as(usize, 3), o1.len);
+    try std.testing.expectEqualStrings("c", o1[0].key);
+    try std.testing.expectEqual(@as(f32, 62), o1[0].height);
+    try std.testing.expectEqual(@as(f32, -31), o1[1].height);
+    try std.testing.expectEqual(@as(f32, -31), o1[2].height);
+    // Heights and gap respected.
+    const old2 = [_]K{ .{ .key = "tall", .height = 45 }, .{ .key = "short", .height = 29 } };
+    const new2 = [_]K{ .{ .key = "short", .height = 29 }, .{ .key = "tall", .height = 45 } };
+    const o2 = try resortOffsets(aa, &old2, &new2, 2);
+    try std.testing.expectEqual(@as(f32, 47), o2[0].height);
+    try std.testing.expectEqual(@as(f32, -31), o2[1].height);
+    // Added / removed keys get no offset.
+    const old3 = [_]K{ .{ .key = "a", .height = 29 }, .{ .key = "gone", .height = 29 }, .{ .key = "b", .height = 29 } };
+    const new3 = [_]K{ .{ .key = "new", .height = 29 }, .{ .key = "a", .height = 29 }, .{ .key = "b", .height = 29 } };
+    const o3 = try resortOffsets(aa, &old3, &new3, 2);
+    try std.testing.expectEqual(@as(usize, 1), o3.len);
+    try std.testing.expectEqualStrings("a", o3[0].key);
+    try std.testing.expectEqual(@as(f32, -31), o3[0].height);
+    try std.testing.expect(keyOrderChanged(&old1, &new1));
+    try std.testing.expect(!keyOrderChanged(&old1, &old1));
+    try std.testing.expectEqual(@as(u64, 260), resort_spec.duration_ms);
 }

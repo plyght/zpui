@@ -54,6 +54,31 @@ pub const stick_threshold_px: f32 = 70;
 pub const overdraw_px: f32 = 320;
 pub const user_collapsed_lines: usize = 5;
 pub const user_line_height: f32 = 22;
+
+/// One user message's open/close resize (`FoldState` for user rows).
+pub const UserFold = struct {
+    from: f32 = 0,
+    epoch: u64 = 0,
+    toggled_at: u64 = 0,
+    duration_ms: u64 = 0,
+};
+
+/// Collapsed endpoint incl. the continuation line (so removing "..." on
+/// expansion does not jump a line).
+pub fn userCollapsedHeight() f32 {
+    return @as(f32, @floatFromInt(user_collapsed_lines)) * user_line_height + user_line_height;
+}
+
+/// `user_resize_duration_ms`: 220 ms + 0.32 ms/px, capped at 850 ms.
+pub fn userResizeDurationMs(height_delta: f32) u64 {
+    return @intFromFloat(@round(@min(220.0 + @max(height_delta, 0) * 0.32, 850.0)));
+}
+
+/// `user_resize_spec`: short folds ease-out; > 500 px ease-in-out.
+pub fn userResizeSpec(height_delta: f32) zt.motion.MotionSpec {
+    const curve = if (height_delta > 500) zt.motion.ease_in_out else zt.motion.ease_out;
+    return .init(userResizeDurationMs(height_delta), curve);
+}
 pub const user_collapse_chars: usize = 400;
 pub const att_thumb_w: f32 = 112;
 pub const att_thumb_h: f32 = 80;
@@ -98,6 +123,10 @@ pub const TranscriptView = struct {
     folds: std.AutoHashMapUnmanaged(u64, tools.Fold) = .empty,
     details: std.AutoHashMapUnmanaged(u64, tools.Fold) = .empty,
     user_expanded: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    /// [motion] Long user messages: measured full text height cells (heap,
+    /// written by a paint probe) and the running open/close resize tween.
+    user_heights: std.AutoHashMapUnmanaged(u64, *f32) = .empty,
+    user_folds: std.AutoHashMapUnmanaged(u64, UserFold) = .empty,
     /// Row key → entrance start (ns) for rows that arrived live.
     entrance: std.AutoHashMapUnmanaged(u64, u64) = .empty,
     hovered_entry: u64 = 0,
@@ -152,6 +181,11 @@ pub const TranscriptView = struct {
     /// Pending close-sweep timer for a compact fold (drops the body rows once
     /// the close tween ends).
     compact_settle: zpui.Task(void) = .none,
+    /// [motion] The rail's scroll-to-row glide (`scroll_to_row`,
+    /// SCROLL_GLIDE 500 ms ease-in-out): 16 ms ticks re-aim at the row's
+    /// live offset, so the landing is exact once the row is measured.
+    rail_glide: ?struct { row: usize, from: f32, start_ns: u64 } = null,
+    rail_glide_task: zpui.Task(void) = .none,
 
     /// Streaming fade veils, one per live markdown row (dropped on the
     /// live→complete flip).
@@ -204,10 +238,14 @@ pub const TranscriptView = struct {
         self.compact_worked_fade_at.deinit(self.gpa);
         self.compact_last_elapsed.deinit(self.gpa);
         self.compact_settle.cancel();
+        self.rail_glide_task.cancel();
         self.clearVeils();
         self.veils.deinit(self.gpa);
         self.veil_baseline.deinit(self.gpa);
         self.user_expanded.deinit(self.gpa);
+        self.clearUserHeights();
+        self.user_heights.deinit(self.gpa);
+        self.user_folds.deinit(self.gpa);
         self.entrance.deinit(self.gpa);
         self.list.release();
         self.blobs.deinit(self.gpa); // [wiring]
@@ -491,6 +529,8 @@ pub const TranscriptView = struct {
         self.veil_attach_pending = true;
         self.entrance.clearRetainingCapacity();
         self.user_expanded.clearRetainingCapacity();
+        self.clearUserHeights();
+        self.user_folds.clearRetainingCapacity();
         self.synced_revision = null;
         self.loaded = false;
         self.list.reset(0);
@@ -709,7 +749,7 @@ pub const TranscriptView = struct {
         const fold = self.folds.get(key) orelse return false;
         if (fold.open orelse false) return true;
         const at = fold.toggled_at orelse return false;
-        return now_ns -| at < fold_tween_window_ns;
+        return now_ns -| at < zt.motion.scaledNs(fold_tween_window_ns);
     }
 
     /// `compact_body_height`: the fold's animated body budget.
@@ -776,7 +816,7 @@ pub const TranscriptView = struct {
         self.compact_settle.cancel();
         self.compact_settle = .none;
         if (!now_open and !reduced) {
-            self.compact_settle = cx.timer(fold_tween_window_ns + 50 * std.time.ns_per_ms, onCompactSettle) catch .none;
+            self.compact_settle = cx.timer(zt.motion.scaledNs(fold_tween_window_ns) + 50 * std.time.ns_per_ms, onCompactSettle) catch .none;
         }
         cx.notify();
     }
@@ -862,11 +902,49 @@ pub const TranscriptView = struct {
         cx.notify();
     }
 
-    fn onToggleUser(self: *TranscriptView, key: u64, _: *const zpui.ClickEvent, _: *Window, cx: *Context(TranscriptView)) void {
-        if (self.user_expanded.contains(key)) _ = self.user_expanded.remove(key) else self.user_expanded.put(self.gpa, key, {}) catch {};
+    fn onToggleUser(self: *TranscriptView, key: u64, _: *const zpui.ClickEvent, window: *Window, cx: *Context(TranscriptView)) void {
+        const was_open = self.user_expanded.contains(key);
+        if (was_open) _ = self.user_expanded.remove(key) else self.user_expanded.put(self.gpa, key, {}) catch {};
+        // `toggle_user_fold`: tween from the current endpoint, over a span
+        // that scales with the travel (`user_resize_duration_ms`).
+        if (!window.prefersReducedMotion()) {
+            const collapsed_h = userCollapsedHeight();
+            const full_h = @max(if (self.user_heights.get(key)) |c| c.* else 0, collapsed_h);
+            const prev = self.user_folds.get(key) orelse UserFold{};
+            self.user_folds.put(self.gpa, key, .{
+                .from = if (was_open) full_h else collapsed_h,
+                .epoch = prev.epoch +% 1,
+                .toggled_at = cx.app.executor.now(),
+                .duration_ms = userResizeDurationMs(full_h - collapsed_h),
+            }) catch {};
+        }
         self.remeasureKey(key);
         cx.notify();
     }
+
+    fn clearUserHeights(self: *TranscriptView) void {
+        var it = self.user_heights.valueIterator();
+        while (it.next()) |c| self.gpa.destroy(c.*);
+        self.user_heights.clearRetainingCapacity();
+    }
+
+    /// The measured-height cell for a user message (created on first use).
+    fn userHeightCell(self: *TranscriptView, key: u64) ?*f32 {
+        if (self.user_heights.get(key)) |c| return c;
+        const c = self.gpa.create(f32) catch return null;
+        c.* = 0;
+        self.user_heights.put(self.gpa, key, c) catch {
+            self.gpa.destroy(c);
+            return null;
+        };
+        return c;
+    }
+
+    fn measureUserText(cell: *f32, bounds: zpui.Bounds(f32), _: *Window, _: *App) void {
+        cell.* = bounds.size.height;
+    }
+
+    fn noUserPaint(_: *f32, _: zpui.Bounds(f32), _: *Window, _: *App) void {}
 
     fn onRowHover(self: *TranscriptView, keys: [2]u64, hovered: *const bool, _: *Window, cx: *Context(TranscriptView)) void {
         if (hovered.*) {
@@ -918,9 +996,38 @@ pub const TranscriptView = struct {
         cx.notify();
     }
 
-    fn onRailClick(self: *TranscriptView, row_ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(TranscriptView)) void {
-        self.list.scrollTo(.{ .item_ix = row_ix, .offset_in_item = 0 });
+    fn onRailClick(self: *TranscriptView, row_ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(TranscriptView)) void {
+        self.rail_glide_task.cancel();
+        self.rail_glide_task = .none;
+        self.rail_glide = null;
+        if (window.prefersReducedMotion()) {
+            self.list.scrollTo(.{ .item_ix = row_ix, .offset_in_item = 0 });
+            cx.notify();
+            return;
+        }
+        self.list.setFollowMode(.normal);
+        self.rail_glide = .{ .row = row_ix, .from = self.list.scrollPxOffsetForScrollbar().y * -1, .start_ns = cx.app.executor.now() };
+        self.railGlideTick(cx);
+    }
+
+    fn railGlideTick(self: *TranscriptView, cx: *Context(TranscriptView)) void {
+        self.rail_glide_task = .none;
+        const g = self.rail_glide orelse return;
+        const total = zt.motion.scroll_glide.totalNs(1.0);
+        const elapsed = cx.app.executor.now() -| g.start_ns;
+        if (elapsed >= total or g.row >= self.list.itemCount()) {
+            self.rail_glide = null;
+            if (g.row < self.list.itemCount()) self.list.scrollTo(.{ .item_ix = g.row, .offset_in_item = 0 });
+            cx.notify();
+            return;
+        }
+        const raw: f32 = @floatCast(@as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(total)));
+        const target = self.list.offsetForItem(g.row);
+        const want = zt.motion.lerp(g.from, target, zt.motion.scroll_glide.progress(raw));
+        const current = -self.list.scrollPxOffsetForScrollbar().y;
+        self.list.scrollBy(want - current);
         cx.notify();
+        self.rail_glide_task = cx.timer(16 * std.time.ns_per_ms, railGlideTick) catch .none;
     }
 
     // ---- render --------------------------------------------------------------------
@@ -1002,8 +1109,15 @@ pub const TranscriptView = struct {
         // docked composer; the shell's clearance = pill stack + 64).
         const bottom = @max(self.bottom_clearance - 18, 12);
         // Frosted like the composer pill (one scene layer: blur, then the pill).
+        // Frost OUTSIDE the entrance (Rust: `frosted(15, MENU_BLUR, dialog_in(anim_key, pill))`).
         return div().absolute().left(px(0)).right(px(10)).bottom(px(bottom)).flex().justifyCenter()
-            .child(zpui.frosted(15, layout.menu_blur, pill));
+            .child(zpui.frosted(15, layout.menu_blur, zpui.withAnimation(pill, "jump-to-bottom-in", zt.motion.dialog_in.animation(), jumpInFrame)));
+    }
+
+    /// `motion::dialog_in` on the jump pill (opacity 0→1, 2px rise, 180 ms).
+    fn jumpInFrame(el: zpui.StatefulDiv, t: f32) zpui.StatefulDiv {
+        const f = zt.motion.dialogInFrame(t);
+        return el.relative().opacity(f.opacity).top(px(f.offset_y));
     }
 
     // ---- [wiring] sidecar blobs ------------------------------------------------------
@@ -1142,7 +1256,12 @@ pub const TranscriptView = struct {
                 .onClick(cx.listenerWith(entry_key, onCopyMessage))
                 .child(md.icon(if (copied) .check else .copy, 14, theme.text_muted)));
         }
-        return strip.child(meta);
+        // `meta-{row}`: the revealed metadata fades in (FADE_QUICK).
+        return strip.child(zpui.withAnimation(meta, .{ "meta", entry_key }, zt.motion.fade_quick.animation(), metaFade));
+    }
+
+    fn metaFade(el: zpui.Div, t: f32) zpui.Div {
+        return el.opacity(t);
     }
 
     fn renderUser(self: *TranscriptView, row: *const Row, theme: *const Theme, window: *Window, cx: *Context(TranscriptView)) AnyElement {
@@ -1162,10 +1281,36 @@ pub const TranscriptView = struct {
             const collapsible = userNeedsCollapse(u.text);
             const expanded = self.user_expanded.contains(row.key);
             const flat = md.flatten(&.{.{ .text = u.text }}, theme, 400, theme.text);
-            var text_el = div().child(md.flatElement(flat, row.key ^ 0x55E7, .{ .theme = theme, .key = row.key }));
+            var text_el = div().relative().child(md.flatElement(flat, row.key ^ 0x55E7, .{ .theme = theme, .key = row.key }));
+            // The full text stays laid out behind the clip; a probe records its height.
+            if (collapsible) if (self.userHeightCell(row.key)) |cell| {
+                text_el = text_el.child(zpui.canvas(cell, noUserPaint).withPrepaint(*f32, measureUserText).absolute().inset0());
+            };
             var body = div().relative();
-            if (collapsible and !expanded) {
-                text_el = div().h(px(@as(f32, @floatFromInt(user_collapsed_lines)) * user_line_height)).overflowHidden().child(text_el);
+            const collapsed_text_h = @as(f32, @floatFromInt(user_collapsed_lines)) * user_line_height;
+            // [motion] `{row}-user-resize-{epoch}`: the clip height glides
+            // between the collapsed and full heights (incl. the "..." line).
+            const fold = self.user_folds.get(row.key);
+            const now = cx.app.executor.now();
+            const collapsed_h = userCollapsedHeight();
+            const full_h = @max(if (self.user_heights.get(row.key)) |c| c.* else 0, collapsed_h);
+            const animating = collapsible and !window.prefersReducedMotion() and if (fold) |f|
+                now -| f.toggled_at < zt.motion.scaledNs((@max(f.duration_ms, userResizeDurationMs(full_h - collapsed_h)) + 200) * std.time.ns_per_ms)
+            else
+                false;
+            if (animating) {
+                const f = fold.?;
+                const to = if (expanded) full_h else collapsed_h;
+                const ellipsis_h: f32 = if (expanded) 0 else user_line_height;
+                const spec = userResizeSpec(full_h - collapsed_h);
+                const raw = @as(f32, @floatFromInt(now -| f.toggled_at)) / @as(f32, @floatFromInt(@max(spec.totalNs(1.0), 1)));
+                const h = @max(zt.motion.lerp(f.from, to, spec.progress(raw)) - ellipsis_h, 0);
+                if (raw < 1) window.requestAnimationFrame();
+                text_el = div().h(px(h)).overflowHidden().child(text_el);
+                body = body.child(text_el);
+                if (!expanded) body = body.child(div().h(px(user_line_height)).child("..."));
+            } else if (collapsible and !expanded) {
+                text_el = div().h(px(collapsed_text_h)).overflowHidden().child(text_el);
                 body = body.child(text_el).child(div().h(px(user_line_height)).child("..."));
             } else body = body.child(text_el);
             if (collapsible) {

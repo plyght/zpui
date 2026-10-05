@@ -167,6 +167,8 @@ fn onLaunch(l: *Launch, app: *App) void {
         .surface = .frosted,
     });
     ui.theme.install(app, theme) catch @panic("theme");
+    // [motion] ZERON_MOTION_SCALE: stretch every motion timeline (measurement knob).
+    zt.motion.speed_scale = zt.motion.parseSpeedScale(l.environ.get("ZERON_MOTION_SCALE"));
     // [liquid-glass] ZERON_LIQUID_GLASS=1: Liquid Glass for this run (not persisted);
     // unsupported systems (Linux, macOS < 26) keep the frosted look. The line below is
     // what CI greps to prove the fallback path ran.
@@ -444,6 +446,7 @@ test {
     _ = @import("ui/shell/harness_updates_test.zig");
     _ = @import("ui/shell/sidebar_sync_parity_test.zig");
     _ = @import("ui/shell/sidebar_sync_test.zig");
+    _ = @import("ui/shell/dock.zig"); // [motion] composer route choreography (parity)
     _ = @import("ui/settings/root.zig");
     _ = @import("ui/background/root.zig");
     _ = @import("ui/pickers/root.zig");

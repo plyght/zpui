@@ -13,6 +13,18 @@ const zpui = @import("zpui");
 const Hsla = zpui.Hsla;
 const Rgba = zpui.Rgba;
 
+/// Dev/measurement knob `ZERON_MOTION_SCALE` (`motion::speed_scale`, default
+/// 1): stretches every catalog timeline (`MotionSpec.totalNs`, `animation`,
+/// hover fades, the hand-driven tweens) by this factor. Set once at startup
+/// from the environment (`parseSpeedScale`); never changed in production.
+pub var speed_scale: f32 = 1.0;
+
+/// Seconds/nanoseconds helper for hand-driven tweens with their own spans:
+/// `span_ns` stretched by `speed_scale`.
+pub fn scaledNs(span_ns: u64) u64 {
+    return @intFromFloat(@as(f64, @floatFromInt(span_ns)) * speed_scale);
+}
+
 /// A CSS `cubic-bezier(x1, y1, x2, y2)` timing function with endpoints fixed
 /// at (0,0) and (1,1). Solves x(t) = input by Newton iteration with a bisection
 /// fallback (the standard UnitBezier approach).
@@ -112,9 +124,18 @@ pub const MotionSpec = struct {
         return self.delay_ms + self.duration_ms;
     }
 
-    /// Timeline span in nanoseconds, stretched by `speed_scale`.
-    pub fn totalNs(self: MotionSpec, speed_scale: f32) u64 {
-        return @intFromFloat(@as(f64, @floatFromInt(self.totalMs())) * std.time.ns_per_ms * speed_scale);
+    /// Timeline span in nanoseconds, stretched by `extra_scale` and the
+    /// process-wide `ZERON_MOTION_SCALE` knob (`speed_scale`).
+    pub fn totalNs(self: MotionSpec, extra_scale: f32) u64 {
+        return @intFromFloat(@as(f64, @floatFromInt(self.totalMs())) * std.time.ns_per_ms * extra_scale * speed_scale);
+    }
+
+    /// The oneshot `zpui.Animation` for this spec (`MotionSpec::animation`):
+    /// scaled span, this curve. Delayed specs fold the delay into the span
+    /// via `progress` at the call site (only the splash has one).
+    pub fn animation(self: MotionSpec) zpui.Animation {
+        std.debug.assert(self.delay_ms == 0);
+        return zpui.Animation.init(self.totalNs(1.0)).withEasing(.{ .cubic_bezier = .init(self.curve.x1, self.curve.y1, self.curve.x2, self.curve.y2) });
     }
 
     /// Eased progress (0..1) for a raw timeline delta (0..1 across the total span).
@@ -127,8 +148,8 @@ pub const MotionSpec = struct {
     }
 
     /// Eased progress after `elapsed_ns` of wall time.
-    pub fn progressAt(self: MotionSpec, elapsed_ns: u64, speed_scale: f32) f32 {
-        const total = self.totalNs(speed_scale);
+    pub fn progressAt(self: MotionSpec, elapsed_ns: u64, extra_scale: f32) f32 {
+        const total = self.totalNs(extra_scale);
         if (total == 0) return 1.0;
         return self.progress(@floatCast(@as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(total))));
     }
@@ -144,6 +165,32 @@ pub const MotionSpec = struct {
         const total = self.totalMs() * std.time.ns_per_ms;
         if (total == 0) return 0;
         return @floatCast(@as(f64, @floatFromInt(elapsed_ns % total)) / @as(f64, @floatFromInt(total)));
+    }
+};
+
+/// A manually driven tween (zeron `WidthTween` evaluated by
+/// `Shell::eval_tween`): `from → to` over `spec` from `start_ns`, never
+/// through an element-keyed animation, so a remount can't replay it.
+pub const Tween = struct {
+    from: f32,
+    to: f32,
+    start_ns: u64,
+
+    /// `eval_tween`: mid-flight the eased lerp; finished, absent or under
+    /// reduced motion exactly `target`.
+    pub fn eval(tween: ?Tween, target: f32, now_ns: u64, spec: MotionSpec, reduced: bool) f32 {
+        const t = tween orelse return target;
+        if (reduced) return target;
+        const total = spec.totalNs(1.0);
+        const elapsed = now_ns -| t.start_ns;
+        if (total == 0 or elapsed >= total) return target;
+        return lerp(t.from, t.to, spec.progress(@floatCast(@as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(total)))));
+    }
+
+    /// `tween_active`: still moving (keep frames coming).
+    pub fn active(tween: ?Tween, now_ns: u64, spec: MotionSpec, reduced: bool) bool {
+        const t = tween orelse return false;
+        return !reduced and now_ns -| t.start_ns < spec.totalNs(1.0);
     }
 };
 
@@ -396,13 +443,14 @@ pub const HoverFades = struct {
 
         fn value(e: Entry, now: u64, duration: u64) f32 {
             const elapsed = now -| e.started;
-            if (duration == 0 or elapsed >= duration) return e.target;
-            const raw: f32 = @floatCast(@as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(duration)));
+            const span = scaledNs(duration);
+            if (span == 0 or elapsed >= span) return e.target;
+            const raw: f32 = @floatCast(@as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(span)));
             return lerp(e.origin, e.target, hover_fade.curve.eval(raw));
         }
 
         fn settled(e: Entry, now: u64, duration: u64) bool {
-            return e.origin == e.target or now -| e.started >= duration;
+            return e.origin == e.target or now -| e.started >= scaledNs(duration);
         }
     };
 
@@ -602,6 +650,24 @@ test "hover fades" {
     _ = fades.tick(gpa, 0);
     _ = fades.tick(gpa, 0);
     try testing.expectEqual(@as(usize, 0), fades.entries.count());
+}
+
+test "manual tween" {
+    const ms = std.time.ns_per_ms;
+    const tw: Tween = .{ .from = 0, .to = 300, .start_ns = 1000 * ms };
+    try testing.expectEqual(@as(f32, 300), Tween.eval(null, 300, 0, resize, false));
+    try testing.expectEqual(@as(f32, 0), Tween.eval(tw, 300, 1000 * ms, resize, false));
+    const mid = Tween.eval(tw, 300, 1100 * ms, resize, false);
+    try testing.expect(mid > 150 and mid < 300); // ease-out: past halfway at half time
+    try testing.expectEqual(@as(f32, 300), Tween.eval(tw, 300, 1100 * ms, resize, true));
+    try testing.expectEqual(@as(f32, 300), Tween.eval(tw, 300, 1200 * ms, resize, false));
+    try testing.expect(Tween.active(tw, 1199 * ms, resize, false));
+    try testing.expect(!Tween.active(tw, 1200 * ms, resize, false));
+    // ZERON_MOTION_SCALE stretches the span.
+    speed_scale = 10;
+    defer speed_scale = 1;
+    try testing.expect(Tween.active(tw, 2900 * ms, resize, false));
+    try testing.expect(Tween.eval(tw, 300, 1200 * ms, resize, false) < 300);
 }
 
 test "reduced motion resolution" {

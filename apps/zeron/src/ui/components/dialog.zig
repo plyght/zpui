@@ -70,6 +70,7 @@ pub fn modal(window: *zpui.Window, content: zpui.Div, on_scrim: anytype) zpui.An
     return zpui.intoAnyElement(zpui.deferred(zpui.anchored().position(.{ .x = 0, .y = 0 }).child(
         div().occlude().w(px(vp.width)).h(px(vp.height)).bg(zpui.color.black.alpha(0.35))
             .flex().itemsCenter().justifyCenter()
-            .child(anim.menuIn("dialog-in", div().onMouseDownOut(on_scrim).child(div().id("zeron-dialog").role(.dialog).child(framed)), 2)),
+            // `popover::modal`: DIALOG_IN (180 ms ease, opacity 0→1, 2px rise).
+            .child(anim.dialogIn("dialog-in", div().onMouseDownOut(on_scrim).child(div().id("zeron-dialog").role(.dialog).child(framed)))),
     )).withPriority(3));
 }

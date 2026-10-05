@@ -133,6 +133,11 @@ pub const HistoryPane = struct {
 
     search: ?Entity(input.TextInput) = null,
     search_sub: ?zpui.Subscription = null,
+    /// [motion] The search control's width morph (`history-search-morph`,
+    /// RESIZE): bumps per open/close; `search_closing` while it collapses.
+    search_epoch: u64 = 0,
+    search_closing: bool = false,
+    search_close_task: Task(void) = .none,
     show_author: bool = true,
     show_date: bool = true,
     show_sha: bool = true,
@@ -176,6 +181,7 @@ pub const HistoryPane = struct {
     pub fn deinit(self: *HistoryPane, app: *App) void {
         self.subs.deinit(self.gpa);
         self.copy_task.cancel();
+        self.search_close_task.cancel();
         if (self.copied_sha) |s| self.gpa.free(s);
         var it = self.collapsed.keyIterator();
         while (it.next()) |k| self.gpa.free(k.*);
@@ -376,7 +382,20 @@ pub const HistoryPane = struct {
 
     fn onSearchOpen(self: *HistoryPane, _: *const zpui.ClickEvent, window: *Window, cx: *Context(HistoryPane)) void {
         cx.stopPropagation();
-        if (self.search != null) return;
+        if (self.search != null) {
+            // Reopened mid-collapse: morph back out from the trigger.
+            if (self.search_closing) {
+                self.search_close_task.cancel();
+                self.search_close_task = .none;
+                self.search_closing = false;
+                self.search_epoch +%= 1;
+                window.focus(self.search.?.read(cx).focusHandle());
+                cx.notify();
+            }
+            return;
+        }
+        self.search_epoch +%= 1;
+        self.search_closing = false;
         const theme = ui.theme.get(cx);
         const search = cx.newWith(input.TextInput, input.TextInput.init, .{input.Options{
             .placeholder = "Search commits",
@@ -399,10 +418,37 @@ pub const HistoryPane = struct {
         self.search = null;
     }
 
-    fn onSearchClose(self: *HistoryPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(HistoryPane)) void {
+    fn onSearchClose(self: *HistoryPane, _: *const zpui.ClickEvent, window: *Window, cx: *Context(HistoryPane)) void {
         cx.stopPropagation();
-        self.closeSearch(cx.app);
         self.store.update(cx, HistoryStore.setSearch, .{""});
+        self.beginCollapse(window.prefersReducedMotion(), cx);
+    }
+
+    /// `begin_collapse`: the expanded control morphs back to the 24 px
+    /// trigger over RESIZE, then unmounts its input.
+    fn beginCollapse(self: *HistoryPane, reduced: bool, cx: *Context(HistoryPane)) void {
+        if (self.search == null or self.search_closing) return;
+        if (reduced) {
+            self.closeSearch(cx.app);
+            cx.notify();
+            return;
+        }
+        self.search_closing = true;
+        self.search_epoch +%= 1;
+        self.search_close_task.cancel();
+        self.search_close_task = cx.timer(zt.motion.resize.totalNs(1.0), onSearchCollapsed) catch blk: {
+            self.closeSearch(cx.app);
+            break :blk .none;
+        };
+        cx.notify();
+    }
+
+    fn onSearchCollapsed(self: *HistoryPane, cx: *Context(HistoryPane)) void {
+        self.search_close_task.detach();
+        self.search_close_task = .none;
+        if (!self.search_closing) return;
+        self.search_closing = false;
+        self.closeSearch(cx.app);
         cx.notify();
     }
 
@@ -413,9 +459,9 @@ pub const HistoryPane = struct {
                 self.store.update(cx, HistoryStore.setSearch, .{q});
             },
             .escape => {
-                self.closeSearch(cx.app);
                 self.store.update(cx, HistoryStore.setSearch, .{""});
-                cx.notify();
+                const reduced = if (cx.app.windows.items.len > 0) (if (cx.app.windows.items[0]) |w| w.prefersReducedMotion() else false) else false;
+                self.beginCollapse(reduced, cx);
             },
             else => {},
         }
@@ -559,15 +605,15 @@ pub const HistoryPane = struct {
             .child(zpui.containerQuery(q, CountQuery.render));
     }
 
-    fn searchControl(self: *HistoryPane, theme: *const Theme, window: *Window, cx: *Context(HistoryPane)) zpui.StatefulDiv {
-        const search = self.search orelse return headerButtonTinted("history-search-trigger", .magnifer, "Search commits", theme.text_muted, theme, cx)
-            .onClick(cx.listener(onSearchOpen));
+    fn searchControl(self: *HistoryPane, theme: *const Theme, window: *Window, cx: *Context(HistoryPane)) AnyElement {
+        const search = self.search orelse return zpui.intoAnyElement(headerButtonTinted("history-search-trigger", .magnifer, "Search commits", theme.text_muted, theme, cx)
+            .onClick(cx.listener(onSearchOpen)));
         const st = self.store.read(cx);
         const status: AnyElement = if (st.search_loading) blk: {
             window.requestAnimationFrame();
             break :blk zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(1.5, theme.glyph.rows(), ui.loaders.phaseOf(cx, zt.motion.gradient_spin)));
         } else zpui.intoAnyElement(ui.icon.of(.magnifer, 11, theme.text_faint));
-        return div().id("history-search-expanded").h(px(control_size)).w(px(graph.search_width)).minW(px(80)).flexShrink(1)
+        const control = div().id("history-search-expanded").h(px(control_size)).w(px(graph.search_width)).minW(px(80)).flexShrink(1)
             .overflowHidden().flex().itemsCenter().gap(px(6)).pl(px(edge_inset)).pr(px(2))
             .rounded(px(control_radius)).bg(theme.ink(0.035))
             .child(div().size(px(14)).flexNone().flex().itemsCenter().justifyCenter().child(status))
@@ -578,6 +624,14 @@ pub const HistoryPane = struct {
                 .onClick(cx.listener(onSearchClose))
                 .tooltipWith(@as([]const u8, "Close search"), ui.tooltip.build)
                 .child(ui.icon.of(.close, 9, theme.text_faint)));
+        // `history-search-morph-{epoch}-{in|out}`: width 24 ↔ full, opacity .45 ↔ 1.
+        const Morph = struct {
+            fn f(closing: bool, el: zpui.StatefulDiv, t: f32) zpui.StatefulDiv {
+                const amount = if (closing) 1 - t else t;
+                return el.w(px(24 + (graph.search_width - 24) * amount)).opacity(0.45 + 0.55 * amount);
+            }
+        };
+        return zpui.intoAnyElement(zpui.withAnimationCtx(control, .{ "history-search-morph", self.search_epoch * 2 + @intFromBool(self.search_closing) }, zt.motion.resize.animation(), self.search_closing, Morph.f));
     }
 
     fn fetchButton(self: *HistoryPane, theme: *const Theme, window: *Window, cx: *Context(HistoryPane)) zpui.StatefulDiv {

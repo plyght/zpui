@@ -123,6 +123,6 @@ pub fn anchoredRight(content: anytype) zpui.Div {
 pub fn anchoredAt(position: zpui.Point(f32), content: anytype) zpui.AnyElement {
     return zpui.intoAnyElement(zpui.deferred(
         zpui.anchored().position(position).snapToWindowWithMargin(.all(8))
-            .child(div().occlude().child(frostedCard(content))),
+            .child(anim.menuIn("menu-at", div().occlude().child(frostedCard(content)), -2)),
     ).withPriority(1));
 }

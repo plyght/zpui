@@ -85,6 +85,27 @@ pub const Tween = struct {
 
 pub const SplashPhase = enum { visible, fading, gone };
 
+/// `motion::ResizeEdgeBounce`: the edge a resize drag hit and when.
+pub const EdgeBounce = struct {
+    edge: motion.ResizeEdge,
+    start_ns: u64,
+
+    /// `eval_resize_edge_bounce`: the pulse offset (0 once settled).
+    pub fn offset(bounce: ?EdgeBounce, now_ns: u64, enabled: bool, reduced: bool) f32 {
+        const b = bounce orelse return 0;
+        if (reduced or !enabled) return 0;
+        const total = motion.scaledNs(motion.resize_edge_bounce_ms * std.time.ns_per_ms);
+        const elapsed = now_ns -| b.start_ns;
+        if (elapsed >= total) return 0;
+        return motion.resizeBounceOffset(b.edge, @floatCast(@as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(total))));
+    }
+
+    pub fn active(bounce: ?EdgeBounce, now_ns: u64) bool {
+        const b = bounce orelse return false;
+        return now_ns -| b.start_ns < motion.scaledNs(motion.resize_edge_bounce_ms * std.time.ns_per_ms);
+    }
+};
+
 pub const Shell = struct {
     gpa: std.mem.Allocator,
     state: Entity(model.AppState),
@@ -100,6 +121,15 @@ pub const Shell = struct {
     right_tween: ?Tween = null,
     /// The explorer column's width tween (mod-e).
     files_tween: ?Tween = null,
+    /// [motion] The window's resolved reduced-motion flag, sampled each
+    /// render (`Shell::reduced_motion`): tweens and edge bounces snap.
+    reduced_motion: bool = false,
+    /// [motion] Resize-drag edge latches + bounces (`*_resize_edge`,
+    /// `*_edge_bounce`): a drag pressed past a limit nudges 5 px once.
+    sidebar_resize_edge: ?motion.ResizeEdge = null,
+    right_resize_edge: ?motion.ResizeEdge = null,
+    sidebar_edge_bounce: ?EdgeBounce = null,
+    right_edge_bounce: ?EdgeBounce = null,
     /// Navigation history of selected chats (null = new-session canvas).
     nav: std.ArrayList(?[]u8) = .empty,
     nav_ix: usize = 0,
@@ -302,11 +332,12 @@ pub const Shell = struct {
 
     pub fn sidebarNow(self: *Shell, cx: anytype) f32 {
         const target = sidebarTarget(cx);
+        const bounce = EdgeBounce.offset(self.sidebar_edge_bounce, now(cx), !prefs_mod.get(cx).sidebar_collapsed, self.reduced_motion);
         if (self.sidebar_tween) |t| {
-            if (t.to == target and !t.done(now(cx), motion.resize)) return t.value(now(cx), motion.resize);
+            if (t.to == target and !self.reduced_motion and !t.done(now(cx), motion.resize)) return t.value(now(cx), motion.resize) + bounce;
             self.sidebar_tween = null;
         }
-        return target;
+        return target + bounce;
     }
 
     pub fn rightOpen(self: *Shell, cx: anytype) bool {
@@ -323,15 +354,17 @@ pub const Shell = struct {
 
     pub fn rightNow(self: *Shell, cx: anytype) f32 {
         const target = self.rightTarget(cx);
+        const bounce = EdgeBounce.offset(self.right_edge_bounce, now(cx), self.rightOpen(cx) and !self.right_expanded, self.reduced_motion);
         if (self.right_tween) |t| {
-            if (t.to == target and !t.done(now(cx), motion.resize)) return t.value(now(cx), motion.resize);
+            if (t.to == target and !self.reduced_motion and !t.done(now(cx), motion.resize)) return t.value(now(cx), motion.resize) + bounce;
             self.right_tween = null;
         }
-        return target;
+        return target + bounce;
     }
 
-    fn tweening(self: *const Shell) bool {
-        return self.sidebar_tween != null or self.right_tween != null or self.files_tween != null;
+    fn tweening(self: *const Shell, t_now: u64) bool {
+        return self.sidebar_tween != null or self.right_tween != null or self.files_tween != null or
+            EdgeBounce.active(self.sidebar_edge_bounce, t_now) or EdgeBounce.active(self.right_edge_bounce, t_now);
     }
 
     // ---- explorer column (ui/files FilesPanel, mod-e) ----------------------------------
@@ -352,7 +385,7 @@ pub const Shell = struct {
     pub fn filesNow(self: *Shell, cx: anytype) f32 {
         const target = self.filesTarget(cx);
         if (self.files_tween) |t| {
-            if (t.to == target and !t.done(now(cx), motion.resize)) return t.value(now(cx), motion.resize);
+            if (t.to == target and !self.reduced_motion and !t.done(now(cx), motion.resize)) return t.value(now(cx), motion.resize);
             self.files_tween = null;
         }
         return target;
@@ -614,9 +647,15 @@ pub const Shell = struct {
 
     fn onSidebarDrag(self: *Shell, ev: *const zpui.DragMoveEvent(SidebarResize), _: *Window, cx: *Context(Shell)) void {
         const p = prefs_mod.mut(cx);
-        p.sidebar_width = std.math.clamp(ev.event.position.x, layout.sidebar_min, layout.sidebar_max);
+        // `sidebar_drag_sample`: clamp, latch the edge, bounce once per press.
+        const sample = motion.resizeDragSample(ev.event.position.x, layout.sidebar_min, layout.sidebar_max, self.sidebar_resize_edge, self.reduced_motion);
+        p.sidebar_width = sample.width;
         p.sidebar_collapsed = false;
         self.sidebar_tween = null;
+        if (sample.starts_bounce) {
+            self.sidebar_edge_bounce = .{ .edge = sample.edge.?, .start_ns = now(cx) };
+        } else if (sample.edge == null) self.sidebar_edge_bounce = null;
+        self.sidebar_resize_edge = sample.edge;
         cx.notify();
     }
 
@@ -624,8 +663,13 @@ pub const Shell = struct {
         const vw = window.viewportSize().width;
         const p = prefs_mod.mut(cx);
         const max = @max(layout.right_pane_min, vw - sidebarTarget(cx) - layout.chat_panel_min);
-        p.right_pane_width = std.math.clamp(vw - self.filesNow(cx) - ev.event.position.x, layout.right_pane_min, max);
+        const sample = motion.resizeDragSample(vw - self.filesNow(cx) - ev.event.position.x, layout.right_pane_min, max, self.right_resize_edge, self.reduced_motion);
+        p.right_pane_width = sample.width;
         self.right_tween = null;
+        if (sample.starts_bounce) {
+            self.right_edge_bounce = .{ .edge = sample.edge.?, .start_ns = now(cx) };
+        } else if (sample.edge == null) self.right_edge_bounce = null;
+        self.right_resize_edge = sample.edge;
         cx.notify();
     }
 
@@ -682,6 +726,7 @@ pub const Shell = struct {
         syncWindowBackground(window, cx);
         // Reduce motion / pause in background (settings × OS × focus).
         settings_ui.motion.sync(window, cx.app);
+        self.reduced_motion = window.prefersReducedMotion();
         // The OS flipped light/dark (Linux settings portal, macOS effective
         // appearance): re-resolve a `system` theme on the next tick.
         const sys = window.windowAppearance();
@@ -703,7 +748,8 @@ pub const Shell = struct {
             self.splash = .fading;
             self.splash_fade_start = now(cx);
         }
-        if (self.splash == .fading and now(cx) -| self.splash_fade_start > motion.splash_out.totalNs(1.0)) self.splash = .gone;
+        // Reduced motion: SPLASH_OUT snaps to its end state (gpui's oneshot rule).
+        if (self.splash == .fading and (self.reduced_motion or now(cx) -| self.splash_fade_start > motion.splash_out.totalNs(1.0))) self.splash = .gone;
 
         var root = div()
             .trackFocus(self.focus)
@@ -767,7 +813,7 @@ pub const Shell = struct {
         if (g != .ready and !is_mac) root = root.child(titlebar.dragStrip(self, "gate-titlebar-drag", cx));
         root = root.child(titlebar.linuxCaptions(self, window, theme, cx));
         root = root.child(titlebar.linuxResizeBorders(self, window));
-        if (self.tweening()) window.requestAnimationFrame();
+        if (self.tweening(now(cx))) window.requestAnimationFrame();
         ui.hover.tick(window, cx);
         return root;
     }
