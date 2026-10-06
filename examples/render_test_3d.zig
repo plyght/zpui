@@ -184,6 +184,33 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
+    // Resource lifecycle: destroy and recreate meshes/textures between frames
+    // (deferred GPU release, slot reuse with a new generation).
+    {
+        var s3 = three.Scene3D.init(gpa, &g);
+        defer s3.deinit();
+        var scene: Scene = .{};
+        defer scene.deinit(gpa);
+        try buildScene(gpa, &scene, &s3, .@"pbr-shadow");
+        scene.finish();
+        for (0..4) |i| {
+            var sph = try three.shapes.sphere(gpa, 0.3 + 0.1 * @as(f32, @floatFromInt(i)), 8, 12);
+            defer sph.deinit(gpa);
+            const m = try g.createMesh(sph.desc());
+            var px: [16]u8 = undefined;
+            for (0..4) |k| px[k * 4 ..][0..4].* = .{ 200, 100, 50, 255 };
+            const tex = try g.createTexture(.{ .width = 2, .height = 2, .data = &px });
+            try build3D(&s3, assets, .@"pbr-shadow", @floatFromInt(i));
+            try s3.draw(m, M.translation(.new(0, 1.5, 0)), .{ .material = .{ .base_color_texture = tex } });
+            try renderer.drawScene(&scene, size, 1, color.transparent_black);
+            g.destroy(m);
+            g.destroy(tex);
+        }
+        // Stale handles draw nothing; the next frames release the GPU objects.
+        for (0..3) |_| try renderer.drawScene(&scene, size, 1, color.transparent_black);
+        std.debug.print("[lifecycle] created/destroyed 4 meshes + 4 textures across frames\n", .{});
+    }
+
     if (renderer.validationErrors() != 0) {
         std.debug.print("FAIL: {d} Vulkan validation errors\n", .{renderer.validationErrors()});
         failed = true;
