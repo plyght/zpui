@@ -128,13 +128,7 @@ multiplies opacity.
 `min_scale..max_scale`. It reads the measured pass times, and cached frames
 leave it alone.
 
-`scene.setTier(.low / .medium / .high)` applies the presets:
-
-| Tier | Shadows | AA | SSAO | Tilt-shift |
-|---|---|---|---|---|
-| low | off | FXAA | off | off |
-| medium | 2048² PCF | 4× MSAA | off | off |
-| high | 2048² PCF | 4× MSAA | on | on |
+`scene.setTier(.low / .medium / .high)` applies cost presets (see §5).
 
 ### Cameras and picking
 
@@ -229,27 +223,72 @@ Both backends consume the same Vulkan-style clip-space matrices. The flipped
 Y lets the same winding (counter-clockwise front faces) and texture origin
 (top-left) hold on both.
 
-## 5. Performance notes
+## 5. Performance
 
-- **Draws:** each draw costs one descriptor/state setup plus a push. Instance everything repeated (props, figures).
-- **Static boards:** cost nothing on the GPU after the first frame thanks to the plan hash. Animate only what moves, and request frames only while animating.
-- **Culling:** instances are frustum-culled on the CPU. Large meshes are culled as a whole by their bounds.
-- **Shadow map:** use 2048² (`map_size`) and tighten `shadow.bounds` to the board when the scene includes a large table plane.
-- **CPU copies:** keep them (`keep_cpu`) only for meshes you pick.
-- **Measured numbers:** `zig build render-test-3d -Doptimize=ReleaseFast -- --bench` renders a Carcassonne-sized board (80 relief tiles at 48², slabs, about 1,800 instanced props, 25 figures; 0.57M triangles; 157 draws) at 2560×1440 per tier and prints GPU times. CI runs it on the `macos-15-intel` Metal runner (informational step).
+### Tiers
 
-| Tier | lavapipe, 4 CPU cores (software) | macos-15-intel CI, Metal (paravirtual GPU) |
-|---|---|---|
-| low | 164 ms (main 118, post 46) | 22.5 ms |
-| medium | 453 ms (shadow 85, main 349, post 18) | 52.9 ms |
-| high | 532 ms (shadow 57, main 362, post 114) | 59.8 ms |
+`scene.setTier` sets cost presets; the look (colors, lights, exposure) is
+untouched.
 
-Lavapipe rasterizes on the CPU, so its numbers are relative tier costs only
-(MSAA dominates there). The Metal column is GPU time on the CI runner's
-virtual GPU, with wall time within 1.5 ms of it, so CPU-side planning is not
-the bottleneck. Real GPUs should be much faster, but the 60 fps target at
-1440p on an M1 or a recent Intel iGPU (medium tier) still has to be confirmed
-on that hardware with the same bench.
+| Tier | Shadows | AA | SSAO | Tilt-shift | Resolution |
+|---|---|---|---|---|---|
+| low | off | FXAA | off | off | 100% |
+| medium | 2048² map, 5–13-tap PCF, cached while the light and casters are static | 4× MSAA | off | off | 100% |
+| high | as medium | 4× MSAA | half-res, 8 samples, 2 blur passes | half-res, sharp band skipped | 100% |
+
+To hold a frame budget instead of a fixed resolution, add
+`scene.dynamic_resolution = .{ .target_ms = 8.3 }` (8.3 ms = 120 fps). It
+scales the 3D image down in 12.5% steps (to 50% by default) while the GPU is
+over budget, sharpens the upscale, and steps back up when there is headroom.
+
+### What keeps frames cheap
+
+- **Render on demand.** An unchanged plan re-composites the cached image (idle cost ≈ 0 GPU; `stats.cached`). Request frames only while something moves.
+- **Shadow cache.** The shadow map depends only on the light and the casters. Orbiting or panning a static board skips the shadow pass (`stats.shadow_cached`).
+- **LOD.** Give large or numerous meshes `gfx.setLods`; triangles under ~8 px waste quad shading. The bench's relief tiles at 48², 24² and 12² cut 0.57M to 0.21M triangles.
+- **Cheaper shading.** Opaque materials run a shader without `discard` (early depth, Apple hidden-surface removal). Opaque draws go front to back. PCF takes 5 taps and the other 8 only in penumbrae, and skips surfaces facing away from the sun.
+- **Cheaper post.** Blurs take two taps per fetch. The tilt-shift blur skips the sharp band. SSAO reads only view depth per sample.
+- **Draws.** Each draw costs one descriptor/state setup. Instance repeated meshes.
+- **Shadow bounds.** Use 2048² and tighten `shadow.bounds` to the board when a large table plane is in the scene.
+- **CPU copies.** `keep_cpu` only for meshes you pick.
+
+### Measured
+
+`zig build render-test-3d -Doptimize=ReleaseFast -- --bench` renders a
+Carcassonne-sized board at 2560×1440 per tier with a moving camera, so every
+frame re-renders:
+- 80 relief tiles at 48² with LODs at 24² and 12², and slabs;
+- about 1,800 instanced props;
+- 25 figures.
+
+It prints GPU time per pass (shadow, main, post), fps, wall time and the idle
+(cached) cost. Flags:
+- `--tier=`;
+- `--no-lod`;
+- `--scale=0.75`;
+- `--msaa=1|2|4`;
+- `--shots` writes `zig-out/bench-<tier>.png`.
+
+CI runs it on the `macos-15-intel` Metal runner, with `--no-lod` and
+`--scale=0.75` too.
+
+GPU ms per frame, moving camera. "Before" is commit 6cc1017.
+
+| Tier | Metal CI, before | Metal CI, now | now, no LOD | now, 75% scale | lavapipe, before | lavapipe, now |
+|---|---|---|---|---|---|---|
+| low | 22.5 | 17.9† | 17.9 | 7.1 | 271 | 172 |
+| medium | 52.9 | 26.4 (shadow 0, main 24.8, post 1.6) | 35.5 | 18.5 | 665 (shadow 90) | 332 (shadow 0.3) |
+| high | 59.8 | 38.3 (main 29.1, post 9.3) | 46.3 | 27.0 | 761 | 393 |
+| idle (cached) | — | ≈0 GPU (1.2–1.4 ms wall, UI composite) | | | | ≈0 GPU |
+
+† The LOD run measured low first and got 37 ms. That was warm-up after the
+screenshot pass, so the no-LOD figure is shown; warm-up is now 12 frames.
+
+How to read these numbers:
+- **The Metal runner is a paravirtual GPU on an Intel Mac**, far slower than an M1: low tier, without shadows or MSAA, takes 14–18 ms there. Its column shows relative gains. The 8.3 ms (120 fps) medium target at 1440p on an M1 or a recent iGPU is not verified on that hardware yet. Run the bench there. If medium is over 8.3 ms, enable `dynamic_resolution`: on the runner, 75% resolution takes medium from 26.4 to 18.5 ms.
+- **Lavapipe** rasterizes on the CPU. Its two columns come from back-to-back runs of the same bench on one machine; repeated runs vary by 30–40%.
+- **Quality.** Medium and high before vs after: mean difference 1.5/255, about 0.1% of pixels over 24/255, only along tile edges from the coarser LODs. The six render-test-3d goldens are unchanged on both backends.
+- **Options evaluated but not made default.** 2× MSAA visibly steps edges compared with 4×. Batching static terrain into fewer draws is not needed: wall time tracks GPU time, so the CPU is not the bottleneck.
 
 ## 6. Tests
 

@@ -557,7 +557,7 @@ fn runBench(gpa: std.mem.Allocator, io: std.Io, o: BenchOpts) !void {
         var sum: f64 = 0;
         var parts: [3]f64 = .{ 0, 0, 0 };
         var samples: u32 = 0;
-        const warmup = 6;
+        const warmup = 12;
         const frames = warmup + 10;
         var t0 = nowNs();
         // Moving camera: every frame re-renders (the interactive worst case).
