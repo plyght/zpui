@@ -65,6 +65,11 @@ jobs:
       # zpui.three goldens (tests/golden/render-test-3d-*[-metal].png); runs even if the 2D test failed.
       - run: zig build render-test-3d --summary all
         if: success() || failure()
+      # Informational: GPU timings per quality tier for a Carcassonne-sized board (2560x1440).
+      - name: zpui.three bench (Metal)
+        if: runner.os == 'macOS' && (success() || failure())
+        continue-on-error: true
+        run: zig build render-test-3d -Doptimize=ReleaseFast -- --bench
       - uses: actions/upload-artifact@v4
         if: always()
         with:

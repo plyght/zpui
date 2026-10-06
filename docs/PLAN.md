@@ -29,6 +29,7 @@ The zeron Rust engine/daemon is unchanged; the client talks to it over its local
 | zeron pickers | `apps/zeron/src/ui/pickers/` | project / device / checkout / branch popovers on the composer chips, "New project" folder browser |
 | zeron browser pane | `apps/zeron/src/ui/browser/`, `src/platform/mac/native_views.zig` | WKWebView as a zpui native child view + overlay plane (macOS); zeron's WebKitGTK helper (`apps/zeron/native/linux-browser/`) with offscreen frames (Linux); WatchPreviews, toolbar, loading bar |
 | Linux system appearance | `src/platform/linux/appearance.zig` | settings-portal `color-scheme` + `SettingChanged` over a pure-Zig D-Bus client, gsettings fallback |
+| 3D (`zpui.three`) | `src/three/`, `src/renderer/{vulkan,metal}/three.zig`, `src/renderer/three/shaders/` | offscreen HDR viewports composited in draw order (`viewport3d`): PBR/toon/flat, instancing, PCF shadows, SSAO, tilt-shift, FXAA, CPU picking, glTF (cgltf); single-source GLSL → generated MSL (`zig build gen-msl`); goldens on lavapipe + Metal — docs/THREE.md |
 
 ## In progress
 
@@ -50,6 +51,9 @@ The zeron Rust engine/daemon is unchanged; the client talks to it over its local
 8. Upstream tracking: done — `tools/upstream/check.py` + `.github/workflows/upstream.yml` diff zui (`667d0aa`)
    and zeron (`9e1a111`) against their pins weekly and keep one "Upstream changes to port" issue (docs/UPSTREAM.md).
    Feature-by-feature gap list vs the Rust app: docs/PARITY.md
+
+- zpui.three follow-ups: point lights, IBL specular, normal/occlusion maps, skinning/animation, particles,
+  texture arrays (docs/THREE.md §7); confirm the 60 fps @1440p medium-tier budget on M1 / Intel iGPU hardware.
 
 ## Conventions
 

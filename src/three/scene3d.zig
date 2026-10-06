@@ -183,6 +183,47 @@ pub const Hemisphere = struct {
 pub const Environment = struct {
     sh: [9][3]f32,
     intensity: f32 = 1,
+
+    /// Uniform radiance from every direction (e.g. three.js `environment`
+    /// intensity of a neutral room: `uniform(.{ 0.4, 0.4, 0.4 })`).
+    pub fn uniform(radiance: [3]f32) Environment {
+        return gradient(radiance, radiance);
+    }
+
+    /// Radiance varying linearly with the direction's Y: `sky` straight up,
+    /// `ground` straight down. Exact in SH9 (bands 0 and 1).
+    pub fn gradient(sky: [3]f32, ground: [3]f32) Environment {
+        var sh: [9][3]f32 = @splat(.{ 0, 0, 0 });
+        for (0..3) |k| {
+            const a = (sky[k] + ground[k]) / 2;
+            const b = (sky[k] - ground[k]) / 2;
+            sh[0][k] = a * 2 * @sqrt(std.math.pi); // ∫ a·Y00
+            sh[1][k] = b * 0.488603 * 4 * std.math.pi / 3; // ∫ b·y·Y1-1 (Y1-1 = 0.488603·y)
+        }
+        return .{ .sh = sh };
+    }
+
+    /// Irradiance for unit normal `n` (the shader's formula, for tests and CPU use).
+    pub fn irradiance(self: Environment, n: Vec3) [3]f32 {
+        const c1 = 0.429043;
+        const c2 = 0.511664;
+        const c3 = 0.743125;
+        const c4 = 0.886227;
+        const c5 = 0.247708;
+        var e: [3]f32 = undefined;
+        for (0..3) |k| {
+            const L = struct {
+                fn at(env: Environment, i: usize, ch: usize) f32 {
+                    return env.sh[i][ch];
+                }
+            }.at;
+            e[k] = c1 * L(self, 8, k) * (n.x * n.x - n.y * n.y) + c3 * L(self, 6, k) * n.z * n.z + c4 * L(self, 0, k) - c5 * L(self, 6, k) +
+                2 * c1 * (L(self, 4, k) * n.x * n.y + L(self, 7, k) * n.x * n.z + L(self, 5, k) * n.y * n.z) +
+                2 * c2 * (L(self, 3, k) * n.x + L(self, 1, k) * n.y + L(self, 2, k) * n.z);
+            e[k] = @max(e[k], 0) * self.intensity;
+        }
+        return e;
+    }
 };
 
 /// Exponential-squared fog: `f = 1 - exp(-(density * distance)^2)`.
@@ -632,6 +673,17 @@ test "pick respects index ranges and non-uniform scale" {
         if (s.pickRay(.{ .origin = .new(x, 1, if (x < 0) -0.6 else 0.6), .dir = .new(0, -1, 0) }) != null) hits += 1;
     }
     try testing.expectEqual(@as(u32, 1), hits);
+}
+
+test "SH9 gradient environment is exact irradiance" {
+    const env = Environment.gradient(.{ 1, 1, 1 }, .{ 0.2, 0.2, 0.2 });
+    // E(n) = pi*a + (2pi/3)*b*n.y for L = a + b*y.
+    const up = env.irradiance(.up);
+    try testing.expectApproxEqAbs(@as(f32, std.math.pi * 0.6 + 2 * std.math.pi / 3.0 * 0.4), up[0], 1e-4);
+    const side = env.irradiance(.new(1, 0, 0));
+    try testing.expectApproxEqAbs(@as(f32, std.math.pi * 0.6), side[1], 1e-4);
+    const u = Environment.uniform(.{ 0.4, 0.4, 0.4 });
+    try testing.expectApproxEqAbs(@as(f32, std.math.pi * 0.4), u.irradiance(.new(0, 0, -1))[2], 1e-4);
 }
 
 test "tier presets" {
