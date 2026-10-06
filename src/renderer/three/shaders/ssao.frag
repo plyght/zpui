@@ -22,9 +22,17 @@ void main() {
   float depth = texture(tex0, uv).r;
   if (depth <= 0.0) { out_ao = vec4(1.0); return; }
   vec3 p = view_pos(uv, depth);
-  vec3 px = view_pos(uv + vec2(P.p1.x, 0.0), texture(tex0, uv + vec2(P.p1.x, 0.0)).r);
-  vec3 py = view_pos(uv + vec2(0.0, P.p1.y), texture(tex0, uv + vec2(0.0, P.p1.y)).r);
-  vec3 n = normalize(cross(px - p, py - p));
+  // Normal from the smaller of the one-sided differences per axis, so pixels on
+  // a silhouette do not take the slope across the depth edge (no halos).
+  vec2 dx = vec2(P.p1.x, 0.0);
+  vec2 dy = vec2(0.0, P.p1.y);
+  vec3 pr = view_pos(uv + dx, texture(tex0, uv + dx).r) - p;
+  vec3 pl = p - view_pos(uv - dx, texture(tex0, uv - dx).r);
+  vec3 pd = view_pos(uv + dy, texture(tex0, uv + dy).r) - p;
+  vec3 pu = p - view_pos(uv - dy, texture(tex0, uv - dy).r);
+  vec3 ddx = abs(pr.z) < abs(pl.z) ? pr : pl;
+  vec3 ddy = abs(pd.z) < abs(pu.z) ? pd : pu;
+  vec3 n = normalize(cross(ddx, ddy));
   if (dot(n, -p) < 0.0) n = -n;
   // Interleaved gradient noise rotates the kernel per pixel (stable, no texture).
   float angle = 6.2831853 * fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));

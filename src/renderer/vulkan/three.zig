@@ -667,7 +667,7 @@ pub const Three = struct {
             const depth_img = if (msaa) &t.depth_resolve else &t.depth;
             depth_img.transition(cmd, c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false);
             try self.postPass(rec, self.ssao_pipeline, &t.ao_a, hw, hh, .{ depth_img.view, self.white.view, self.white.view }, self.nearest_sampler, .{
-                .p0 = .{ cfg.radius, 0, @floatFromInt(cfg.samples), 0.0005 * cfg.radius * 10 },
+                .p0 = .{ cfg.radius, 0, @floatFromInt(cfg.samples), 0.03 * cfg.radius },
                 .p1 = .{ 1 / @as(f32, @floatFromInt(hw)), 1 / @as(f32, @floatFromInt(hh)), 0, 0 },
             }, frame_addr);
             try self.postPass(rec, self.blur_ao_pipeline, &t.ao_b, hw, hh, .{ t.ao_a.view, self.white.view, self.white.view }, self.clamp_sampler, .{

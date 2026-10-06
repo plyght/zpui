@@ -516,7 +516,7 @@ pub const Three = struct {
         if (plan.ssao()) |cfg| {
             const depth_tex = if (msaa) t.depth_resolve.? else t.depth.?;
             try self.postPass(cb, frame, self.ssao_pipeline.?, t.ao_a.?, hw, hh, .{ depth_tex, white, white }, self.nearest_sampler.?, .{
-                .p0 = .{ cfg.radius, 0, @floatFromInt(cfg.samples), 0.0005 * cfg.radius * 10 },
+                .p0 = .{ cfg.radius, 0, @floatFromInt(cfg.samples), 0.03 * cfg.radius },
                 .p1 = .{ 1 / fhw, 1 / fhh, 0, 0 },
             }, frame_off);
             try self.postPass(cb, frame, self.blur_ao_pipeline.?, t.ao_b.?, hw, hh, .{ t.ao_a.?, white, white }, self.clamp_sampler.?, .{ .p0 = .{ 1, 0, 1.5, 0 }, .p1 = .{ 1 / fhw, 1 / fhh, 1, 0 } }, null);
