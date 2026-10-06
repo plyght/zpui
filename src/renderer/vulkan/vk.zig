@@ -108,6 +108,7 @@ pub const Image = struct {
     format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
     layout: c.VkImageLayout = c.VK_IMAGE_LAYOUT_UNDEFINED,
     aspect: c.VkImageAspectFlags = c.VK_IMAGE_ASPECT_COLOR_BIT,
+    mip_levels: u32 = 1,
 
     pub const Options = struct {
         width: u32,
@@ -116,17 +117,18 @@ pub const Image = struct {
         usage: c.VkImageUsageFlags,
         samples: c.VkSampleCountFlagBits = c.VK_SAMPLE_COUNT_1_BIT,
         aspect: c.VkImageAspectFlags = c.VK_IMAGE_ASPECT_COLOR_BIT,
+        mip_levels: u32 = 1,
     };
 
     pub fn create(device: c.VkDevice, mem_props: *const c.VkPhysicalDeviceMemoryProperties, opts: Options) Error!Image {
-        var self: Image = .{ .width = opts.width, .height = opts.height, .format = opts.format, .aspect = opts.aspect };
+        var self: Image = .{ .width = opts.width, .height = opts.height, .format = opts.format, .aspect = opts.aspect, .mip_levels = opts.mip_levels };
         errdefer self.destroy(device);
         try check(c.vkCreateImage(device, &.{
             .sType = c.VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
             .imageType = c.VK_IMAGE_TYPE_2D,
             .format = opts.format,
             .extent = .{ .width = opts.width, .height = opts.height, .depth = 1 },
-            .mipLevels = 1,
+            .mipLevels = opts.mip_levels,
             .arrayLayers = 1,
             .samples = opts.samples,
             .tiling = c.VK_IMAGE_TILING_OPTIMAL,
@@ -142,7 +144,7 @@ pub const Image = struct {
             .memoryTypeIndex = try findMemoryType(mem_props, req.memoryTypeBits, c.VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
         }, null, &self.memory));
         try check(c.vkBindImageMemory(device, self.handle, self.memory, 0));
-        self.view = try createViewAspect(device, self.handle, opts.format, opts.aspect);
+        self.view = try createViewLevels(device, self.handle, opts.format, opts.aspect, opts.mip_levels);
         return self;
     }
 
@@ -167,8 +169,13 @@ pub fn createView(device: c.VkDevice, image: c.VkImage, format: c.VkFormat) Erro
 }
 
 pub fn createViewAspect(device: c.VkDevice, image: c.VkImage, format: c.VkFormat, aspect: c.VkImageAspectFlags) Error!c.VkImageView {
+    return createViewLevels(device, image, format, aspect, 1);
+}
+
+pub fn createViewLevels(device: c.VkDevice, image: c.VkImage, format: c.VkFormat, aspect: c.VkImageAspectFlags, levels: u32) Error!c.VkImageView {
     var range = color_range;
     range.aspectMask = aspect;
+    range.levelCount = levels;
     var view: c.VkImageView = null;
     try check(c.vkCreateImageView(device, &.{
         .sType = c.VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -230,6 +237,7 @@ fn barrierFrom(cmd: c.VkCommandBuffer, image: c.VkImage, src: StageAccess, old_l
 fn barrierAspect(cmd: c.VkCommandBuffer, image: c.VkImage, aspect: c.VkImageAspectFlags, src: StageAccess, old_layout: c.VkImageLayout, new_layout: c.VkImageLayout) void {
     var range = color_range;
     range.aspectMask = aspect;
+    range.levelCount = c.VK_REMAINING_MIP_LEVELS;
     var dst = layoutScope(new_layout);
     if (new_layout == c.VK_IMAGE_LAYOUT_PRESENT_SRC_KHR) dst = .{ .stage = c.VK_PIPELINE_STAGE_2_NONE, .access = 0 };
     const b: c.VkImageMemoryBarrier2 = .{

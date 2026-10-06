@@ -21,7 +21,7 @@ const geometry = @import("geometry.zig");
 const color = @import("color.zig");
 const atlas = @import("atlas.zig");
 const BoundsTree = @import("bounds_tree.zig").BoundsTree;
-pub const three = @import("three/scene3d.zig");
+pub const three = @import("three/three.zig");
 
 pub const ScaledPixels = geometry.ScaledPixels;
 pub const DevicePixels = geometry.DevicePixels;
@@ -318,24 +318,18 @@ pub const PaintSurface = struct {
     image_buffer: ?*anyopaque = null,
 };
 
-/// A 3D viewport (zpui.three spike): the backend renders `scene3d` offscreen
-/// (HDR + depth + MSAA) before the UI pass and composites it here, in draw order,
-/// clipped to `content_mask` and rounded by `corner_radii`.
+/// A 3D viewport (zpui.three): the backend renders `scene3d` offscreen (HDR,
+/// depth, MSAA, shadows, post) before the UI pass and composites it here, in
+/// draw order, clipped to `content_mask` and rounded by `corner_radii`.
+/// The renderer writes `scene3d.stats`.
 pub const Viewport3D = struct {
     order: DrawOrder = 0,
+    /// Device pixels; the offscreen target is `ceil(size)`.
     bounds: Bounds,
     content_mask: ContentMask,
     corner_radii: Corners = zero_corners,
-    scene3d: *const three.Scene3D,
-};
-
-/// GPU instance for the viewport3d composite pipeline (64 bytes).
-pub const Viewport3DInstance = extern struct {
-    bounds: Bounds,
-    content_mask: ContentMask,
-    corner_radii: Corners,
-    exposure: f32,
-    pad: [3]u32 = .{ 0, 0, 0 },
+    opacity: f32 = 1,
+    scene3d: *three.Scene3D,
 };
 
 /// Index of a path within `Scene.paths` at insertion time.
@@ -485,7 +479,6 @@ comptime {
     assert(@offsetOf(PathRasterizationVertex, "bounds") == 88);
     assert(@sizeOf(PathSprite) == 16);
     assert(@sizeOf(SurfaceBounds) == 32);
-    assert(@sizeOf(Viewport3DInstance) == 64);
     // WGSL storage-buffer rules: every Bounds/AtlasTile/mat2x2 field must sit on an 8-byte boundary,
     // and every array stride (struct size) must be a multiple of the struct's 8-byte alignment.
     for (.{ Shadow, Quad, Underline, MonochromeSprite, SubpixelSprite, PolychromeSprite, PathRasterizationVertex }) |T| {

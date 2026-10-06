@@ -29,7 +29,7 @@ const atlas_mod = @import("../../atlas.zig");
 const color = @import("../../color.zig");
 
 const Scene = scene_mod.Scene;
-const three = scene_mod.three;
+const three_vk = @import("three.zig");
 const Atlas = atlas_mod.Atlas;
 const AtlasTextureId = atlas_mod.AtlasTextureId;
 const AtlasTextureKind = atlas_mod.AtlasTextureKind;
@@ -43,7 +43,7 @@ pub const SurfaceSource = Device.SurfaceSource;
 /// `VK_EXT_headless_surface` source for testing the swapchain path without a display.
 pub const headless_surface = Device.headless_surface;
 
-const frames_in_flight = 2;
+pub const frames_in_flight = 2;
 const offscreen_format = c.VK_FORMAT_R8G8B8A8_UNORM;
 const path_sample_count = 4;
 const kind_count = @typeInfo(AtlasTextureKind).@"enum".field_names.len;
@@ -74,10 +74,8 @@ blur_a: vk.Image = .{},
 blur_b: vk.Image = .{},
 readback: vk.Buffer = .{},
 warned_surface: bool = false,
-/// [three spike] pipeline layout for mesh pipelines (push constants only).
-three_layout: c.VkPipelineLayout = null,
-/// [three spike] offscreen targets, one per `scene.viewports3d` index.
-three_targets: std.ArrayList(Target3D) = .empty,
+/// zpui.three: 3D viewports (see three.zig).
+three: three_vk.Three,
 
 const Frame = struct {
     cmd: c.VkCommandBuffer = null,
@@ -89,30 +87,6 @@ const Frame = struct {
     sets: std.ArrayList(SetEntry) = .empty,
 
     const SetEntry = struct { view: c.VkImageView, set: c.VkDescriptorSet };
-};
-
-/// [three spike] Offscreen 3D target: HDR color (MSAA) + depth (MSAA) + 1x resolve.
-const Target3D = struct {
-    color: vk.Image = .{},
-    depth: vk.Image = .{},
-    resolve: vk.Image = .{},
-
-    fn destroy(t: *Target3D, dev: c.VkDevice) void {
-        t.color.destroy(dev);
-        t.depth.destroy(dev);
-        t.resolve.destroy(dev);
-    }
-};
-
-const hdr_format = c.VK_FORMAT_R16G16B16A16_SFLOAT;
-const depth_format = c.VK_FORMAT_D32_SFLOAT;
-
-/// [three spike] Push constants for mesh pipelines; mirrors `Push3D` in three_common.glsl.
-const Push3D = extern struct {
-    vertices: u64,
-    indices: u64,
-    frame: u64,
-    draw: u64,
 };
 
 const GpuTexture = struct {
@@ -133,8 +107,6 @@ const Pipelines = struct {
     path_sprite: c.VkPipeline = null,
     blur_pass: c.VkPipeline = null,
     backdrop_blur: c.VkPipeline = null,
-    mesh: c.VkPipeline = null,
-    viewport3d: c.VkPipeline = null,
 };
 
 /// Push constants shared by every pipeline; mirrors `PUSH_CONSTANTS` in shaders/common.glsl.
@@ -197,6 +169,7 @@ pub fn create(gpa: Allocator, opts: CreateOptions) !Renderer {
         .transparent = opts.transparent,
         .color_format = if (opts.surface != null) try Swapchain.chooseFormat(&device) else offscreen_format,
         .size = .{ .width = @max(opts.size.width, 1), .height = @max(opts.size.height, 1) },
+        .three = .init(gpa),
     };
     errdefer self.destroyResources();
     try self.createSharedObjects();
@@ -238,14 +211,12 @@ fn destroyResources(self: *Renderer) void {
         self.blur_a.destroy(dev);
         self.blur_b.destroy(dev);
         self.readback.destroy(dev);
-        for (self.three_targets.items) |*t| t.destroy(dev);
-        self.three_targets.deinit(self.gpa);
+        self.three.deinit(dev);
         inline for (@typeInfo(Pipelines).@"struct".field_names) |name| {
             const p = @field(self.pipelines, name);
             if (p != null) c.vkDestroyPipeline(dev, p, null);
         }
         if (self.pipeline_layout != null) c.vkDestroyPipelineLayout(dev, self.pipeline_layout, null);
-        if (self.three_layout != null) c.vkDestroyPipelineLayout(dev, self.three_layout, null);
         if (self.set_layout != null) c.vkDestroyDescriptorSetLayout(dev, self.set_layout, null);
         if (self.sampler != null) c.vkDestroySampler(dev, self.sampler, null);
         if (self.command_pool != null) c.vkDestroyCommandPool(dev, self.command_pool, null);
@@ -344,17 +315,8 @@ fn createSharedObjects(self: *Renderer) !void {
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &range,
     }, null, &self.pipeline_layout));
-    const range3d: c.VkPushConstantRange = .{
-        .stageFlags = c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT,
-        .offset = 0,
-        .size = @sizeOf(Push3D),
-    };
-    try vk.check(c.vkCreatePipelineLayout(dev, &.{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .pushConstantRangeCount = 1,
-        .pPushConstantRanges = &range3d,
-    }, null, &self.three_layout));
     try self.createPipelines();
+    try self.three.create(self);
 
     for (&self.frames) |*f| {
         try vk.check(c.vkAllocateCommandBuffers(dev, &.{
@@ -389,11 +351,6 @@ const PipelineDesc = struct {
     frag: []const u8,
     blend: Blend,
     samples: c.VkSampleCountFlagBits = c.VK_SAMPLE_COUNT_1_BIT,
-    // [three spike] overrides for 3D pipelines.
-    layout: c.VkPipelineLayout = null,
-    color_format: c.VkFormat = c.VK_FORMAT_UNDEFINED,
-    depth: bool = false,
-    cull_back: bool = false,
 };
 
 fn createPipelines(self: *Renderer) !void {
@@ -417,22 +374,6 @@ fn createPipelines(self: *Renderer) !void {
     p.path_sprite = try self.createPipeline(.{ .vert = &shaders.path_sprite_vert, .frag = &shaders.path_sprite_frag, .blend = .premultiplied });
     p.blur_pass = try self.createPipeline(.{ .vert = &shaders.blur_pass_vert, .frag = &shaders.blur_pass_frag, .blend = .none });
     p.backdrop_blur = try self.createPipeline(.{ .vert = &shaders.backdrop_blur_vert, .frag = &shaders.backdrop_blur_frag, .blend = .none });
-    p.mesh = try self.createPipeline(.{
-        .vert = &shaders.mesh_vert,
-        .frag = &shaders.mesh_frag,
-        .blend = .none,
-        .samples = self.threeSamples(),
-        .layout = self.three_layout,
-        .color_format = hdr_format,
-        .depth = true,
-        .cull_back = true,
-    });
-    p.viewport3d = try self.createPipeline(.{ .vert = &shaders.viewport3d_vert, .frag = &shaders.viewport3d_frag, .blend = .premultiplied });
-}
-
-fn threeSamples(self: *const Renderer) c.VkSampleCountFlagBits {
-    const l = self.device.limits;
-    return if (l.framebufferColorSampleCounts & l.framebufferDepthSampleCounts & c.VK_SAMPLE_COUNT_4_BIT != 0) c.VK_SAMPLE_COUNT_4_BIT else c.VK_SAMPLE_COUNT_1_BIT;
 }
 
 fn pathSampleCount(self: *const Renderer) u32 {
@@ -472,7 +413,7 @@ fn createPipeline(self: *Renderer, desc: PipelineDesc) !c.VkPipeline {
     const raster: c.VkPipelineRasterizationStateCreateInfo = .{
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         .polygonMode = c.VK_POLYGON_MODE_FILL,
-        .cullMode = if (desc.cull_back) c.VK_CULL_MODE_BACK_BIT else c.VK_CULL_MODE_NONE,
+        .cullMode = c.VK_CULL_MODE_NONE,
         .frontFace = c.VK_FRONT_FACE_COUNTER_CLOCKWISE,
         .lineWidth = 1,
     };
@@ -516,19 +457,10 @@ fn createPipeline(self: *Renderer, desc: PipelineDesc) !c.VkPipeline {
         .dynamicStateCount = dynamic_states.len,
         .pDynamicStates = &dynamic_states,
     };
-    const color_format = if (desc.color_format != c.VK_FORMAT_UNDEFINED) desc.color_format else self.color_format;
     const rendering: c.VkPipelineRenderingCreateInfo = .{
         .sType = c.VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO,
         .colorAttachmentCount = 1,
-        .pColorAttachmentFormats = &color_format,
-        .depthAttachmentFormat = if (desc.depth) depth_format else c.VK_FORMAT_UNDEFINED,
-    };
-    // Reverse-Z: clear to 0, nearer fragments have larger depth.
-    const depth_state: c.VkPipelineDepthStencilStateCreateInfo = .{
-        .sType = c.VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .depthTestEnable = c.VK_TRUE,
-        .depthWriteEnable = c.VK_TRUE,
-        .depthCompareOp = c.VK_COMPARE_OP_GREATER,
+        .pColorAttachmentFormats = &self.color_format,
     };
     var pipeline: c.VkPipeline = null;
     try vk.check(c.vkCreateGraphicsPipelines(dev, null, 1, &.{
@@ -542,9 +474,8 @@ fn createPipeline(self: *Renderer, desc: PipelineDesc) !c.VkPipeline {
         .pRasterizationState = &raster,
         .pMultisampleState = &multisample,
         .pColorBlendState = &blend_state,
-        .pDepthStencilState = if (desc.depth) &depth_state else null,
         .pDynamicState = &dynamic,
-        .layout = if (desc.layout != null) desc.layout else self.pipeline_layout,
+        .layout = self.pipeline_layout,
     }, null, &pipeline));
     return pipeline;
 }
@@ -589,8 +520,9 @@ pub fn drawScene(self: *Renderer, scene: *const Scene, viewport: Size, scale_fac
     try vk.check(c.vkResetFences(dev, 1, &frame.fence));
 
     try self.syncAtlasTextures();
+    const three_bytes = try self.three.beginFrame(self, scene);
     try self.ensureHostBuffer(&frame.staging, self.uploadBytes(), c.VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-    try self.ensureHostBuffer(&frame.instances, instanceBytesUpperBound(scene), c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | c.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
+    try self.ensureHostBuffer(&frame.instances, instanceBytesUpperBound(scene) + three_bytes, c.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | c.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT);
     try vk.check(c.vkResetDescriptorPool(dev, frame.descriptor_pool, 0));
     frame.sets.clearRetainingCapacity();
 
@@ -601,6 +533,7 @@ pub fn drawScene(self: *Renderer, scene: *const Scene, viewport: Size, scale_fac
         .flags = c.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
     }));
     self.recordUploads(cmd, frame);
+    try self.three.upload(self, cmd);
 
     const rgba = clear.toRgba();
     const alpha: f32 = if (self.transparent or self.offscreen != null) rgba.a else 1;
@@ -611,9 +544,9 @@ pub fn drawScene(self: *Renderer, scene: *const Scene, viewport: Size, scale_fac
         .target = &target,
         .clear = .{ rgba.r * alpha, rgba.g * alpha, rgba.b * alpha, alpha },
     };
-    // [three spike] 3D viewports render offscreen before the UI pass (they don't
-    // depend on 2D content), then composite in draw order inside it.
-    try rec.renderViewports3D(scene);
+    // 3D viewports render offscreen before the UI pass (they don't depend on
+    // 2D content), then composite in draw order inside it.
+    try self.three.render(&rec, scene);
     target.transition(cmd, c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, true);
     rec.beginMain(true);
     try rec.drawBatches(scene);
@@ -687,7 +620,7 @@ fn ensureHostBuffer(self: *Renderer, buffer: *vk.Buffer, needed: usize, usage: c
     buffer.* = try vk.Buffer.create(dev, &self.device.mem_props, size, usage, c.VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | c.VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
 }
 
-const instance_align = 16;
+pub const instance_align = 16;
 
 fn instanceBytesUpperBound(scene: *const Scene) usize {
     var total: usize = 0;
@@ -699,15 +632,6 @@ fn instanceBytesUpperBound(scene: *const Scene) usize {
     }
     for (scene.paths.items) |p| total += p.vertices.items.len * @sizeOf(scene_mod.PathRasterizationVertex) + @sizeOf(scene_mod.PathSprite);
     count += 2 * scene.paths.items.len;
-    // [three spike] per viewport: frame uniforms + composite instance; per draw: data + mesh copy.
-    for (scene.viewports3d.items) |v| {
-        total += @sizeOf(three.FrameUniforms) + @sizeOf(scene_mod.Viewport3DInstance);
-        count += 2;
-        for (v.scene3d.draws.items) |d| {
-            total += @sizeOf(three.DrawData) + d.mesh.vertices.len * @sizeOf(three.Vertex) + d.mesh.indices.len * 4;
-            count += 3;
-        }
-    }
     return total + count * instance_align;
 }
 
@@ -844,7 +768,7 @@ fn ensureImage(self: *Renderer, img: *vk.Image, usage: c.VkImageUsageFlags, samp
 // Command recording
 // ---------------------------------------------------------------------------
 
-const Recorder = struct {
+pub const Recorder = struct {
     r: *Renderer,
     frame: *Frame,
     cmd: c.VkCommandBuffer,
@@ -854,12 +778,12 @@ const Recorder = struct {
     rendering: bool = false,
     bound: c.VkPipeline = null,
 
-    fn viewportSize(rec: *const Recorder) [2]f32 {
+    pub fn viewportSize(rec: *const Recorder) [2]f32 {
         return .{ @floatFromInt(rec.target.width), @floatFromInt(rec.target.height) };
     }
 
     /// Reserve instance memory; returns the mapped slice and its device address.
-    fn alloc(rec: *Recorder, len: usize) struct { bytes: []u8, address: u64 } {
+    pub fn alloc(rec: *Recorder, len: usize) struct { bytes: []u8, address: u64 } {
         rec.offset = std.mem.alignForward(usize, rec.offset, instance_align);
         const buf = &rec.frame.instances;
         std.debug.assert(rec.offset + len <= buf.size);
@@ -867,7 +791,7 @@ const Recorder = struct {
         return .{ .bytes = buf.mapped.?[rec.offset..][0..len], .address = buf.address + rec.offset };
     }
 
-    fn push(rec: *Recorder, bytes: []const u8) u64 {
+    pub fn push(rec: *Recorder, bytes: []const u8) u64 {
         const a = rec.alloc(bytes.len);
         @memcpy(a.bytes, bytes);
         return a.address;
@@ -911,7 +835,7 @@ const Recorder = struct {
         rec.rendering = false;
     }
 
-    fn bind(rec: *Recorder, pipeline: c.VkPipeline) void {
+    pub fn bind(rec: *Recorder, pipeline: c.VkPipeline) void {
         if (rec.bound == pipeline) return;
         c.vkCmdBindPipeline(rec.cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
         rec.bound = pipeline;
@@ -966,15 +890,7 @@ const Recorder = struct {
                     try rec.drawInstances(p.poly_sprite, scene_mod.PolychromeSprite, scene.polychrome_sprites.items[range.start..range.end], t),
                 .path => try rec.drawPaths(scene.paths.items[range.start..range.end]),
                 .viewport3d => for (range.start..range.end) |i| {
-                    if (i >= r.three_targets.items.len) continue;
-                    const v = scene.viewports3d.items[i];
-                    const inst: scene_mod.Viewport3DInstance = .{
-                        .bounds = v.bounds,
-                        .content_mask = v.content_mask,
-                        .corner_radii = v.corner_radii,
-                        .exposure = v.scene3d.exposure,
-                    };
-                    try rec.drawInstances(p.viewport3d, scene_mod.Viewport3DInstance, &.{inst}, &r.three_targets.items[i].resolve);
+                    try r.three.composite(rec, &scene.viewports3d.items[i], i);
                 },
                 .surface => if (!r.warned_surface) {
                     r.warned_surface = true;
@@ -985,108 +901,6 @@ const Recorder = struct {
         // Blurs after the last batch still apply (they blur everything painted so far).
         while (blur_index < scene.backdrop_blurs.items.len) : (blur_index += 1) {
             try rec.drawBackdropBlur(&scene.backdrop_blurs.items[blur_index]);
-        }
-    }
-
-    /// [three spike] Render every viewport's Scene3D into its offscreen HDR
-    /// target: MSAA color + depth, resolved to a 1x RGBA16F texture that the
-    /// `viewport3d` pipeline composites (tonemap + sRGB) in the main pass.
-    fn renderViewports3D(rec: *Recorder, scene: *const Scene) !void {
-        const r = rec.r;
-        const dev = r.device.handle;
-        const samples = r.threeSamples();
-        const msaa = samples != c.VK_SAMPLE_COUNT_1_BIT;
-        while (r.three_targets.items.len < scene.viewports3d.items.len) try r.three_targets.append(r.gpa, .{});
-        for (scene.viewports3d.items, 0..) |v, vi| {
-            const t = &r.three_targets.items[vi];
-            const w: u32 = @intFromFloat(@max(@ceil(v.bounds.size.width), 1));
-            const h: u32 = @intFromFloat(@max(@ceil(v.bounds.size.height), 1));
-            if (t.resolve.handle == null or t.resolve.width != w or t.resolve.height != h) {
-                if (t.resolve.handle != null) r.device.waitIdle();
-                t.destroy(dev);
-                const mp = &r.device.mem_props;
-                t.resolve = try vk.Image.create(dev, mp, .{ .width = w, .height = h, .format = hdr_format, .usage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_SAMPLED_BIT });
-                if (msaa) t.color = try vk.Image.create(dev, mp, .{ .width = w, .height = h, .format = hdr_format, .usage = c.VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT, .samples = samples });
-                t.depth = try vk.Image.create(dev, mp, .{ .width = w, .height = h, .format = depth_format, .usage = c.VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | c.VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT, .samples = samples, .aspect = c.VK_IMAGE_ASPECT_DEPTH_BIT });
-            }
-            const s3 = v.scene3d;
-            const aspect = @as(f32, @floatFromInt(w)) / @as(f32, @floatFromInt(h));
-            const frame_addr = rec.push(std.mem.asBytes(&s3.frameUniforms(aspect, true)));
-
-            t.resolve.transition(rec.cmd, c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, true);
-            if (msaa) t.color.transition(rec.cmd, c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, true);
-            t.depth.transition(rec.cmd, c.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, true);
-            var color_att: c.VkRenderingAttachmentInfo = .{
-                .sType = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = t.resolve.view,
-                .imageLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-                .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = c.VK_ATTACHMENT_STORE_OP_STORE,
-                .clearValue = .{ .color = .{ .float32 = s3.clear } },
-            };
-            if (msaa) {
-                color_att.imageView = t.color.view;
-                color_att.storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE;
-                color_att.resolveMode = c.VK_RESOLVE_MODE_AVERAGE_BIT;
-                color_att.resolveImageView = t.resolve.view;
-                color_att.resolveImageLayout = c.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-            }
-            const depth_att: c.VkRenderingAttachmentInfo = .{
-                .sType = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
-                .imageView = t.depth.view,
-                .imageLayout = c.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL,
-                .loadOp = c.VK_ATTACHMENT_LOAD_OP_CLEAR,
-                .storeOp = c.VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                .clearValue = .{ .depthStencil = .{ .depth = 0, .stencil = 0 } },
-            };
-            const area: c.VkRect2D = .{ .offset = .{ .x = 0, .y = 0 }, .extent = .{ .width = w, .height = h } };
-            c.vkCmdBeginRendering(rec.cmd, &.{
-                .sType = c.VK_STRUCTURE_TYPE_RENDERING_INFO,
-                .renderArea = area,
-                .layerCount = 1,
-                .colorAttachmentCount = 1,
-                .pColorAttachments = &color_att,
-                .pDepthAttachment = &depth_att,
-            });
-            const vp: c.VkViewport = .{ .x = 0, .y = 0, .width = @floatFromInt(w), .height = @floatFromInt(h), .minDepth = 0, .maxDepth = 1 };
-            c.vkCmdSetViewport(rec.cmd, 0, 1, &vp);
-            c.vkCmdSetScissor(rec.cmd, 0, 1, &area);
-            c.vkCmdBindPipeline(rec.cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, r.pipelines.mesh);
-            rec.bound = r.pipelines.mesh;
-
-            // Spike: meshes are copied into the frame buffer (deduplicated per viewport).
-            const Uploaded = struct { mesh: *const three.Mesh, vertices: u64, indices: u64 };
-            var uploaded: [64]Uploaded = undefined;
-            var uploaded_len: usize = 0;
-            for (s3.draws.items) |d| {
-                var found: ?Uploaded = null;
-                for (uploaded[0..uploaded_len]) |u| if (u.mesh == d.mesh) {
-                    found = u;
-                };
-                const u = found orelse blk: {
-                    const nu: Uploaded = .{
-                        .mesh = d.mesh,
-                        .vertices = rec.push(std.mem.sliceAsBytes(d.mesh.vertices)),
-                        .indices = rec.push(std.mem.sliceAsBytes(d.mesh.indices)),
-                    };
-                    if (uploaded_len < uploaded.len) {
-                        uploaded[uploaded_len] = nu;
-                        uploaded_len += 1;
-                    }
-                    break :blk nu;
-                };
-                const data: three.DrawData = .{
-                    .model = d.model,
-                    .base_color = d.material.base_color,
-                    .params = .{ d.material.metallic, d.material.roughness, 0, 0 },
-                };
-                const pc: Push3D = .{ .vertices = u.vertices, .indices = u.indices, .frame = frame_addr, .draw = rec.push(std.mem.asBytes(&data)) };
-                c.vkCmdPushConstants(rec.cmd, r.three_layout, c.VK_SHADER_STAGE_VERTEX_BIT | c.VK_SHADER_STAGE_FRAGMENT_BIT, 0, @sizeOf(Push3D), &pc);
-                c.vkCmdDraw(rec.cmd, @intCast(d.mesh.indices.len), 1, 0, 0);
-            }
-            c.vkCmdEndRendering(rec.cmd);
-            rec.bound = null;
-            t.resolve.transition(rec.cmd, c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false);
         }
     }
 

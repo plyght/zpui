@@ -32,6 +32,7 @@ pub const atlas = @import("atlas.zig");
 pub const bounds_tree = @import("bounds_tree.zig");
 pub const scene = @import("scene.zig");
 pub const Scene = scene.Scene;
+pub const three = @import("three/three.zig");
 
 pub const input = @import("input.zig");
 pub const platform = @import("platform/platform.zig");

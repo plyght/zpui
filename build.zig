@@ -23,6 +23,7 @@ pub fn build(b: *std.Build) void {
     addLinuxPlatform(b, target, optimize, zpui);
     addLinuxText(b, target, optimize, zpui);
     addMetalRenderer(b, target, optimize, zpui);
+    addGenMsl(b);
     addMacPlatform(b, target, optimize, zpui);
     addZeronSyntax(b, target, optimize, test_step);
     addImageSupport(b, target, optimize, zpui);
@@ -130,9 +131,6 @@ fn addVulkanRenderer(
         "path_sprite.vert",        "path_sprite.frag",
         "blur_pass.vert",          "blur_pass.frag",
         "backdrop_blur.vert",      "backdrop_blur.frag",
-        // [three spike]
-        "mesh.vert",               "mesh.frag",
-        "viewport3d.vert",         "viewport3d.frag",
     };
     const wf = b.addWriteFiles();
     var index: std.ArrayList(u8) = .empty;
@@ -146,6 +144,21 @@ fn addVulkanRenderer(
         glslc.addArg("-o");
         _ = wf.addCopyFile(glslc.addOutputFileArg(spv), spv);
         const ident = b.allocator.dupe(u8, name) catch @panic("OOM");
+        for (ident) |*c| if (c.* == '.') {
+            c.* = '_';
+        };
+        index.print(b.allocator, "pub const {s} align(4) = @embedFile(\"{s}\").*;\n", .{ ident, spv }) catch @panic("OOM");
+    }
+    // zpui.three: single-source GLSL in src/renderer/three/shaders (Vulkan variant).
+    for (three_shaders) |name| {
+        const spv = b.fmt("three_{s}.spv", .{name});
+        const glslc = b.addSystemCommand(&.{ "glslc", "--target-env=vulkan1.3", "-O", "-MD" });
+        glslc.addArg("-MF");
+        _ = glslc.addDepFileOutputArg(b.fmt("three_{s}.d", .{name}));
+        glslc.addFileArg(b.path(b.fmt("{s}{s}", .{ three_shader_dir, name })));
+        glslc.addArg("-o");
+        _ = wf.addCopyFile(glslc.addOutputFileArg(spv), spv);
+        const ident = b.fmt("three_{s}", .{name});
         for (ident) |*c| if (c.* == '.') {
             c.* = '_';
         };
@@ -170,7 +183,7 @@ fn addVulkanRenderer(
     const step = b.step("render-test", "Render the showcase scene offscreen to zig-out/render-test.png and compare with tests/golden");
     step.dependOn(&run.step);
 
-    // [three spike] 3D viewport golden test.
+    // zpui.three golden test.
     const render_test_3d = b.addExecutable(.{
         .name = "render-test-3d",
         .root_module = b.createModule(.{
@@ -184,8 +197,45 @@ fn addVulkanRenderer(
     const run3d = b.addRunArtifact(render_test_3d);
     run3d.setCwd(b.path("."));
     run3d.addPassthruArgs();
-    const step3d = b.step("render-test-3d", "Render the 3D viewport spike offscreen to zig-out/render-test-3d.png and compare with tests/golden");
+    const step3d = b.step("render-test-3d", "Render the zpui.three test scenes offscreen to zig-out/render-test-3d-*.png and compare with tests/golden");
     step3d.dependOn(&run3d.step);
+}
+
+/// zpui.three shaders: one GLSL source per stage (src/renderer/three/shaders).
+const three_shader_dir = "src/renderer/three/shaders/";
+const three_shaders = [_][]const u8{
+    "mesh.vert",       "mesh.frag",
+    "outline.vert",    "outline.frag",
+    "shadow.vert",     "shadow.frag",
+    "fullscreen.vert", "ssao.frag",
+    "blur.frag",       "resolve.frag",
+    "fxaa.frag",       "composite.vert",
+    "composite.frag",
+};
+
+/// `zig build gen-msl`: regenerate src/renderer/metal/three/*.metal from the
+/// GLSL sources (glslc -DZPUI_MSL, unoptimized so names survive, then
+/// SPIRV-Cross). The output is checked in; CI fails if it drifts.
+fn addGenMsl(b: *std.Build) void {
+    const update = b.addUpdateSourceFiles();
+    for (three_shaders) |name| {
+        const stem = b.allocator.dupe(u8, name) catch @panic("OOM");
+        for (stem) |*c| if (c.* == '.') {
+            c.* = '_';
+        };
+        const stage = name[std.mem.lastIndexOfScalar(u8, name, '.').? + 1 ..];
+        const glslc = b.addSystemCommand(&.{ "glslc", "--target-env=vulkan1.2", "-DZPUI_MSL" });
+        glslc.addFileArg(b.path(b.fmt("{s}{s}", .{ three_shader_dir, name })));
+        glslc.addArg("-o");
+        const spv = glslc.addOutputFileArg(b.fmt("{s}.spv", .{stem}));
+        const cross = b.addSystemCommand(&.{ "spirv-cross", "--msl", "--msl-version", "20100", "--msl-decoration-binding", "--flip-vert-y", "--rename-entry-point", "main", stem, stage });
+        cross.addFileArg(spv);
+        cross.addArg("--output");
+        const metal = cross.addOutputFileArg(b.fmt("{s}.metal", .{stem}));
+        update.addCopyFileToSource(metal, b.fmt("src/renderer/metal/three/{s}.metal", .{stem}));
+    }
+    const step = b.step("gen-msl", "Regenerate the Metal 3D shaders (src/renderer/metal/three/*.metal) from GLSL via SPIRV-Cross");
+    step.dependOn(&update.step);
 }
 
 /// Linux platform backend (src/platform/linux/): wayland-scanner protocol
