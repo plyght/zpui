@@ -39,6 +39,7 @@ const color = @import("../../color.zig");
 const renderer = @import("../renderer.zig");
 const pool_mod = @import("instance_buffer_pool.zig");
 const backdrop = @import("backdrop.zig");
+const three_mtl = @import("three.zig");
 
 const log = std.log.scoped(.metal);
 
@@ -279,7 +280,9 @@ pub const MetalRenderer = struct {
     /// Consecutive frames rendered without any backdrop blur / any path.
     blur_free_frames: u32 = 0,
     path_free_frames: u32 = 0,
-    warned_unsupported: std.EnumSet(enum { surfaces, subpixel, mps, viewport3d }) = .empty,
+    warned_unsupported: std.EnumSet(enum { surfaces, subpixel, mps }) = .empty,
+    /// zpui.three: 3D viewports (see three.zig).
+    three: three_mtl.Three,
 
     const atlas_kind_count = @typeInfo(AtlasTextureKind).@"enum".field_names.len;
 
@@ -391,8 +394,11 @@ pub const MetalRenderer = struct {
             }),
             .blur_gpu = .{ .device = device },
             .mps_supported = objc.fromBOOL(mtl.MPSSupportsMTLDevice(device)),
+            .three = .init(gpa, device, is_apple_gpu, is_unified_memory),
         };
         errdefer self.sprite_atlas.deinit();
+        self.three.create(target_format, command_queue);
+        errdefer self.three.deinit();
 
         if (options.surface) |surface| switch (surface) {
             .metal_layer => |existing| self.metal_layer = try self.configureLayer(existing, options.transparent),
@@ -418,6 +424,7 @@ pub const MetalRenderer = struct {
             list.deinit(self.gpa);
         }
         self.sprite_atlas.deinit();
+        self.three.deinit();
         self.releaseBackdropResources();
         self.releaseLowerPlanes();
         self.backdrop_textures.deinit(self.gpa, &self.blur_gpu);
@@ -557,6 +564,7 @@ pub const MetalRenderer = struct {
             self.reclaimCompleted();
         }
         try self.syncAtlas();
+        try self.three.beginFrame(scene);
 
         var drawable: ?id = null;
         const target = if (self.metal_layer) |l| blk: {
@@ -572,6 +580,7 @@ pub const MetalRenderer = struct {
             const acquired = try self.instance_buffers.acquire(&self.buffer_gpu);
             const command_buffer = self.encodeFrame(scene, acquired, target, viewport, clear) catch |err| switch (err) {
                 error.InstanceBufferOverflow => {
+                    self.three.discardPending();
                     self.instance_buffers.grow(&self.buffer_gpu) catch |grow_err| {
                         log.err("instance buffer size grew too large: {d}", .{self.instance_buffers.buffer_size});
                         self.instance_buffers.release(self.gpa, &self.buffer_gpu, acquired);
@@ -582,10 +591,13 @@ pub const MetalRenderer = struct {
                     continue;
                 },
                 else => {
+                    self.three.discardPending();
                     self.instance_buffers.release(self.gpa, &self.buffer_gpu, acquired);
                     return err;
                 },
             };
+            // 3D viewports render first (same queue: they complete before the UI pass samples them).
+            self.three.commitPending();
 
             if (drawable) |d| {
                 // [glass-lab] Diagnostics readback of what this plane presents.
@@ -699,6 +711,9 @@ pub const MetalRenderer = struct {
             try self.ensurePathIntermediates(viewport);
         }
 
+        // 3D viewports: offscreen passes in their own command buffers (committed first).
+        try self.three.render(self.command_queue, .{ .ctx = &frame, .buffer = frame.buffer, .writeFn = frameWrite });
+
         var encoder: ?id = try beginPass(command_buffer, target, viewport, .{ .clear = self.clearColor(clear) });
         errdefer if (encoder) |e| mtl.RenderEncoder.endEncoding(e);
 
@@ -735,8 +750,9 @@ pub const MetalRenderer = struct {
                 .subpixel_sprite => self.warnOnce(.subpixel, "subpixel sprites are not supported on Metal; skipped"),
                 // TODO: CVPixelBuffer surfaces (CVMetalTextureCache) are not ported yet.
                 .surface => self.warnOnce(.surfaces, "surfaces are not supported yet; skipped"),
-                // [three spike] Metal 3D pass not written yet (see docs: zpui-3d.md).
-                .viewport3d => self.warnOnce(.viewport3d, "3D viewports are not supported by the Metal renderer yet; skipped"),
+                .viewport3d => |r| for (r.start..r.end) |i| {
+                    self.three.composite(enc, &scene.viewports3d.items[i], i, .{ @floatFromInt(viewport.width), @floatFromInt(viewport.height) });
+                },
             }
         }
         // Blurs after the last batch still blur what was painted below them.
@@ -756,6 +772,11 @@ pub const MetalRenderer = struct {
     }
 
     const SpriteTexture = AtlasTexture;
+
+    fn frameWrite(ctx: *anyopaque, bytes: []const u8) error{InstanceBufferOverflow}!usize {
+        const frame: *Frame = @ptrCast(@alignCast(ctx));
+        return frame.write(bytes);
+    }
 
     /// One instanced draw of `items` with the shared buffer layout
     /// (unit vertices, instances, viewport size[, atlas size, atlas texture]).

@@ -23,8 +23,11 @@ pub const PixelFormat = enum(NSUInteger) {
     r8_unorm = 10,
     rg8_unorm = 30,
     rgba8_unorm = 70,
+    rgba8_unorm_srgb = 71,
     bgra8_unorm = 80,
     bgra8_unorm_srgb = 81,
+    rgba16_float = 115,
+    depth32_float = 252,
     _,
 };
 
@@ -48,7 +51,14 @@ pub const TextureUsage = struct {
 
 pub const TextureType = enum(NSUInteger) { @"2d" = 2, @"2d_multisample" = 4 };
 pub const LoadAction = enum(NSUInteger) { dont_care = 0, load = 1, clear = 2 };
-pub const StoreAction = enum(NSUInteger) { dont_care = 0, store = 1, multisample_resolve = 2 };
+pub const StoreAction = enum(NSUInteger) { dont_care = 0, store = 1, multisample_resolve = 2, store_and_multisample_resolve = 3 };
+pub const CompareFunction = enum(NSUInteger) { never = 0, less = 1, equal = 2, less_equal = 3, greater = 4, not_equal = 5, greater_equal = 6, always = 7 };
+pub const CullMode = enum(NSUInteger) { none = 0, front = 1, back = 2 };
+pub const Winding = enum(NSUInteger) { clockwise = 0, counter_clockwise = 1 };
+pub const IndexType = enum(NSUInteger) { uint16 = 0, uint32 = 1 };
+pub const SamplerMinMagFilter = enum(NSUInteger) { nearest = 0, linear = 1 };
+pub const SamplerMipFilter = enum(NSUInteger) { not_mipmapped = 0, nearest = 1, linear = 2 };
+pub const SamplerAddressMode = enum(NSUInteger) { clamp_to_edge = 0, mirror_clamp_to_edge = 1, repeat = 2 };
 pub const PrimitiveType = enum(NSUInteger) { point = 0, line = 1, line_strip = 2, triangle = 3, triangle_strip = 4 };
 
 pub const BlendFactor = enum(NSUInteger) {
@@ -168,6 +178,46 @@ pub const Device = struct {
     pub fn newTexture(device: id, descriptor: id) ?id {
         return device.msg(?id, "newTextureWithDescriptor:", .{descriptor});
     }
+
+    pub fn newDepthStencilState(device: id, descriptor: id) ?id {
+        return device.msg(?id, "newDepthStencilStateWithDescriptor:", .{descriptor});
+    }
+
+    pub fn newSamplerState(device: id, descriptor: id) ?id {
+        return device.msg(?id, "newSamplerStateWithDescriptor:", .{descriptor});
+    }
+};
+
+pub const DepthStencilDescriptor = struct {
+    /// +1 `MTLDepthStencilDescriptor`.
+    pub fn new(compare: CompareFunction, write: bool) ?id {
+        const desc = (objc.getClass("MTLDepthStencilDescriptor") orelse return null).new() orelse return null;
+        desc.msg(void, "setDepthCompareFunction:", .{@intFromEnum(compare)});
+        desc.msg(void, "setDepthWriteEnabled:", .{objc.toBOOL(write)});
+        return desc;
+    }
+};
+
+pub const SamplerDescriptor = struct {
+    pub const Options = struct {
+        filter: SamplerMinMagFilter = .linear,
+        mip: SamplerMipFilter = .not_mipmapped,
+        address: SamplerAddressMode = .clamp_to_edge,
+        compare: ?CompareFunction = null,
+    };
+
+    /// +1 `MTLSamplerDescriptor`.
+    pub fn new(o: Options) ?id {
+        const desc = (objc.getClass("MTLSamplerDescriptor") orelse return null).new() orelse return null;
+        desc.msg(void, "setMinFilter:", .{@intFromEnum(o.filter)});
+        desc.msg(void, "setMagFilter:", .{@intFromEnum(o.filter)});
+        desc.msg(void, "setMipFilter:", .{@intFromEnum(o.mip)});
+        desc.msg(void, "setSAddressMode:", .{@intFromEnum(o.address)});
+        desc.msg(void, "setTAddressMode:", .{@intFromEnum(o.address)});
+        desc.msg(void, "setRAddressMode:", .{@intFromEnum(o.address)});
+        if (o.compare) |cmp| desc.msg(void, "setCompareFunction:", .{@intFromEnum(cmp)});
+        return desc;
+    }
 };
 
 pub fn newFunction(library: id, name: [:0]const u8) ?id {
@@ -211,6 +261,10 @@ pub const RenderPipelineDescriptor = struct {
         desc.msg(void, "setAlphaToCoverageEnabled:", .{objc.toBOOL(enabled)});
     }
 
+    pub fn setDepthAttachmentPixelFormat(desc: id, format: PixelFormat) void {
+        desc.msg(void, "setDepthAttachmentPixelFormat:", .{@intFromEnum(format)});
+    }
+
     /// Configure color attachment 0: pixel format and optional blending (`Add` ops).
     pub fn setColorAttachment0(desc: id, format: PixelFormat, blend: ?Blend) void {
         const attachments = desc.msg(id, "colorAttachments", .{});
@@ -239,6 +293,7 @@ pub const TextureDescriptor = struct {
         storage: StorageMode,
         texture_type: TextureType = .@"2d",
         sample_count: NSUInteger = 1,
+        mip_levels: NSUInteger = 1,
     };
 
     /// +1 `MTLTextureDescriptor` configured from `o`.
@@ -251,6 +306,7 @@ pub const TextureDescriptor = struct {
         desc.msg(void, "setUsage:", .{o.usage});
         desc.msg(void, "setStorageMode:", .{@intFromEnum(o.storage)});
         if (o.sample_count > 1) desc.msg(void, "setSampleCount:", .{o.sample_count});
+        if (o.mip_levels > 1) desc.msg(void, "setMipmapLevelCount:", .{o.mip_levels});
         return desc;
     }
 };
@@ -274,6 +330,10 @@ pub const Texture = struct {
 
     pub fn replaceRegion(texture: id, region: Region, bytes: *const anyopaque, bytes_per_row: NSUInteger) void {
         texture.msg(void, "replaceRegion:mipmapLevel:withBytes:bytesPerRow:", .{ region, @as(NSUInteger, 0), bytes, bytes_per_row });
+    }
+
+    pub fn replaceRegionLevel(texture: id, region: Region, level: NSUInteger, bytes: *const anyopaque, bytes_per_row: NSUInteger) void {
+        texture.msg(void, "replaceRegion:mipmapLevel:withBytes:bytesPerRow:", .{ region, level, bytes, bytes_per_row });
     }
 };
 
@@ -333,6 +393,15 @@ pub const CommandBuffer = struct {
     pub fn @"error"(cb: id) ?id {
         return cb.msg(?id, "error", .{});
     }
+
+    /// Seconds (host timebase) when the GPU started / finished this command buffer; 0 until completed.
+    pub fn gpuStartTime(cb: id) f64 {
+        return cb.msg(f64, "GPUStartTime", .{});
+    }
+
+    pub fn gpuEndTime(cb: id) f64 {
+        return cb.msg(f64, "GPUEndTime", .{});
+    }
 };
 
 pub const RenderPassDescriptor = struct {
@@ -355,6 +424,38 @@ pub const RenderPassDescriptor = struct {
         c.msg(void, "setLoadAction:", .{@intFromEnum(a.load)});
         c.msg(void, "setStoreAction:", .{@intFromEnum(a.store)});
         if (a.load == .clear) c.msg(void, "setClearColor:", .{a.clear});
+        return desc;
+    }
+
+    pub const DepthAttachment = struct {
+        texture: id,
+        resolve_texture: ?id = null,
+        load: LoadAction,
+        store: StoreAction,
+        clear: f64 = 0,
+    };
+
+    /// Autoreleased pass descriptor with an optional color attachment 0 and a depth attachment.
+    pub fn newWithDepth(color: ?Attachment, depth: ?DepthAttachment) ?id {
+        const desc = (objc.getClass("MTLRenderPassDescriptor") orelse return null)
+            .msg(?id, "renderPassDescriptor", .{}) orelse return null;
+        if (color) |a| {
+            const attachments = desc.msg(id, "colorAttachments", .{});
+            const c = attachments.msg(id, "objectAtIndexedSubscript:", .{@as(NSUInteger, 0)});
+            c.msg(void, "setTexture:", .{a.texture});
+            if (a.resolve_texture) |r| c.msg(void, "setResolveTexture:", .{r});
+            c.msg(void, "setLoadAction:", .{@intFromEnum(a.load)});
+            c.msg(void, "setStoreAction:", .{@intFromEnum(a.store)});
+            if (a.load == .clear) c.msg(void, "setClearColor:", .{a.clear});
+        }
+        if (depth) |d| {
+            const da = desc.msg(id, "depthAttachment", .{});
+            da.msg(void, "setTexture:", .{d.texture});
+            if (d.resolve_texture) |r| da.msg(void, "setResolveTexture:", .{r});
+            da.msg(void, "setLoadAction:", .{@intFromEnum(d.load)});
+            da.msg(void, "setStoreAction:", .{@intFromEnum(d.store)});
+            if (d.load == .clear) da.msg(void, "setClearDepth:", .{d.clear});
+        }
         return desc;
     }
 };
@@ -387,6 +488,30 @@ pub const RenderEncoder = struct {
 
     pub fn setFragmentTexture(enc: id, texture: id, index: NSUInteger) void {
         enc.msg(void, "setFragmentTexture:atIndex:", .{ texture, index });
+    }
+
+    pub fn setFragmentSamplerState(enc: id, sampler: id, index: NSUInteger) void {
+        enc.msg(void, "setFragmentSamplerState:atIndex:", .{ sampler, index });
+    }
+
+    pub fn setDepthStencilState(enc: id, state: id) void {
+        enc.msg(void, "setDepthStencilState:", .{state});
+    }
+
+    pub fn setCullMode(enc: id, mode: CullMode) void {
+        enc.msg(void, "setCullMode:", .{@intFromEnum(mode)});
+    }
+
+    pub fn setFrontFacingWinding(enc: id, winding: Winding) void {
+        enc.msg(void, "setFrontFacingWinding:", .{@intFromEnum(winding)});
+    }
+
+    pub fn setDepthBias(enc: id, bias: f32, slope_scale: f32, clamp: f32) void {
+        enc.msg(void, "setDepthBias:slopeScale:clamp:", .{ bias, slope_scale, clamp });
+    }
+
+    pub fn drawIndexed(enc: id, primitive: PrimitiveType, index_count: NSUInteger, index_type: IndexType, index_buffer: id, index_offset: NSUInteger, instances: NSUInteger) void {
+        enc.msg(void, "drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:instanceCount:", .{ @intFromEnum(primitive), index_count, @intFromEnum(index_type), index_buffer, index_offset, instances });
     }
 
     pub fn draw(enc: id, primitive: PrimitiveType, start: NSUInteger, count: NSUInteger) void {

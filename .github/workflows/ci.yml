@@ -62,12 +62,30 @@ jobs:
           sudo apt-get install -y --no-install-recommends $LINUX_DEPS
           echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json" >> "$GITHUB_ENV"
       - run: zig build render-test --summary all
+      # zpui.three goldens (tests/golden/render-test-3d-*[-metal].png); runs even if the 2D test failed.
+      - run: zig build render-test-3d --summary all
+        if: success() || failure()
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: render-${{ matrix.backend }}
           path: zig-out/*.png
           if-no-files-found: warn
+
+  # The Metal 3D shaders are generated from the GLSL sources and checked in;
+  # fail when they drift (run `zig build gen-msl` and commit the result).
+  three-msl:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends glslc spirv-cross
+      - run: zig build gen-msl --summary all
+      - run: git diff --exit-code -- src/renderer/metal/three
 
   # macOS platform backend smoke test: opens a real NSWindow (blurred, transparent
   # titlebar), renders 30 display-link frames through Metal, writes

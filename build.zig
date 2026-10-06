@@ -351,6 +351,22 @@ fn addMetalRenderer(
     run.addPassthruArgs();
     const step = b.step("render-test", "Render the showcase scene offscreen with Metal to zig-out/render-test.png");
     step.dependOn(&run.step);
+
+    const render_test_3d = b.addExecutable(.{
+        .name = "render-test-3d",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/render_test_3d.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    b.installArtifact(render_test_3d);
+    const run3d = b.addRunArtifact(render_test_3d);
+    run3d.setCwd(b.path("."));
+    run3d.addPassthruArgs();
+    const step3d = b.step("render-test-3d", "Render the zpui.three test scenes offscreen with Metal and compare with tests/golden");
+    step3d.dependOn(&run3d.step);
 }
 
 /// zeron design system: `zeron_theme` (apps/zeron/src/theme) and

@@ -207,4 +207,5 @@ test {
     _ = @import("window/external_paths.zig");
     _ = @import("a11y.zig");
     _ = @import("window/a11y_tests.zig");
+    _ = three;
 }

@@ -2,12 +2,13 @@
 //! SDK: `zig build metal-check -Dtarget=aarch64-macos` emits an object file,
 //! which needs no framework linking. The exported function forces semantic
 //! analysis and codegen of the renderer's public API and of the shared
-//! render test (examples/render_test.zig, whose `main` is not otherwise
-//! analyzed in an object build).
+//! render tests (examples/render_test.zig and render_test_3d.zig, whose `main`s
+//! are not otherwise analyzed in an object build).
 
 const std = @import("std");
 const zpui = @import("zpui");
 const render_test = @import("render_test.zig");
+const render_test_3d = @import("render_test_3d.zig");
 
 const Renderer = zpui.renderer.Renderer;
 
@@ -30,6 +31,8 @@ fn run(gpa: std.mem.Allocator, layer: ?*anyopaque) !void {
 export fn zpui_metal_check(layer: ?*anyopaque) callconv(.c) c_int {
     const main_ptr: *const anyopaque = @ptrCast(&render_test.main);
     std.mem.doNotOptimizeAway(main_ptr);
+    const main3d_ptr: *const anyopaque = @ptrCast(&render_test_3d.main);
+    std.mem.doNotOptimizeAway(main3d_ptr);
     run(std.heap.c_allocator, layer) catch return 1;
     return 0;
 }
