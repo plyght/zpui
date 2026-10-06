@@ -93,8 +93,35 @@ const Target = struct {
     ldr2: ?id = null,
     final: ?id = null,
     stats: three.Scene3D.Stats = .{},
-    /// Command buffer of the last render (retained) for its GPU time.
-    timing: ?id = null,
+    /// Committed command buffers (retained) not yet read for their GPU time,
+    /// oldest first. Several can be in flight at once.
+    timings: [4]?id = @splat(null),
+
+    fn pollTimings(t: *Target) void {
+        for (&t.timings) |*slot| if (slot.*) |cb| switch (mtl.CommandBuffer.status(cb)) {
+            .completed => {
+                t.stats.gpu_ms = @floatCast((mtl.CommandBuffer.gpuEndTime(cb) - mtl.CommandBuffer.gpuStartTime(cb)) * 1000);
+                cb.release();
+                slot.* = null;
+            },
+            .@"error" => {
+                cb.release();
+                slot.* = null;
+            },
+            else => {},
+        };
+    }
+
+    fn pushTiming(t: *Target, cb: id) void {
+        for (&t.timings) |*slot| if (slot.* == null) {
+            slot.* = cb;
+            return;
+        };
+        // All four still in flight: drop the oldest.
+        t.timings[0].?.release();
+        std.mem.copyForwards(?id, t.timings[0..3], t.timings[1..4]);
+        t.timings[3] = cb;
+    }
 
     fn slots(t: *Target) [11]*?id {
         return .{ &t.color_msaa, &t.depth, &t.hdr, &t.depth_resolve, &t.shadow, &t.ao_a, &t.ao_b, &t.blur_a, &t.blur_b, &t.ldr, &t.ldr2 };
@@ -105,8 +132,10 @@ const Target = struct {
             tex.release();
             s.* = null;
         };
-        if (t.timing) |cb| cb.release();
-        t.timing = null;
+        for (&t.timings) |*slot| if (slot.*) |cb| {
+            cb.release();
+            slot.* = null;
+        };
         t.final = null;
     }
 };
@@ -298,12 +327,7 @@ pub const Three = struct {
             t.last_used = self.frame_number;
             try self.bindStore(s3.gfx);
             try three.plan.build(&t.plan, s3, w, h, .{ .max_samples = self.max_samples, .max_texture_size = 16384 });
-            if (t.timing) |cb| if (mtl.CommandBuffer.status(cb) == .completed) {
-                const ms: f32 = @floatCast((mtl.CommandBuffer.gpuEndTime(cb) - mtl.CommandBuffer.gpuStartTime(cb)) * 1000);
-                t.stats.gpu_ms = ms;
-                cb.release();
-                t.timing = null;
-            };
+            t.pollTimings();
             v.scene3d.stats = t.stats;
             try self.frame_targets.append(self.gpa, t);
         }
@@ -430,8 +454,7 @@ pub const Three = struct {
     pub fn commitPending(self: *Three) void {
         for (self.pending.items) |p| {
             mtl.CommandBuffer.commit(p.cb);
-            if (p.target.timing) |old| old.release();
-            p.target.timing = p.cb;
+            p.target.pushTiming(p.cb);
             p.target.rendered_hash = p.target.plan.hash;
         }
         self.pending.clearRetainingCapacity();

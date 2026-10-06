@@ -529,13 +529,14 @@ fn runBench(gpa: std.mem.Allocator) !void {
         var sum: f64 = 0;
         var parts: [3]f64 = .{ 0, 0, 0 };
         var samples: u32 = 0;
-        const frames = 8;
-        const t0 = nowNs();
+        const frames = 14;
+        var t0 = nowNs();
         for (0..frames) |f| {
+            if (f == 6) t0 = nowNs();
             orbit.yaw = 0.6 + @as(f32, @floatFromInt(f)) * 0.01; // defeat the cache
             s3.camera = orbit.camera();
             try renderer.drawScene(&scene, size, 1, color.transparent_black);
-            if (f >= 3 and s3.stats.gpu_ms > 0) {
+            if (f >= 6 and s3.stats.gpu_ms > 0) {
                 sum += s3.stats.gpu_ms;
                 parts[0] += s3.stats.gpu_shadow_ms;
                 parts[1] += s3.stats.gpu_main_ms;
@@ -543,7 +544,7 @@ fn runBench(gpa: std.mem.Allocator) !void {
                 samples += 1;
             }
         }
-        const wall = @as(f64, @floatFromInt(nowNs() - t0)) / 1e6 / frames;
+        const wall = @as(f64, @floatFromInt(nowNs() - t0)) / 1e6 / (frames - 6);
         const n: f64 = @floatFromInt(@max(samples, 1));
         std.debug.print("  {t:<6} {d} draws, {d} instances, {d:.2}M triangles | gpu {d:.2} ms (shadow {d:.2}, main {d:.2}, post {d:.2}) | wall {d:.1} ms/frame\n", .{
             tier, s3.stats.draws, s3.stats.instances, @as(f64, @floatFromInt(s3.stats.triangles)) / 1e6, sum / n, parts[0] / n, parts[1] / n, parts[2] / n, wall,
