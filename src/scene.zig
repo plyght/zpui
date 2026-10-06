@@ -21,6 +21,7 @@ const geometry = @import("geometry.zig");
 const color = @import("color.zig");
 const atlas = @import("atlas.zig");
 const BoundsTree = @import("bounds_tree.zig").BoundsTree;
+pub const three = @import("three/scene3d.zig");
 
 pub const ScaledPixels = geometry.ScaledPixels;
 pub const DevicePixels = geometry.DevicePixels;
@@ -317,6 +318,26 @@ pub const PaintSurface = struct {
     image_buffer: ?*anyopaque = null,
 };
 
+/// A 3D viewport (zpui.three spike): the backend renders `scene3d` offscreen
+/// (HDR + depth + MSAA) before the UI pass and composites it here, in draw order,
+/// clipped to `content_mask` and rounded by `corner_radii`.
+pub const Viewport3D = struct {
+    order: DrawOrder = 0,
+    bounds: Bounds,
+    content_mask: ContentMask,
+    corner_radii: Corners = zero_corners,
+    scene3d: *const three.Scene3D,
+};
+
+/// GPU instance for the viewport3d composite pipeline (64 bytes).
+pub const Viewport3DInstance = extern struct {
+    bounds: Bounds,
+    content_mask: ContentMask,
+    corner_radii: Corners,
+    exposure: f32,
+    pad: [3]u32 = .{ 0, 0, 0 },
+};
+
 /// Index of a path within `Scene.paths` at insertion time.
 pub const PathId = usize;
 
@@ -464,6 +485,7 @@ comptime {
     assert(@offsetOf(PathRasterizationVertex, "bounds") == 88);
     assert(@sizeOf(PathSprite) == 16);
     assert(@sizeOf(SurfaceBounds) == 32);
+    assert(@sizeOf(Viewport3DInstance) == 64);
     // WGSL storage-buffer rules: every Bounds/AtlasTile/mat2x2 field must sit on an 8-byte boundary,
     // and every array stride (struct size) must be a multiple of the struct's 8-byte alignment.
     for (.{ Shadow, Quad, Underline, MonochromeSprite, SubpixelSprite, PolychromeSprite, PathRasterizationVertex }) |T| {
@@ -490,6 +512,7 @@ pub const PrimitiveKind = enum(u8) {
     subpixel_sprite,
     polychrome_sprite,
     surface,
+    viewport3d,
 };
 
 /// Any batched primitive. Backdrop blurs are separate (`Scene.insertBackdropBlur`).
@@ -502,6 +525,7 @@ pub const Primitive = union(PrimitiveKind) {
     subpixel_sprite: SubpixelSprite,
     polychrome_sprite: PolychromeSprite,
     surface: PaintSurface,
+    viewport3d: Viewport3D,
 
     pub fn bounds(self: *const Primitive) Bounds {
         return switch (self.*) {
@@ -546,6 +570,7 @@ pub const PrimitiveBatch = union(PrimitiveKind) {
     subpixel_sprite: SpriteRange,
     polychrome_sprite: SpriteRange,
     surface: Range,
+    viewport3d: Range,
 
     pub const SpriteRange = struct {
         texture_id: AtlasTextureId,
@@ -554,7 +579,7 @@ pub const PrimitiveBatch = union(PrimitiveKind) {
 
     pub fn range(self: PrimitiveBatch) Range {
         return switch (self) {
-            .shadow, .quad, .path, .underline, .surface => |r| r,
+            .shadow, .quad, .path, .underline, .surface, .viewport3d => |r| r,
             .monochrome_sprite, .subpixel_sprite, .polychrome_sprite => |s| s.range,
         };
     }
@@ -572,6 +597,7 @@ pub const PrimitiveBatch = union(PrimitiveKind) {
             .subpixel_sprite => scene.subpixel_sprites.items[start].order,
             .polychrome_sprite => scene.polychrome_sprites.items[start].order,
             .surface => scene.surfaces.items[start].order,
+            .viewport3d => scene.viewports3d.items[start].order,
         };
     }
 };
@@ -591,6 +617,7 @@ pub const Scene = struct {
     subpixel_sprites: std.ArrayList(SubpixelSprite) = .empty,
     polychrome_sprites: std.ArrayList(PolychromeSprite) = .empty,
     surfaces: std.ArrayList(PaintSurface) = .empty,
+    viewports3d: std.ArrayList(Viewport3D) = .empty,
     /// Backdrop-blur regions, deliberately OUTSIDE the batch stream: the
     /// renderer breaks its render pass at each blur's order to snapshot the
     /// framebuffer, then resumes with the batch whose first order >= blur.order.
@@ -609,6 +636,7 @@ pub const Scene = struct {
         self.subpixel_sprites.deinit(gpa);
         self.polychrome_sprites.deinit(gpa);
         self.surfaces.deinit(gpa);
+        self.viewports3d.deinit(gpa);
         self.backdrop_blurs.deinit(gpa);
         self.* = undefined;
     }
@@ -627,6 +655,7 @@ pub const Scene = struct {
         self.subpixel_sprites.clearRetainingCapacity();
         self.polychrome_sprites.clearRetainingCapacity();
         self.surfaces.clearRetainingCapacity();
+        self.viewports3d.clearRetainingCapacity();
         self.backdrop_blurs.clearRetainingCapacity();
     }
 
@@ -726,6 +755,7 @@ pub const Scene = struct {
             .subpixel_sprite => &self.subpixel_sprites,
             .polychrome_sprite => &self.polychrome_sprites,
             .surface => &self.surfaces,
+            .viewport3d => &self.viewports3d,
         };
     }
 
@@ -750,6 +780,9 @@ pub const Scene = struct {
     }
     pub fn insertPolychromeSprite(self: *Scene, gpa: Allocator, v: PolychromeSprite) Allocator.Error!void {
         return self.insertPrimitive(gpa, .{ .polychrome_sprite = v });
+    }
+    pub fn insertViewport3D(self: *Scene, gpa: Allocator, v: Viewport3D) Allocator.Error!void {
+        return self.insertPrimitive(gpa, .{ .viewport3d = v });
     }
     pub fn insertSurface(self: *Scene, gpa: Allocator, v: PaintSurface) Allocator.Error!void {
         return self.insertPrimitive(gpa, .{ .surface = v });
@@ -777,6 +810,7 @@ pub const Scene = struct {
         sortSprites(SubpixelSprite, self.subpixel_sprites.items);
         sortSprites(PolychromeSprite, self.polychrome_sprites.items);
         sortByOrder(PaintSurface, self.surfaces.items);
+        sortByOrder(Viewport3D, self.viewports3d.items);
         sortByOrder(BackdropBlur, self.backdrop_blurs.items);
     }
 
@@ -841,6 +875,7 @@ pub const BatchIterator = struct {
             .subpixel_sprite => s.subpixel_sprites.items,
             .polychrome_sprite => s.polychrome_sprites.items,
             .surface => s.surfaces.items,
+            .viewport3d => s.viewports3d.items,
         };
     }
 

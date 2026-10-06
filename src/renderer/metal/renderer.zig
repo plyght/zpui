@@ -279,7 +279,7 @@ pub const MetalRenderer = struct {
     /// Consecutive frames rendered without any backdrop blur / any path.
     blur_free_frames: u32 = 0,
     path_free_frames: u32 = 0,
-    warned_unsupported: std.EnumSet(enum { surfaces, subpixel, mps }) = .empty,
+    warned_unsupported: std.EnumSet(enum { surfaces, subpixel, mps, viewport3d }) = .empty,
 
     const atlas_kind_count = @typeInfo(AtlasTextureKind).@"enum".field_names.len;
 
@@ -735,6 +735,8 @@ pub const MetalRenderer = struct {
                 .subpixel_sprite => self.warnOnce(.subpixel, "subpixel sprites are not supported on Metal; skipped"),
                 // TODO: CVPixelBuffer surfaces (CVMetalTextureCache) are not ported yet.
                 .surface => self.warnOnce(.surfaces, "surfaces are not supported yet; skipped"),
+                // [three spike] Metal 3D pass not written yet (see docs: zpui-3d.md).
+                .viewport3d => self.warnOnce(.viewport3d, "3D viewports are not supported by the Metal renderer yet; skipped"),
             }
         }
         // Blurs after the last batch still blur what was painted below them.
