@@ -238,8 +238,9 @@ pub const Ssao = struct {
     /// World-space sampling radius.
     radius: f32 = 0.1,
     intensity: f32 = 1,
-    /// Samples per pixel (4..32).
-    samples: u32 = 12,
+    /// Samples per pixel (4..16). With the blur, 8 matches 12 within 1/255
+    /// on the bench board.
+    samples: u32 = 8,
 };
 
 pub const TiltShift = struct {
