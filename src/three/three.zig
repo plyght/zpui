@@ -12,6 +12,7 @@ pub const scene3d = @import("scene3d.zig");
 pub const shapes = @import("shapes.zig");
 pub const gpu = @import("gpu.zig");
 pub const plan = @import("plan.zig");
+pub const gltf = @import("gltf.zig");
 
 pub const Vec2 = math.Vec2;
 pub const Vec3 = math.Vec3;
@@ -62,4 +63,5 @@ test {
     _ = shapes;
     _ = gpu;
     _ = plan;
+    _ = gltf;
 }

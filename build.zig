@@ -24,12 +24,14 @@ pub fn build(b: *std.Build) void {
     addLinuxText(b, target, optimize, zpui);
     addMetalRenderer(b, target, optimize, zpui);
     addGenMsl(b);
+    addThreeGltf(b, target, optimize, zpui);
     addMacPlatform(b, target, optimize, zpui);
     addZeronSyntax(b, target, optimize, test_step);
     addImageSupport(b, target, optimize, zpui);
     addZeronMarkdownDiff(b, target, optimize, test_step);
     addZeronModel(b, target, optimize, zpui, test_step);
     addHelloExample(b, target, optimize, zpui);
+    addThreeDemo(b, target, optimize, zpui);
     addZeronTerminal(b, target, optimize, zpui, test_step);
     addZeronComposer(b, target, optimize, zpui, test_step);
     addZeronTranscriptUi(b, target, optimize, zpui, test_step);
@@ -201,6 +203,20 @@ fn addVulkanRenderer(
     step3d.dependOn(&run3d.step);
 }
 
+/// zpui.three glTF loading: vendored cgltf (vendor/cgltf), compiled into the
+/// zpui module and exposed to src/three/gltf.zig as the `cgltf_c` translate-c module.
+fn addThreeGltf(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, zpui: *std.Build.Module) void {
+    const tc = b.addTranslateC(.{
+        .root_source_file = b.path("vendor/cgltf/cgltf.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+    zpui.addImport("cgltf_c", tc.addModule("cgltf_c"));
+    zpui.link_libc = true;
+    zpui.addIncludePath(b.path("vendor/cgltf"));
+    zpui.addCSourceFiles(.{ .files = &.{"src/three/c/zpui_cgltf.c"}, .flags = &.{ "-fno-sanitize=undefined", "-w" } });
+}
+
 /// zpui.three shaders: one GLSL source per stage (src/renderer/three/shaders).
 const three_shader_dir = "src/renderer/three/shaders/";
 const three_shaders = [_][]const u8{
@@ -224,7 +240,10 @@ fn addGenMsl(b: *std.Build) void {
             c.* = '_';
         };
         const stage = name[std.mem.lastIndexOfScalar(u8, name, '.').? + 1 ..];
-        const glslc = b.addSystemCommand(&.{ "glslc", "--target-env=vulkan1.2", "-DZPUI_MSL" });
+        // -MD: includes (three.glsl, lighting.glsl, ...) are cache inputs too.
+        const glslc = b.addSystemCommand(&.{ "glslc", "--target-env=vulkan1.2", "-DZPUI_MSL", "-MD" });
+        glslc.addArg("-MF");
+        _ = glslc.addDepFileOutputArg(b.fmt("{s}.d", .{stem}));
         glslc.addFileArg(b.path(b.fmt("{s}{s}", .{ three_shader_dir, name })));
         glslc.addArg("-o");
         const spv = glslc.addOutputFileArg(b.fmt("{s}.spv", .{stem}));
@@ -621,6 +640,35 @@ fn addZeronModel(
 
 /// `zig build hello`: the gpui-style Counter example (examples/hello.zig) on the Linux
 /// backend, with Geist fonts and icons from `zeron_assets`.
+/// `zig build three-demo`: the interactive zpui.three demo (Linux, and macOS on a Mac).
+fn addThreeDemo(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    const os = target.result.os.tag;
+    if (os != .linux and !(os == .macos and @import("builtin").os.tag == .macos)) return;
+    const assets = b.modules.get("zeron_assets") orelse return;
+    const exe = b.addExecutable(.{
+        .name = "three-demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/three_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zpui", .module = zpui },
+                .{ .name = "zeron_assets", .module = assets },
+            },
+        }),
+    });
+    b.installArtifact(exe);
+    const run = b.addRunArtifact(exe);
+    run.addPassthruArgs();
+    const step = b.step("three-demo", "Run the zpui.three demo (orbit camera, instanced boxes, toon toggle)");
+    step.dependOn(&run.step);
+}
+
 fn addHelloExample(
     b: *std.Build,
     target: std.Build.ResolvedTarget,

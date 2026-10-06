@@ -16,6 +16,9 @@ pub const effects = @import("effects.zig");
 pub const native_view_mod = @import("native_view.zig");
 pub const nativeView = native_view_mod.nativeView;
 pub const nativeViewWith = native_view_mod.nativeViewWith;
+pub const viewport3d_mod = @import("viewport3d.zig");
+pub const viewport3d = viewport3d_mod.viewport3d;
+pub const viewport3dRounded = viewport3d_mod.viewport3dRounded;
 pub const native_control = @import("native_control.zig");
 // [liquid-glass] native Liquid Glass (liquid_glass.zig)
 pub const liquid_glass = @import("liquid_glass.zig");

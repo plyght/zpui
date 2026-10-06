@@ -295,16 +295,16 @@ float3 shade_toon(thread const float3& albedo, thread const float3& n, thread co
         float t = float(k) / bands;
         level0 += smoothstep(t - soft, t + soft, lit);
     }
-    float _752;
+    float _797;
     if (bands > 1.0)
     {
-        _752 = ((device float*)&b_draw.d.toon)[1u] + (((1.0 - ((device float*)&b_draw.d.toon)[1u]) * level0) / (bands - 1.0));
+        _797 = ((device float*)&b_draw.d.toon)[1u] + (((1.0 - ((device float*)&b_draw.d.toon)[1u]) * level0) / (bands - 1.0));
     }
     else
     {
-        _752 = 1.0;
+        _797 = 1.0;
     }
-    float ramp = _752;
+    float ramp = _797;
     float3 param = n;
     return (albedo / float3(3.1415927410125732421875)) * (((b_frame.f.sun_color.xyz * ramp) * shadow) + ambient_irradiance(param, b_frame));
 }
@@ -348,7 +348,13 @@ float3 shade_pbr(thread const float3& albedo, thread const float& metallic, thre
     float3 direct = ((((diffuse_color / float3(3.1415927410125732421875)) + spec) * b_frame.f.sun_color.xyz) * n_l) * shadow;
     float3 param_5 = n;
     float3 indirect = (diffuse_color / float3(3.1415927410125732421875)) * ambient_irradiance(param_5, b_frame);
-    float3 env_spec = ((f0 * (1.0 - roughness)) * 0.1500000059604644775390625) * mix(b_frame.f.ground.xyz, b_frame.f.sky.xyz, float3((reflect(-v, n).y * 0.5) + 0.5));
+    float3 r = reflect(-v, n);
+    float3 param_6 = fast::normalize(mix(r, n, float3(roughness * roughness)));
+    float3 env = ambient_irradiance(param_6, b_frame) / float3(3.1415927410125732421875);
+    float4 rr = (float4(-1.0, -0.0274999998509883880615234375, -0.572000026702880859375, 0.02199999988079071044921875) * roughness) + float4(1.0, 0.0425000004470348358154296875, 1.03999996185302734375, -0.039999999105930328369140625);
+    float a004 = (fast::min(rr.x * rr.x, exp2((-9.27999973297119140625) * n_v)) * rr.x) + rr.y;
+    float2 ab = (float2(-1.03999996185302734375, 1.03999996185302734375) * a004) + rr.zw;
+    float3 env_spec = env * ((f0 * ab.x) + float3(ab.y));
     return (direct + indirect) + env_spec;
 }
 
@@ -375,20 +381,20 @@ fragment mesh_frag_out mesh_frag(mesh_frag_in in [[stage_in]], const device Fram
     }
     if ((flags & 16u) != 0u)
     {
-        float4 _863 = base;
-        float3 _865 = _863.xyz * palette.read(uint2(int2(int(in.v_id), int(in.v_palette_row))), 0).xyz;
-        base.x = _865.x;
-        base.y = _865.y;
-        base.z = _865.z;
+        float4 _907 = base;
+        float3 _909 = _907.xyz * palette.read(uint2(int2(int(in.v_id), int(in.v_palette_row))), 0).xyz;
+        base.x = _909.x;
+        base.y = _909.y;
+        base.z = _909.z;
     }
     if (((device float*)&b_draw.d.detail)[1u] != 0.0)
     {
         float2 param = in.v_world.xz * ((device float*)&b_draw.d.detail)[0u];
-        float4 _892 = base;
-        float3 _894 = _892.xyz * (1.0 + ((((device float*)&b_draw.d.detail)[1u] * (value_noise(param) - 0.5)) * 2.0));
-        base.x = _894.x;
-        base.y = _894.y;
-        base.z = _894.z;
+        float4 _936 = base;
+        float3 _938 = _936.xyz * (1.0 + ((((device float*)&b_draw.d.detail)[1u] * (value_noise(param) - 0.5)) * 2.0));
+        base.x = _938.x;
+        base.y = _938.y;
+        base.z = _938.z;
     }
     if ((flags & 128u) != 0u)
     {
@@ -404,41 +410,41 @@ fragment mesh_frag_out mesh_frag(mesh_frag_in in [[stage_in]], const device Fram
     }
     float3 param_1 = in.v_world;
     float3 v = view_vector(param_1, b_frame);
-    float3 _931;
+    float3 _975;
     if ((flags & 1u) != 0u)
     {
-        _931 = fast::normalize(in.v_normal);
+        _975 = fast::normalize(in.v_normal);
     }
     else
     {
-        _931 = fast::normalize(cross(dfdx(in.v_world), dfdy(in.v_world)));
+        _975 = fast::normalize(cross(dfdx(in.v_world), dfdy(in.v_world)));
     }
-    float3 n = _931;
-    bool _947 = (flags & 1u) == 0u;
-    bool _954;
-    if (_947)
+    float3 n = _975;
+    bool _991 = (flags & 1u) == 0u;
+    bool _998;
+    if (_991)
     {
-        _954 = dot(n, v) < 0.0;
+        _998 = dot(n, v) < 0.0;
     }
     else
     {
-        _954 = _947;
+        _998 = _991;
     }
-    if (_954)
+    if (_998)
     {
         n = -n;
     }
-    bool _962 = (flags & 512u) != 0u;
-    bool _969;
-    if (_962)
+    bool _1006 = (flags & 512u) != 0u;
+    bool _1013;
+    if (_1006)
     {
-        _969 = dot(n, v) < 0.0;
+        _1013 = dot(n, v) < 0.0;
     }
     else
     {
-        _969 = _962;
+        _1013 = _1006;
     }
-    if (_969)
+    if (_1013)
     {
         n = -n;
     }
@@ -475,17 +481,17 @@ fragment mesh_frag_out mesh_frag(mesh_frag_in in [[stage_in]], const device Fram
         }
     }
     color += b_draw.d.emissive.xyz;
-    bool _1034 = (flags & 256u) != 0u;
-    bool _1041;
-    if (_1034)
+    bool _1078 = (flags & 256u) != 0u;
+    bool _1085;
+    if (_1078)
     {
-        _1041 = in.v_id == ((device uint*)&b_draw.d.flags)[1u];
+        _1085 = in.v_id == ((device uint*)&b_draw.d.flags)[1u];
     }
     else
     {
-        _1041 = _1034;
+        _1085 = _1078;
     }
-    if (_1041)
+    if (_1085)
     {
         color = mix(color, b_draw.d.highlight_color.xyz, float3(((device float*)&b_draw.d.highlight_color)[3u]));
     }

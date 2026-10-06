@@ -137,6 +137,8 @@ pub const ContainerQuery = elements.ContainerQuery;
 /// Host a native child view at an element's bounds (`platform.NativeViewId`).
 pub const nativeView = elements.nativeView;
 pub const nativeViewWith = elements.nativeViewWith;
+pub const viewport3d = elements.viewport3d;
+pub const viewport3dRounded = elements.viewport3dRounded;
 
 /// Native form controls (macOS AppKit controls; zpui-drawn fallbacks elsewhere;
 /// src/elements/native_control.zig).

@@ -1,0 +1,2 @@
+cgltf v1.15 (https://github.com/jkuhlmann/cgltf, tag v1.15), MIT license.
+Only cgltf.h is vendored; compiled by src/three/c/zpui_cgltf.c.

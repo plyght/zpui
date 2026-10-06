@@ -7,6 +7,7 @@ const std = @import("std");
 const geometry = @import("../geometry.zig");
 const color = @import("../color.zig");
 const scene = @import("../scene.zig");
+const three = @import("../three/three.zig");
 const style_mod = @import("../style.zig");
 const text_mod = @import("../text/text.zig");
 const App = @import("../app/app.zig").App;
@@ -416,6 +417,30 @@ pub fn paintImageFitted(w: *Window, visible: Bounds, fitted: Bounds, radii: Corn
         .fade = scaledEdgeFade(w),
         .tile = tile,
         .opacity = w.element_opacity,
+    }) catch @panic("OOM");
+}
+
+/// Options for `paintViewport3D`.
+pub const Viewport3DOptions = struct {
+    corner_radii: Corners = .all(0),
+};
+
+/// Paint a zpui.three scene into `bounds` (logical px): the renderer draws it
+/// offscreen before the UI pass and composites it here in draw order, clipped to
+/// the content mask, rounded and faded by the element opacity. Bounds snap to
+/// device pixels so the offscreen image maps 1:1. Records the bounds on the
+/// scene for `Scene3D.pickAt`.
+pub fn paintViewport3D(w: *Window, bounds: Bounds, s3: *three.Scene3D, opts: Viewport3DOptions) void {
+    assertPaint(w);
+    const sb = snapBounds(w, bounds);
+    if (sb.size.width < 1 or sb.size.height < 1) return;
+    s3.last_viewport = .{ .x = bounds.origin.x, .y = bounds.origin.y, .width = bounds.size.width, .height = bounds.size.height };
+    sceneOf(w).insertViewport3D(w.gpa, .{
+        .bounds = sb,
+        .content_mask = snappedContentMask(w),
+        .corner_radii = scaleCorners(opts.corner_radii, w.scale_factor),
+        .opacity = w.element_opacity,
+        .scene3d = s3,
     }) catch @panic("OOM");
 }
 
