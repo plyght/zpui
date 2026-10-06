@@ -220,16 +220,18 @@ Y lets the same winding (counter-clockwise front faces) and texture origin
 - **CPU copies:** keep them (`keep_cpu`) only for meshes you pick.
 - **Measured numbers:** `zig build render-test-3d -Doptimize=ReleaseFast -- --bench` renders a Carcassonne-sized board (80 relief tiles at 48², slabs, about 1,800 instanced props, 25 figures; 0.57M triangles; 157 draws) at 2560×1440 per tier and prints GPU times. CI runs it on the `macos-15-intel` Metal runner (informational step).
 
-| Tier | lavapipe, 4 CPU cores (software) | macos-15-intel (paravirtual GPU, CI) |
+| Tier | lavapipe, 4 CPU cores (software) | macos-15-intel CI, Metal (paravirtual GPU) |
 |---|---|---|
-| low | 164 ms (main 118, post 46) | see the `render (macos-15-intel, metal)` job log |
-| medium | 453 ms (shadow 85, main 349, post 18) | ″ |
-| high | 532 ms (shadow 57, main 362, post 114) | ″ |
+| low | 164 ms (main 118, post 46) | 22.5 ms |
+| medium | 453 ms (shadow 85, main 349, post 18) | 52.9 ms |
+| high | 532 ms (shadow 57, main 362, post 114) | 59.8 ms |
 
-Lavapipe rasterizes on the CPU, so its numbers are relative tier costs only.
-MSAA dominates on it, and wall time per frame is within about 1% of
-the GPU time, so CPU-side planning is not the bottleneck there. The 60 fps target at 1440p on an M1 or a recent Intel iGPU (medium)
-has to be confirmed on hardware with the same bench.
+Lavapipe rasterizes on the CPU, so its numbers are relative tier costs only
+(MSAA dominates there). The Metal column is GPU time on the CI runner's
+virtual GPU, with wall time within 1.5 ms of it, so CPU-side planning is not
+the bottleneck. Real GPUs should be much faster, but the 60 fps target at
+1440p on an M1 or a recent Intel iGPU (medium tier) still has to be confirmed
+on that hardware with the same bench.
 
 ## 6. Tests
 
