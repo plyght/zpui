@@ -29,10 +29,12 @@ float value_noise(vec2 p) {
   return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// Fixed 12-tap Poisson disc (deterministic: no per-pixel rotation).
+// Fixed 12-tap Poisson disc (deterministic: no per-pixel rotation). The first
+// four taps span the disc: when they and the center agree the texel is fully
+// lit or fully shadowed, and the remaining eight taps are skipped.
 const vec2 POISSON[12] = vec2[12](
-  vec2(-0.326, -0.406), vec2(-0.840, -0.074), vec2(-0.696, 0.457), vec2(-0.203, 0.621),
-  vec2(0.962, -0.195), vec2(0.473, -0.480), vec2(0.519, 0.767), vec2(0.185, -0.893),
+  vec2(-0.840, -0.074), vec2(0.962, -0.195), vec2(0.519, 0.767), vec2(0.185, -0.893),
+  vec2(-0.326, -0.406), vec2(-0.696, 0.457), vec2(-0.203, 0.621), vec2(0.473, -0.480),
   vec2(0.507, 0.064), vec2(0.896, 0.412), vec2(-0.322, -0.933), vec2(-0.792, -0.598));
 
 float sample_shadow(sampler2DShadow map, vec3 lp) {
@@ -43,7 +45,9 @@ float sample_shadow(sampler2DShadow map, vec3 lp) {
   float radius = FRAME.shadow.w * FRAME.shadow.z;
   if (radius <= 0.0) return texture(map, vec3(uv, ref));
   float sum = texture(map, vec3(uv, ref));
-  for (int i = 0; i < 12; i++) sum += texture(map, vec3(uv + POISSON[i] * radius, ref));
+  for (int i = 0; i < 4; i++) sum += texture(map, vec3(uv + POISSON[i] * radius, ref));
+  if (sum <= 0.0 || sum >= 5.0) return sum * 0.2;
+  for (int i = 4; i < 12; i++) sum += texture(map, vec3(uv + POISSON[i] * radius, ref));
   return sum / 13.0;
 }
 

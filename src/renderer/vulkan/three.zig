@@ -95,6 +95,8 @@ const Target = struct {
     plan: Plan,
     /// Hash of the plan last rendered into `final` (0 = never rendered).
     rendered_hash: u64 = 0,
+    /// `plan.shadow_hash` of the map in `shadow` (0 = stale).
+    shadow_hash: u64 = 0,
     width: u32 = 0,
     height: u32 = 0,
     samples: u32 = 0,
@@ -349,6 +351,7 @@ pub const Three = struct {
             try three.plan.build(&t.plan, s3, w, h, .{ .max_samples = self.max_samples, .max_texture_size = r.device.limits.maxImageDimension2D });
             // Surface last frame's statistics to the app.
             v.scene3d.stats = t.stats;
+            v.scene3d.stats.cached = t.plan.hash == t.rendered_hash and t.final != null;
             try self.frame_targets.append(self.gpa, t);
             if (t.plan.hash != t.rendered_hash or t.final == null) total += hostBytes(&t.plan);
         }
@@ -577,7 +580,9 @@ pub const Three = struct {
         const inst_addr = if (plan.instances.items.len > 0) rec.push(std.mem.sliceAsBytes(plan.instances.items)) else self.dummy_buffer.address;
 
         // ---- shadow --------------------------------------------------------
-        if (plan.shadowsEnabled()) {
+        // Static light and casters: the map from an earlier frame is still valid.
+        const shadow_cached = plan.shadowsEnabled() and t.shadow_hash == plan.shadow_hash;
+        if (plan.shadowsEnabled() and !shadow_cached) {
             t.shadow.transition(cmd, c.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL, true);
             const depth_att: c.VkRenderingAttachmentInfo = .{
                 .sType = c.VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO,
@@ -594,6 +599,7 @@ pub const Three = struct {
             for (plan.shadow.items) |*d| self.drawMesh(rec, d, frame_addr, inst_addr, null, false);
             c.vkCmdEndRendering(cmd);
             t.shadow.transition(cmd, c.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, false);
+            t.shadow_hash = plan.shadow_hash;
         }
         if (timed) {
             c.vkCmdWriteTimestamp2(cmd, c.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, slot.queries, q);
@@ -689,13 +695,17 @@ pub const Three = struct {
             tilt_on = 1;
             // Half resolution: sigma in half-res texels.
             const sigma = @max(cfg.blur / 2, 0.5);
+            const skip = three.plan.tiltSkip(cfg, hh);
+            const inv_hh = 1 / @as(f32, @floatFromInt(hh));
             try self.postPass(rec, self.blur_hdr_pipeline, &t.blur_a, hw, hh, .{ t.hdr.view, ao_view, self.white.view }, self.clamp_sampler, .{
                 .p0 = .{ 2, 0, sigma, if (ao_strength > 0) 1 else 0 },
                 .p1 = .{ 1 / @as(f32, @floatFromInt(plan.width)), 1 / @as(f32, @floatFromInt(plan.height)), 2, ao_strength },
+                .p2 = .{ inv_hh, cfg.focus, skip[0], 1 },
             }, 0);
             try self.postPass(rec, self.blur_hdr_pipeline, &t.blur_b, hw, hh, .{ t.blur_a.view, self.white.view, self.white.view }, self.clamp_sampler, .{
                 .p0 = .{ 0, 1, sigma, 0 },
-                .p1 = .{ 1 / @as(f32, @floatFromInt(hw)), 1 / @as(f32, @floatFromInt(hh)), 1, 0 },
+                .p1 = .{ 1 / @as(f32, @floatFromInt(hw)), inv_hh, 1, 0 },
+                .p2 = .{ inv_hh, cfg.focus, skip[1], 1 },
             }, 0);
             blurred_view = t.blur_b.view;
         }
@@ -720,6 +730,7 @@ pub const Three = struct {
             .triangles = plan.triangles,
             .shadow_draws = @intCast(plan.shadow.items.len),
             .cached = false,
+            .shadow_cached = shadow_cached,
             .gpu_ms = t.stats.gpu_ms,
             .gpu_shadow_ms = t.stats.gpu_shadow_ms,
             .gpu_main_ms = t.stats.gpu_main_ms,
@@ -922,6 +933,7 @@ pub const Three = struct {
             }
             if (want.want and img.handle == null) {
                 img.* = try vk.Image.create(dev, mp, .{ .width = want.w, .height = want.h, .format = want.format, .usage = want.usage, .samples = want.samples, .aspect = want.aspect });
+                if (img == &t.shadow) t.shadow_hash = 0;
             }
         }
     }

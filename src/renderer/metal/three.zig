@@ -77,6 +77,8 @@ const Target = struct {
     last_used: u64 = 0,
     plan: Plan,
     rendered_hash: u64 = 0,
+    /// `plan.shadow_hash` of the map in `shadow` (0 = stale).
+    shadow_hash: u64 = 0,
     width: u32 = 0,
     height: u32 = 0,
     samples: u32 = 0,
@@ -93,34 +95,42 @@ const Target = struct {
     ldr2: ?id = null,
     final: ?id = null,
     stats: three.Scene3D.Stats = .{},
-    /// Committed command buffers (retained) not yet read for their GPU time,
-    /// oldest first. Several can be in flight at once.
-    timings: [4]?id = @splat(null),
+    /// Committed command buffers (retained; shadow, main, post) not yet read
+    /// for their GPU time, oldest first. Several frames can be in flight.
+    timings: [4]?[3]id = @splat(null),
 
     fn pollTimings(t: *Target) void {
-        for (&t.timings) |*slot| if (slot.*) |cb| switch (mtl.CommandBuffer.status(cb)) {
-            .completed => {
-                t.stats.gpu_ms = @floatCast((mtl.CommandBuffer.gpuEndTime(cb) - mtl.CommandBuffer.gpuStartTime(cb)) * 1000);
-                cb.release();
-                slot.* = null;
-            },
-            .@"error" => {
-                cb.release();
-                slot.* = null;
-            },
-            else => {},
+        for (&t.timings) |*slot| if (slot.*) |cbs| {
+            var done = true;
+            var failed = false;
+            for (cbs) |cb| switch (mtl.CommandBuffer.status(cb)) {
+                .completed => {},
+                .@"error" => failed = true,
+                else => done = false,
+            };
+            if (!done and !failed) continue;
+            if (!failed) {
+                var ms: [3]f32 = undefined;
+                for (cbs, &ms) |cb, *m| m.* = @floatCast(@max(mtl.CommandBuffer.gpuEndTime(cb) - mtl.CommandBuffer.gpuStartTime(cb), 0) * 1000);
+                t.stats.gpu_shadow_ms = ms[0];
+                t.stats.gpu_main_ms = ms[1];
+                t.stats.gpu_post_ms = ms[2];
+                t.stats.gpu_ms = ms[0] + ms[1] + ms[2];
+            }
+            for (cbs) |cb| cb.release();
+            slot.* = null;
         };
     }
 
-    fn pushTiming(t: *Target, cb: id) void {
+    fn pushTiming(t: *Target, cbs: [3]id) void {
         for (&t.timings) |*slot| if (slot.* == null) {
-            slot.* = cb;
+            slot.* = cbs;
             return;
         };
         // All four still in flight: drop the oldest.
-        t.timings[0].?.release();
-        std.mem.copyForwards(?id, t.timings[0..3], t.timings[1..4]);
-        t.timings[3] = cb;
+        for (t.timings[0].?) |cb| cb.release();
+        std.mem.copyForwards(?[3]id, t.timings[0..3], t.timings[1..4]);
+        t.timings[3] = cbs;
     }
 
     fn slots(t: *Target) [11]*?id {
@@ -132,8 +142,8 @@ const Target = struct {
             tex.release();
             s.* = null;
         };
-        for (&t.timings) |*slot| if (slot.*) |cb| {
-            cb.release();
+        for (&t.timings) |*slot| if (slot.*) |cbs| {
+            for (cbs) |cb| cb.release();
             slot.* = null;
         };
         t.final = null;
@@ -161,7 +171,7 @@ pub const Three = struct {
     textures: std.ArrayList(GpuTexture) = .empty,
     targets: std.ArrayList(*Target) = .empty,
     frame_targets: std.ArrayList(?*Target) = .empty,
-    pending: std.ArrayList(struct { target: *Target, cb: id }) = .empty,
+    pending: std.ArrayList(struct { target: *Target, cbs: [3]id }) = .empty,
     frame_number: u64 = 0,
 
     libraries: std.ArrayList(id) = .empty,
@@ -329,6 +339,7 @@ pub const Three = struct {
             try three.plan.build(&t.plan, s3, w, h, .{ .max_samples = self.max_samples, .max_texture_size = 16384 });
             t.pollTimings();
             v.scene3d.stats = t.stats;
+            v.scene3d.stats.cached = t.plan.hash == t.rendered_hash and t.final != null;
             try self.frame_targets.append(self.gpa, t);
         }
         var i: usize = 0;
@@ -445,16 +456,23 @@ pub const Three = struct {
                 t.stats.cached = true;
                 continue;
             }
-            const cb = mtl.CommandBuffer.fromQueue(queue) orelse return error.CommandBufferFailed;
-            try self.pending.append(self.gpa, .{ .target = t, .cb = cb.retain() });
-            try self.renderTarget(cb, frame, t);
+            // One command buffer per pass (shadow, main, post) for per-pass GPU times.
+            var cbs: [3]id = undefined;
+            for (&cbs, 0..) |*cb, i| {
+                cb.* = (mtl.CommandBuffer.fromQueue(queue) orelse {
+                    for (cbs[0..i]) |prev| prev.release();
+                    return error.CommandBufferFailed;
+                }).retain();
+            }
+            try self.pending.append(self.gpa, .{ .target = t, .cbs = cbs });
+            try self.renderTarget(cbs, frame, t);
         }
     }
 
     pub fn commitPending(self: *Three) void {
         for (self.pending.items) |p| {
-            mtl.CommandBuffer.commit(p.cb);
-            p.target.pushTiming(p.cb);
+            for (p.cbs) |cb| mtl.CommandBuffer.commit(cb);
+            p.target.pushTiming(p.cbs);
             p.target.rendered_hash = p.target.plan.hash;
         }
         self.pending.clearRetainingCapacity();
@@ -462,14 +480,15 @@ pub const Three = struct {
 
     pub fn discardPending(self: *Three) void {
         for (self.pending.items) |p| {
-            p.cb.release();
+            for (p.cbs) |cb| cb.release();
             // Encoded but never committed: the target's images hold nothing valid.
             p.target.rendered_hash = 0;
+            p.target.shadow_hash = 0;
         }
         self.pending.clearRetainingCapacity();
     }
 
-    fn renderTarget(self: *Three, cb: id, frame: FrameAlloc, t: *Target) !void {
+    fn renderTarget(self: *Three, cbs: [3]id, frame: FrameAlloc, t: *Target) !void {
         const plan = &t.plan;
         try self.ensureTextures(t);
         const frame_off = try frame.write(std.mem.asBytes(&plan.frame));
@@ -478,9 +497,12 @@ pub const Three = struct {
         const ssao = plan.ssao() != null;
 
         // ---- shadow --------------------------------------------------------
-        if (plan.shadowsEnabled()) {
+        // Static light and casters: the map from an earlier frame is still valid.
+        const shadow_cached = plan.shadowsEnabled() and t.shadow_hash == plan.shadow_hash;
+        if (plan.shadowsEnabled() and !shadow_cached) {
+            t.shadow_hash = plan.shadow_hash;
             const pass = mtl.RenderPassDescriptor.newWithDepth(null, .{ .texture = t.shadow.?, .load = .clear, .store = .store, .clear = 1 }) orelse return error.CommandBufferFailed;
-            const enc = try beginPass(cb, pass, plan.shadow_size, plan.shadow_size);
+            const enc = try beginPass(cbs[0], pass, plan.shadow_size, plan.shadow_size);
             defer mtl.RenderEncoder.endEncoding(enc);
             mtl.RenderEncoder.setPipeline(enc, self.shadow_pipeline.?);
             mtl.RenderEncoder.setDepthStencilState(enc, self.depth_standard.?);
@@ -507,7 +529,7 @@ pub const Three = struct {
                 .clear = 0,
             };
             const pass = mtl.RenderPassDescriptor.newWithDepth(color, depth) orelse return error.CommandBufferFailed;
-            const enc = try beginPass(cb, pass, plan.width, plan.height);
+            const enc = try beginPass(cbs[1], pass, plan.width, plan.height);
             defer mtl.RenderEncoder.endEncoding(enc);
             mtl.RenderEncoder.setFrontFacingWinding(enc, front_face);
             const mp = self.mesh_pipelines[if (msaa) 1 else 0];
@@ -527,6 +549,7 @@ pub const Three = struct {
         }
 
         // ---- post ----------------------------------------------------------
+        const cb = cbs[2];
         const hw = @max(plan.width / 2, 1);
         const hh = @max(plan.height / 2, 1);
         const fw: f32 = @floatFromInt(plan.width);
@@ -554,11 +577,17 @@ pub const Three = struct {
             tilt = cfg;
             tilt_on = 1;
             const sigma = @max(cfg.blur / 2, 0.5);
+            const skip = three.plan.tiltSkip(cfg, hh);
             try self.postPass(cb, frame, self.blur_hdr_pipeline.?, t.blur_a.?, hw, hh, .{ t.hdr.?, ao_tex, white }, self.clamp_sampler.?, .{
                 .p0 = .{ 2, 0, sigma, if (ao_strength > 0) 1 else 0 },
                 .p1 = .{ 1 / fw, 1 / fh, 2, ao_strength },
+                .p2 = .{ 1 / fhh, cfg.focus, skip[0], 1 },
             }, null);
-            try self.postPass(cb, frame, self.blur_hdr_pipeline.?, t.blur_b.?, hw, hh, .{ t.blur_a.?, white, white }, self.clamp_sampler.?, .{ .p0 = .{ 0, 1, sigma, 0 }, .p1 = .{ 1 / fhw, 1 / fhh, 1, 0 } }, null);
+            try self.postPass(cb, frame, self.blur_hdr_pipeline.?, t.blur_b.?, hw, hh, .{ t.blur_a.?, white, white }, self.clamp_sampler.?, .{
+                .p0 = .{ 0, 1, sigma, 0 },
+                .p1 = .{ 1 / fhw, 1 / fhh, 1, 0 },
+                .p2 = .{ 1 / fhh, cfg.focus, skip[1], 1 },
+            }, null);
             blurred = t.blur_b.?;
         }
         const post = plan.post;
@@ -577,7 +606,11 @@ pub const Three = struct {
             .instances = @intCast(plan.instances.items.len),
             .triangles = plan.triangles,
             .shadow_draws = @intCast(plan.shadow.items.len),
+            .shadow_cached = shadow_cached,
             .gpu_ms = t.stats.gpu_ms,
+            .gpu_shadow_ms = t.stats.gpu_shadow_ms,
+            .gpu_main_ms = t.stats.gpu_main_ms,
+            .gpu_post_ms = t.stats.gpu_post_ms,
         };
     }
 
@@ -712,7 +745,10 @@ pub const Three = struct {
                     want.slot.* = null;
                 }
             }
-            if (want.want and want.slot.* == null) want.slot.* = try self.newTexture(want.w, want.h, want.format, want.usage, want.storage, want.samples, 1);
+            if (want.want and want.slot.* == null) {
+                want.slot.* = try self.newTexture(want.w, want.h, want.format, want.usage, want.storage, want.samples, 1);
+                if (want.slot == &t.shadow) t.shadow_hash = 0;
+            }
         }
     }
 

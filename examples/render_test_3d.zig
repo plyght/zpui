@@ -16,7 +16,10 @@
 //! Vulkan validation errors, and a 30-frame headless-swapchain spin with a resize.
 //!
 //! Flags: `--update-golden` rewrites the goldens; `--bench` renders a
-//! Carcassonne-sized board at 2560x1440 per tier and prints GPU timings.
+//! Carcassonne-sized board at 2560x1440 per tier and prints GPU timings, fps
+//! and the idle (cached) cost; `--shots` also writes zig-out/bench-<tier>.png;
+//! `--tier=low|medium|high` runs one tier; `--no-lod` draws every instance
+//! at full detail.
 
 const std = @import("std");
 const zpui = @import("zpui");
@@ -113,11 +116,17 @@ pub fn main(init: std.process.Init) !void {
     const argv = try init.minimal.args.toSlice(init.arena.allocator());
     var update_golden = false;
     var bench = false;
+    var shots = false;
+    var lod = true;
+    var only_tier: ?three.Tier = null;
     for (argv[1..]) |a| {
         if (std.mem.eql(u8, a, "--update-golden")) update_golden = true;
         if (std.mem.eql(u8, a, "--bench")) bench = true;
+        if (std.mem.eql(u8, a, "--shots")) shots = true;
+        if (std.mem.eql(u8, a, "--no-lod")) lod = false;
+        if (std.mem.startsWith(u8, a, "--tier=")) only_tier = std.meta.stringToEnum(three.Tier, a[7..]);
     }
-    if (bench) return runBench(gpa);
+    if (bench) return runBench(gpa, io, only_tier, shots, lod);
 
     const size: Size = .{ .width = case_w, .height = case_h };
     var renderer = try Renderer.init(gpa, .{ .size = size, .transparent = true, .validation = true });
@@ -459,7 +468,7 @@ fn spin(gpa: std.mem.Allocator, g: *three.Gfx3D, a: Assets) !void {
 // Benchmark: a Carcassonne-sized board
 // ---------------------------------------------------------------------------
 
-fn runBench(gpa: std.mem.Allocator) !void {
+fn runBench(gpa: std.mem.Allocator, io: std.Io, only_tier: ?three.Tier, shots: bool, lod: bool) !void {
     const size: Size = .{ .width = 2560, .height = 1440 };
     var renderer = try Renderer.init(gpa, .{ .size = size, .transparent = false, .validation = false });
     defer renderer.deinit();
@@ -467,27 +476,32 @@ fn runBench(gpa: std.mem.Allocator) !void {
     defer g.deinit();
 
     // 80 tiles: a 48x48 relief grid each (with vertex colors), plus slabs.
-    const res = 48;
-    var tile = try three.shapes.plane(gpa, 1, 1, res);
-    defer tile.deinit(gpa);
-    var colors = try gpa.alloc([4]u8, tile.positions.len);
-    defer gpa.free(colors);
-    for (tile.positions, 0..) |*p, i| {
-        p[1] = 0.01 * @sin(p[0] * 17) * @cos(p[2] * 13);
-        colors[i] = .{ @intCast(60 + i % 40), 140, 50, 255 };
+    // With LOD (default; `--no-lod` disables) distant tiles and props use
+    // coarser meshes, as an app would supply (e.g. relief encoded at 24/12).
+    const tile_mesh = try reliefTile(gpa, &g, 48);
+    var bush_s = try three.shapes.sphere(gpa, 0.03, 8, 12);
+    defer bush_s.deinit(gpa);
+    const bush = try g.createMesh(bush_s.desc());
+    if (lod) {
+        try g.setLods(tile_mesh, &.{
+            .{ .mesh = try reliefTile(gpa, &g, 24), .max_pixels = 384 },
+            .{ .mesh = try reliefTile(gpa, &g, 12), .max_pixels = 160 },
+        });
+        var bush_m = try three.shapes.sphere(gpa, 0.03, 6, 8);
+        defer bush_m.deinit(gpa);
+        var bush_l = try three.shapes.sphere(gpa, 0.03, 4, 6);
+        defer bush_l.deinit(gpa);
+        try g.setLods(bush, &.{
+            .{ .mesh = try g.createMesh(bush_m.desc()), .max_pixels = 24 },
+            .{ .mesh = try g.createMesh(bush_l.desc()), .max_pixels = 12 },
+        });
     }
-    var tile_desc = tile.desc();
-    tile_desc.colors = colors;
-    const tile_mesh = try g.createMesh(tile_desc);
     var slab = try three.shapes.box(gpa, .{ 1, 0.09, 1 });
     defer slab.deinit(gpa);
     const slab_mesh = try g.createMesh(slab.desc());
     var house_s = try three.shapes.box(gpa, .{ 0.11, 0.07, 0.07 });
     defer house_s.deinit(gpa);
     const house = try g.createMesh(house_s.desc());
-    var bush_s = try three.shapes.sphere(gpa, 0.03, 8, 12);
-    defer bush_s.deinit(gpa);
-    const bush = try g.createMesh(bush_s.desc());
     var fig_s = try three.shapes.cylinder(gpa, 0.06, 0.26, 16);
     defer fig_s.deinit(gpa);
     const figure = try g.createMesh(fig_s.desc());
@@ -525,18 +539,21 @@ fn runBench(gpa: std.mem.Allocator) !void {
     var orbit: three.Orbit = .{ .distance = 11, .pitch = 0.75, .fov_y = std.math.pi / 5.0 };
     std.debug.print("bench: 2560x1440, {s}\n", .{@tagName(zpui.renderer.backend)});
     for ([_]three.Tier{ .low, .medium, .high }) |tier| {
+        if (only_tier) |t| if (t != tier) continue;
         s3.setTier(tier);
         var sum: f64 = 0;
         var parts: [3]f64 = .{ 0, 0, 0 };
         var samples: u32 = 0;
-        const frames = 14;
+        const warmup = 6;
+        const frames = warmup + 10;
         var t0 = nowNs();
+        // Moving camera: every frame re-renders (the interactive worst case).
         for (0..frames) |f| {
-            if (f == 6) t0 = nowNs();
-            orbit.yaw = 0.6 + @as(f32, @floatFromInt(f)) * 0.01; // defeat the cache
+            if (f == warmup) t0 = nowNs();
+            orbit.yaw = 0.6 + @as(f32, @floatFromInt(f)) * 0.01;
             s3.camera = orbit.camera();
             try renderer.drawScene(&scene, size, 1, color.transparent_black);
-            if (f >= 6 and s3.stats.gpu_ms > 0) {
+            if (f >= warmup and s3.stats.gpu_ms > 0) {
                 sum += s3.stats.gpu_ms;
                 parts[0] += s3.stats.gpu_shadow_ms;
                 parts[1] += s3.stats.gpu_main_ms;
@@ -544,12 +561,55 @@ fn runBench(gpa: std.mem.Allocator) !void {
                 samples += 1;
             }
         }
-        const wall = @as(f64, @floatFromInt(nowNs() - t0)) / 1e6 / (frames - 6);
+        const wall = @as(f64, @floatFromInt(nowNs() - t0)) / 1e6 / (frames - warmup);
+        // Idle: same scene again (render on demand; only the composite runs).
+        var idle_cached = true;
+        for (0..3) |_| try renderer.drawScene(&scene, size, 1, color.transparent_black);
+        const ti = nowNs();
+        const idle_frames = 10;
+        for (0..idle_frames) |_| {
+            try renderer.drawScene(&scene, size, 1, color.transparent_black);
+            idle_cached = idle_cached and s3.stats.cached;
+        }
+        const idle = @as(f64, @floatFromInt(nowNs() - ti)) / 1e6 / idle_frames;
         const n: f64 = @floatFromInt(@max(samples, 1));
-        std.debug.print("  {t:<6} {d} draws, {d} instances, {d:.2}M triangles | gpu {d:.2} ms (shadow {d:.2}, main {d:.2}, post {d:.2}) | wall {d:.1} ms/frame\n", .{
-            tier, s3.stats.draws, s3.stats.instances, @as(f64, @floatFromInt(s3.stats.triangles)) / 1e6, sum / n, parts[0] / n, parts[1] / n, parts[2] / n, wall,
+        const gpu = sum / n;
+        std.debug.print("  {t:<6} {d} draws, {d} instances, {d:.2}M tris | gpu {d:.2} ms = {d:.0} fps (shadow {d:.2}, main {d:.2}, post {d:.2}) | wall {d:.1} ms | idle {d:.2} ms/frame{s}\n", .{
+            tier,                                       s3.stats.draws, s3.stats.instances,
+            @as(f64, @floatFromInt(s3.stats.triangles)) / 1e6, gpu,            if (gpu > 0) 1000 / gpu else 0,
+            parts[0] / n,                               parts[1] / n,   parts[2] / n,
+            wall,                                       idle,           if (idle_cached) " (cached)" else " (NOT cached)",
         });
+        if (shots) {
+            orbit.yaw = 0.6;
+            s3.camera = orbit.camera();
+            try renderer.drawScene(&scene, size, 1, color.transparent_black);
+            const px = try renderer.readPixels(gpa);
+            defer gpa.free(px);
+            const enc = try png.encode(gpa, 2560, 1440, px);
+            defer gpa.free(enc);
+            var name_buf: [64]u8 = undefined;
+            const name = try std.fmt.bufPrint(&name_buf, "zig-out/bench-{t}.png", .{tier});
+            try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = name, .data = enc });
+        }
     }
+}
+
+/// A 1x1 relief tile on a res x res grid; heights and colors are functions of
+/// position, so every resolution shows the same surface.
+fn reliefTile(gpa: std.mem.Allocator, g: *three.Gfx3D, res: u32) !three.MeshId {
+    var tile = try three.shapes.plane(gpa, 1, 1, res);
+    defer tile.deinit(gpa);
+    const colors = try gpa.alloc([4]u8, tile.positions.len);
+    defer gpa.free(colors);
+    for (tile.positions, colors) |*p, *col| {
+        p[1] = 0.01 * @sin(p[0] * 17) * @cos(p[2] * 13);
+        const v = 0.5 + 0.5 * @sin(p[0] * 23 + p[2] * 31);
+        col.* = .{ @intFromFloat(60 + 39 * v), 140, 50, 255 };
+    }
+    var desc = tile.desc();
+    desc.colors = colors;
+    return g.createMesh(desc);
 }
 
 fn nowNs() u64 {

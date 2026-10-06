@@ -115,6 +115,16 @@ pub const TextureDesc = struct {
     label: []const u8 = "",
 };
 
+/// A coarser stand-in for a mesh, used for instances that cover few pixels.
+pub const Lod = struct {
+    mesh: MeshId,
+    /// Used while the instance's projected bounding-sphere diameter is at most
+    /// this many pixels (device pixels; shadow-map texels in the shadow pass).
+    max_pixels: f32,
+};
+
+pub const max_lods = 3;
+
 pub const Mesh = struct {
     generation: u32 = 0,
     live: bool = false,
@@ -129,6 +139,13 @@ pub const Mesh = struct {
     /// CPU data: present until uploaded (then freed unless `keep_cpu`).
     cpu: ?MeshData = null,
     uploaded: bool = false,
+    /// Coarser levels, `max_pixels` descending (see `Gfx3D.setLods`).
+    lods: [max_lods]Lod = undefined,
+    lod_count: u8 = 0,
+
+    pub fn lodSlice(self: *const Mesh) []const Lod {
+        return self.lods[0..self.lod_count];
+    }
 };
 
 /// Owned copies of a mesh's streams (one allocation).
@@ -248,6 +265,24 @@ pub const Gfx3D = struct {
         const m = &self.meshes.items[slot];
         if (!m.live or (m.generation & 0xfff) != h.generation()) return null;
         return m;
+    }
+
+    /// Give `h` up to `max_lods` coarser levels. Draws of `h` then pick a level
+    /// per instance from its projected size; draws with an explicit index
+    /// range always use `h`. LOD meshes should share `h`'s bounds and look.
+    pub fn setLods(self: *Gfx3D, h: MeshId, lods: []const Lod) error{ InvalidMesh, TooManyLods }!void {
+        const slot = h.slot() orelse return error.InvalidMesh;
+        if (self.mesh(h) == null) return error.InvalidMesh;
+        if (lods.len > max_lods) return error.TooManyLods;
+        const m = &self.meshes.items[slot];
+        @memcpy(m.lods[0..lods.len], lods);
+        m.lod_count = @intCast(lods.len);
+        std.mem.sort(Lod, m.lods[0..lods.len], {}, struct {
+            fn gt(_: void, a: Lod, b: Lod) bool {
+                return a.max_pixels > b.max_pixels;
+            }
+        }.gt);
+        self.revision += 1;
     }
 
     pub fn destroyMesh(self: *Gfx3D, h: MeshId) void {

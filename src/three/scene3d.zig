@@ -401,6 +401,8 @@ pub const Scene3D = struct {
         shadow_draws: u32 = 0,
         /// True when the last composite reused the cached image.
         cached: bool = false,
+        /// True when the last render reused the shadow map (static light and casters).
+        shadow_cached: bool = false,
         /// GPU time of the 3D passes in milliseconds (0 when unavailable).
         gpu_ms: f32 = 0,
         gpu_shadow_ms: f32 = 0,

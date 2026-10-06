@@ -35,11 +35,13 @@ void main() {
   if ((flags & F_HAS_NORMALS) == 0u && dot(n, v) < 0.0) n = -n;
   if ((flags & F_DOUBLE_SIDED) != 0u && dot(n, v) < 0.0) n = -n;
 
+  // PBR surfaces facing away from the sun get no direct light: skip the PCF.
+  uint model = DRAW.flags.z;
   float shadow = 1.0;
-  if ((flags & F_RECEIVE_SHADOWS) != 0u) shadow = sample_shadow(shadow_map, v_shadow);
+  if ((flags & F_RECEIVE_SHADOWS) != 0u && model != SHADING_FLAT && (model == SHADING_TOON || dot(n, FRAME.sun_dir.xyz) > 0.0))
+    shadow = sample_shadow(shadow_map, v_shadow);
 
   vec3 color;
-  uint model = DRAW.flags.z;
   if (model == SHADING_FLAT) {
     color = base.rgb;
   } else if (model == SHADING_TOON) {

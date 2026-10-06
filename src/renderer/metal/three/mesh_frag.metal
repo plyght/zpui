@@ -126,7 +126,7 @@ struct InstancesBuf
     Instance v[1];
 };
 
-constant spvUnsafeArray<float2, 12> _342 = spvUnsafeArray<float2, 12>({ float2(-0.3260000050067901611328125, -0.4059999883174896240234375), float2(-0.839999973773956298828125, -0.07400000095367431640625), float2(-0.69599997997283935546875, 0.4569999873638153076171875), float2(-0.20299999415874481201171875, 0.620999991893768310546875), float2(0.96200001239776611328125, -0.194999992847442626953125), float2(0.472999989986419677734375, -0.4799999892711639404296875), float2(0.518999993801116943359375, 0.767000019550323486328125), float2(0.185000002384185791015625, -0.89300000667572021484375), float2(0.507000029087066650390625, 0.064000003039836883544921875), float2(0.89600002765655517578125, 0.412000000476837158203125), float2(-0.3219999969005584716796875, -0.933000028133392333984375), float2(-0.791999995708465576171875, -0.597999989986419677734375) });
+constant spvUnsafeArray<float2, 12> _342 = spvUnsafeArray<float2, 12>({ float2(-0.839999973773956298828125, -0.07400000095367431640625), float2(0.96200001239776611328125, -0.194999992847442626953125), float2(0.518999993801116943359375, 0.767000019550323486328125), float2(0.185000002384185791015625, -0.89300000667572021484375), float2(-0.3260000050067901611328125, -0.4059999883174896240234375), float2(-0.69599997997283935546875, 0.4569999873638153076171875), float2(-0.20299999415874481201171875, 0.620999991893768310546875), float2(0.472999989986419677734375, -0.4799999892711639404296875), float2(0.507000029087066650390625, 0.064000003039836883544921875), float2(0.89600002765655517578125, 0.412000000476837158203125), float2(-0.3219999969005584716796875, -0.933000028133392333984375), float2(-0.791999995708465576171875, -0.597999989986419677734375) });
 
 struct mesh_frag_out
 {
@@ -240,10 +240,19 @@ float sample_shadow(depth2d<float> map, sampler mapSmplr, thread const float3& l
     }
     float3 _289 = float3(uv, ref);
     float sum = map.sample_compare(mapSmplr, _289.xy, _289.z);
-    for (int i = 0; i < 12; i++)
+    for (int i = 0; i < 4; i++)
     {
         float3 _354 = float3(uv + (_342[i] * radius), ref);
         sum += map.sample_compare(mapSmplr, _354.xy, _354.z);
+    }
+    if ((sum <= 0.0) || (sum >= 5.0))
+    {
+        return sum * 0.20000000298023223876953125;
+    }
+    for (int i_1 = 4; i_1 < 12; i_1++)
+    {
+        float3 _394 = float3(uv + (_342[i_1] * radius), ref);
+        sum += map.sample_compare(mapSmplr, _394.xy, _394.z);
     }
     return sum / 13.0;
 }
@@ -295,16 +304,16 @@ float3 shade_toon(thread const float3& albedo, thread const float3& n, thread co
         float t = float(k) / bands;
         level0 += smoothstep(t - soft, t + soft, lit);
     }
-    float _797;
+    float _835;
     if (bands > 1.0)
     {
-        _797 = ((device float*)&b_draw.d.toon)[1u] + (((1.0 - ((device float*)&b_draw.d.toon)[1u]) * level0) / (bands - 1.0));
+        _835 = ((device float*)&b_draw.d.toon)[1u] + (((1.0 - ((device float*)&b_draw.d.toon)[1u]) * level0) / (bands - 1.0));
     }
     else
     {
-        _797 = 1.0;
+        _835 = 1.0;
     }
-    float ramp = _797;
+    float ramp = _835;
     float3 param = n;
     return (albedo / float3(3.1415927410125732421875)) * (((b_frame.f.sun_color.xyz * ramp) * shadow) + ambient_irradiance(param, b_frame));
 }
@@ -381,20 +390,20 @@ fragment mesh_frag_out mesh_frag(mesh_frag_in in [[stage_in]], const device Fram
     }
     if ((flags & 16u) != 0u)
     {
-        float4 _907 = base;
-        float3 _909 = _907.xyz * palette.read(uint2(int2(int(in.v_id), int(in.v_palette_row))), 0).xyz;
-        base.x = _909.x;
-        base.y = _909.y;
-        base.z = _909.z;
+        float4 _945 = base;
+        float3 _947 = _945.xyz * palette.read(uint2(int2(int(in.v_id), int(in.v_palette_row))), 0).xyz;
+        base.x = _947.x;
+        base.y = _947.y;
+        base.z = _947.z;
     }
     if (((device float*)&b_draw.d.detail)[1u] != 0.0)
     {
         float2 param = in.v_world.xz * ((device float*)&b_draw.d.detail)[0u];
-        float4 _936 = base;
-        float3 _938 = _936.xyz * (1.0 + ((((device float*)&b_draw.d.detail)[1u] * (value_noise(param) - 0.5)) * 2.0));
-        base.x = _938.x;
-        base.y = _938.y;
-        base.z = _938.z;
+        float4 _974 = base;
+        float3 _976 = _974.xyz * (1.0 + ((((device float*)&b_draw.d.detail)[1u] * (value_noise(param) - 0.5)) * 2.0));
+        base.x = _976.x;
+        base.y = _976.y;
+        base.z = _976.z;
     }
     if ((flags & 128u) != 0u)
     {
@@ -410,51 +419,71 @@ fragment mesh_frag_out mesh_frag(mesh_frag_in in [[stage_in]], const device Fram
     }
     float3 param_1 = in.v_world;
     float3 v = view_vector(param_1, b_frame);
-    float3 _975;
+    float3 _1013;
     if ((flags & 1u) != 0u)
     {
-        _975 = fast::normalize(in.v_normal);
+        _1013 = fast::normalize(in.v_normal);
     }
     else
     {
-        _975 = fast::normalize(cross(dfdx(in.v_world), dfdy(in.v_world)));
+        _1013 = fast::normalize(cross(dfdx(in.v_world), dfdy(in.v_world)));
     }
-    float3 n = _975;
-    bool _991 = (flags & 1u) == 0u;
-    bool _998;
-    if (_991)
+    float3 n = _1013;
+    bool _1029 = (flags & 1u) == 0u;
+    bool _1036;
+    if (_1029)
     {
-        _998 = dot(n, v) < 0.0;
+        _1036 = dot(n, v) < 0.0;
     }
     else
     {
-        _998 = _991;
+        _1036 = _1029;
     }
-    if (_998)
+    if (_1036)
     {
         n = -n;
     }
-    bool _1006 = (flags & 512u) != 0u;
-    bool _1013;
-    if (_1006)
+    bool _1044 = (flags & 512u) != 0u;
+    bool _1051;
+    if (_1044)
     {
-        _1013 = dot(n, v) < 0.0;
+        _1051 = dot(n, v) < 0.0;
     }
     else
     {
-        _1013 = _1006;
+        _1051 = _1044;
     }
-    if (_1013)
+    if (_1051)
     {
         n = -n;
     }
+    uint model = ((device uint*)&b_draw.d.flags)[2u];
     float shadow = 1.0;
-    if ((flags & 32u) != 0u)
+    bool _1066 = ((flags & 32u) != 0u) && (model != 2u);
+    bool _1081;
+    if (_1066)
+    {
+        bool _1070 = model == 1u;
+        bool _1080;
+        if (!_1070)
+        {
+            _1080 = dot(n, b_frame.f.sun_dir.xyz) > 0.0;
+        }
+        else
+        {
+            _1080 = _1070;
+        }
+        _1081 = _1080;
+    }
+    else
+    {
+        _1081 = _1066;
+    }
+    if (_1081)
     {
         float3 param_2 = in.v_shadow;
         shadow = sample_shadow(shadow_map, shadow_mapSmplr, param_2, b_frame);
     }
-    uint model = ((device uint*)&b_draw.d.flags)[2u];
     float3 color;
     if (model == 2u)
     {
@@ -481,17 +510,17 @@ fragment mesh_frag_out mesh_frag(mesh_frag_in in [[stage_in]], const device Fram
         }
     }
     color += b_draw.d.emissive.xyz;
-    bool _1078 = (flags & 256u) != 0u;
-    bool _1085;
-    if (_1078)
+    bool _1134 = (flags & 256u) != 0u;
+    bool _1141;
+    if (_1134)
     {
-        _1085 = in.v_id == ((device uint*)&b_draw.d.flags)[1u];
+        _1141 = in.v_id == ((device uint*)&b_draw.d.flags)[1u];
     }
     else
     {
-        _1085 = _1078;
+        _1141 = _1134;
     }
-    if (_1085)
+    if (_1141)
     {
         color = mix(color, b_draw.d.highlight_color.xyz, float3(((device float*)&b_draw.d.highlight_color)[3u]));
     }
