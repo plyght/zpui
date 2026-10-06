@@ -221,6 +221,7 @@ fn addThreeGltf(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.b
 const three_shader_dir = "src/renderer/three/shaders/";
 const three_shaders = [_][]const u8{
     "mesh.vert",       "mesh.frag",
+    "mesh_mask.frag",
     "outline.vert",    "outline.frag",
     "shadow.vert",     "shadow.frag",
     "fullscreen.vert", "ssao.frag",

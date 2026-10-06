@@ -397,6 +397,15 @@ pub const Aabb = extern struct {
     pub fn radius(b: Aabb) f32 {
         return b.extent().length() * 0.5;
     }
+    /// Distance from `p` to the box (0 inside).
+    pub fn distanceTo(b: Aabb, p: Vec3) f32 {
+        const q: Vec3 = .new(
+            std.math.clamp(p.x, b.min.x, b.max.x),
+            std.math.clamp(p.y, b.min.y, b.max.y),
+            std.math.clamp(p.z, b.min.z, b.max.z),
+        );
+        return q.sub(p).length();
+    }
     pub fn corner(b: Aabb, i: usize) Vec3 {
         return .{
             .x = if (i & 1 != 0) b.max.x else b.min.x,

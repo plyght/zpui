@@ -128,12 +128,12 @@ struct InstancesBuf
 
 constant spvUnsafeArray<float2, 12> _342 = spvUnsafeArray<float2, 12>({ float2(-0.839999973773956298828125, -0.07400000095367431640625), float2(0.96200001239776611328125, -0.194999992847442626953125), float2(0.518999993801116943359375, 0.767000019550323486328125), float2(0.185000002384185791015625, -0.89300000667572021484375), float2(-0.3260000050067901611328125, -0.4059999883174896240234375), float2(-0.69599997997283935546875, 0.4569999873638153076171875), float2(-0.20299999415874481201171875, 0.620999991893768310546875), float2(0.472999989986419677734375, -0.4799999892711639404296875), float2(0.507000029087066650390625, 0.064000003039836883544921875), float2(0.89600002765655517578125, 0.412000000476837158203125), float2(-0.3219999969005584716796875, -0.933000028133392333984375), float2(-0.791999995708465576171875, -0.597999989986419677734375) });
 
-struct mesh_frag_out
+struct mesh_mask_frag_out
 {
     float4 out_color [[color(0)]];
 };
 
-struct mesh_frag_in
+struct mesh_mask_frag_in
 {
     float3 v_world [[user(locn0)]];
     float3 v_normal [[user(locn1)]];
@@ -379,9 +379,9 @@ float3 apply_fog(thread const float3& color, thread const float& view_depth, con
     return mix(color, b_frame.f.fog.xyz, float3(fast::clamp(f, 0.0, 1.0)));
 }
 
-fragment mesh_frag_out mesh_frag(mesh_frag_in in [[stage_in]], const device FrameBuf& b_frame [[buffer(6)]], const device DrawBuf& b_draw [[buffer(7)]], depth2d<float> shadow_map [[texture(8)]], texture2d<float> base_texture [[texture(9)]], texture2d<float> palette [[texture(10)]], sampler shadow_mapSmplr [[sampler(8)]], sampler base_textureSmplr [[sampler(9)]], sampler paletteSmplr [[sampler(10)]])
+fragment mesh_mask_frag_out mesh_mask_frag(mesh_mask_frag_in in [[stage_in]], const device FrameBuf& b_frame [[buffer(6)]], const device DrawBuf& b_draw [[buffer(7)]], depth2d<float> shadow_map [[texture(8)]], texture2d<float> base_texture [[texture(9)]], texture2d<float> palette [[texture(10)]], sampler shadow_mapSmplr [[sampler(8)]], sampler base_textureSmplr [[sampler(9)]], sampler paletteSmplr [[sampler(10)]])
 {
-    mesh_frag_out out = {};
+    mesh_mask_frag_out out = {};
     uint flags = ((device uint*)&b_draw.d.flags)[0u];
     float4 base = b_draw.d.base_color * in.v_color;
     if ((flags & 8u) != 0u)
@@ -405,37 +405,31 @@ fragment mesh_frag_out mesh_frag(mesh_frag_in in [[stage_in]], const device Fram
         base.y = _976.y;
         base.z = _976.z;
     }
+    if ((flags & 128u) != 0u)
+    {
+        if (base.w < ((device float*)&b_draw.d.pbr)[2u])
+        {
+            discard_fragment();
+        }
+        base.w = 1.0;
+    }
     if ((flags & 1024u) == 0u)
     {
         base.w = 1.0;
     }
     float3 param_1 = in.v_world;
     float3 v = view_vector(param_1, b_frame);
-    float3 _998;
+    float3 _1013;
     if ((flags & 1u) != 0u)
     {
-        _998 = fast::normalize(in.v_normal);
+        _1013 = fast::normalize(in.v_normal);
     }
     else
     {
-        _998 = fast::normalize(cross(dfdx(in.v_world), dfdy(in.v_world)));
+        _1013 = fast::normalize(cross(dfdx(in.v_world), dfdy(in.v_world)));
     }
-    float3 n = _998;
-    bool _1014 = (flags & 1u) == 0u;
-    bool _1021;
-    if (_1014)
-    {
-        _1021 = dot(n, v) < 0.0;
-    }
-    else
-    {
-        _1021 = _1014;
-    }
-    if (_1021)
-    {
-        n = -n;
-    }
-    bool _1029 = (flags & 512u) != 0u;
+    float3 n = _1013;
+    bool _1029 = (flags & 1u) == 0u;
     bool _1036;
     if (_1029)
     {
@@ -449,29 +443,43 @@ fragment mesh_frag_out mesh_frag(mesh_frag_in in [[stage_in]], const device Fram
     {
         n = -n;
     }
-    uint model = ((device uint*)&b_draw.d.flags)[2u];
-    float shadow = 1.0;
-    bool _1051 = ((flags & 32u) != 0u) && (model != 2u);
-    bool _1066;
-    if (_1051)
+    bool _1044 = (flags & 512u) != 0u;
+    bool _1051;
+    if (_1044)
     {
-        bool _1055 = model == 1u;
-        bool _1065;
-        if (!_1055)
-        {
-            _1065 = dot(n, b_frame.f.sun_dir.xyz) > 0.0;
-        }
-        else
-        {
-            _1065 = _1055;
-        }
-        _1066 = _1065;
+        _1051 = dot(n, v) < 0.0;
     }
     else
     {
-        _1066 = _1051;
+        _1051 = _1044;
     }
+    if (_1051)
+    {
+        n = -n;
+    }
+    uint model = ((device uint*)&b_draw.d.flags)[2u];
+    float shadow = 1.0;
+    bool _1066 = ((flags & 32u) != 0u) && (model != 2u);
+    bool _1081;
     if (_1066)
+    {
+        bool _1070 = model == 1u;
+        bool _1080;
+        if (!_1070)
+        {
+            _1080 = dot(n, b_frame.f.sun_dir.xyz) > 0.0;
+        }
+        else
+        {
+            _1080 = _1070;
+        }
+        _1081 = _1080;
+    }
+    else
+    {
+        _1081 = _1066;
+    }
+    if (_1081)
     {
         float3 param_2 = in.v_shadow;
         shadow = sample_shadow(shadow_map, shadow_mapSmplr, param_2, b_frame);
@@ -502,17 +510,17 @@ fragment mesh_frag_out mesh_frag(mesh_frag_in in [[stage_in]], const device Fram
         }
     }
     color += b_draw.d.emissive.xyz;
-    bool _1119 = (flags & 256u) != 0u;
-    bool _1126;
-    if (_1119)
+    bool _1134 = (flags & 256u) != 0u;
+    bool _1141;
+    if (_1134)
     {
-        _1126 = in.v_id == ((device uint*)&b_draw.d.flags)[1u];
+        _1141 = in.v_id == ((device uint*)&b_draw.d.flags)[1u];
     }
     else
     {
-        _1126 = _1119;
+        _1141 = _1134;
     }
-    if (_1126)
+    if (_1141)
     {
         color = mix(color, b_draw.d.highlight_color.xyz, float3(((device float*)&b_draw.d.highlight_color)[3u]));
     }

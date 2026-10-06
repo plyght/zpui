@@ -33,10 +33,13 @@ pub const Draw = extern struct {
     palette: u32,
     cull: Cull,
     depth_write: bool,
-    _pad: [2]u8 = .{ 0, 0 },
+    /// Alpha-tested: drawn with the pipeline that may discard.
+    alpha_mask: bool = false,
+    _pad: u8 = 0,
     /// Constant depth bias (reverse-Z: positive pulls toward the camera), slope-scaled.
     depth_bias: f32,
-    /// Blend draws: view distance for back-to-front sorting.
+    /// View distance for sorting: blend draws back to front (average
+    /// instance), opaque draws front to back (nearest instance bounds).
     sort_depth: f32,
     data: gpu.DrawData,
 };
@@ -219,6 +222,7 @@ pub fn build(plan: *Plan, scene: *const Scene3D, width: u32, height: u32, opts: 
                 .palette = texSlot(gfx, mat.palette),
                 .cull = if (mat.double_sided) .none else .back,
                 .depth_write = mat.depth_write and mat.alpha_mode != .blend,
+                .alpha_mask = mat.alpha_mode == .mask,
                 .depth_bias = mat.depth_bias,
                 .sort_depth = 0,
                 .data = data,
@@ -227,6 +231,7 @@ pub fn build(plan: *Plan, scene: *const Scene3D, width: u32, height: u32, opts: 
             // Main pass: camera-visible instances.
             const main_first: u32 = @intCast(plan.instances.items.len);
             var center = Vec3.zero;
+            var nearest = std.math.inf(f32);
             for (insts) |inst| {
                 if (inst.tint[3] <= 0 and mat.alpha_mode == .blend) continue;
                 const wb = mesh.bounds.transform(inst.model);
@@ -238,6 +243,7 @@ pub fn build(plan: *Plan, scene: *const Scene3D, width: u32, height: u32, opts: 
                 }
                 try plan.instances.append(plan.gpa, inst);
                 center = center.add(wb.center());
+                nearest = @min(nearest, wb.distanceTo(scene.camera.eye));
             }
             const visible: u32 = @as(u32, @intCast(plan.instances.items.len)) - main_first;
             if (visible > 0) {
@@ -249,6 +255,7 @@ pub fn build(plan: *Plan, scene: *const Scene3D, width: u32, height: u32, opts: 
                     md.sort_depth = center.scale(1 / @as(f32, @floatFromInt(visible))).sub(scene.camera.eye).length();
                     try plan.blend.append(plan.gpa, md);
                 } else {
+                    md.sort_depth = nearest;
                     try plan.@"opaque".append(plan.gpa, md);
                 }
                 if (mat.outline) |o| if (o.width > 0 and mat.alpha_mode != .blend) {
@@ -288,12 +295,12 @@ pub fn build(plan: *Plan, scene: *const Scene3D, width: u32, height: u32, opts: 
         }
     }
 
-    // Opaque: group by state, then mesh (fewer rebinds). Blend: far to near.
+    // Opaque: front to back (early depth rejects hidden fragments on
+    // immediate-mode GPUs), alpha-tested draws last. Blend: far to near.
     std.mem.sort(Draw, plan.@"opaque".items, {}, struct {
         fn lt(_: void, a: Draw, b: Draw) bool {
-            const ka = (@as(u64, @intFromEnum(a.cull)) << 60) | (@as(u64, a.base_texture) << 40) | (@as(u64, a.palette) << 20) | a.mesh_slot;
-            const kb = (@as(u64, @intFromEnum(b.cull)) << 60) | (@as(u64, b.base_texture) << 40) | (@as(u64, b.palette) << 20) | b.mesh_slot;
-            return ka < kb;
+            if (a.alpha_mask != b.alpha_mask) return !a.alpha_mask;
+            return a.sort_depth < b.sort_depth;
         }
     }.lt);
     std.mem.sort(Draw, plan.blend.items, {}, struct {

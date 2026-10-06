@@ -35,6 +35,7 @@ const front_face: mtl.Winding = .counter_clockwise;
 const sources = struct {
     const mesh_vert = @embedFile("three/mesh_vert.metal");
     const mesh_frag = @embedFile("three/mesh_frag.metal");
+    const mesh_mask_frag = @embedFile("three/mesh_mask_frag.metal");
     const outline_vert = @embedFile("three/outline_vert.metal");
     const outline_frag = @embedFile("three/outline_frag.metal");
     const shadow_vert = @embedFile("three/shadow_vert.metal");
@@ -67,6 +68,8 @@ const GpuTexture = struct {
 
 const MeshPipelines = struct {
     @"opaque": ?id = null,
+    /// Alpha-tested (the only mesh pipeline whose shader may discard).
+    mask: ?id = null,
     blend: ?id = null,
     outline: ?id = null,
 };
@@ -235,6 +238,7 @@ pub const Three = struct {
         const f = .{
             .mesh_vert = try lib(self, sources.mesh_vert, "mesh_vert"),
             .mesh_frag = try lib(self, sources.mesh_frag, "mesh_frag"),
+            .mesh_mask_frag = try lib(self, sources.mesh_mask_frag, "mesh_mask_frag"),
             .outline_vert = try lib(self, sources.outline_vert, "outline_vert"),
             .outline_frag = try lib(self, sources.outline_frag, "outline_frag"),
             .shadow_vert = try lib(self, sources.shadow_vert, "shadow_vert"),
@@ -254,6 +258,7 @@ pub const Three = struct {
             if (n > self.max_samples or (n == 2 and !self.two_samples)) continue;
             const p = &self.mesh_pipelines[i];
             p.@"opaque" = try self.pipeline("three_mesh", f.mesh_vert, f.mesh_frag, hdr_format, .depth32_float, n, null);
+            p.mask = try self.pipeline("three_mesh_mask", f.mesh_vert, f.mesh_mask_frag, hdr_format, .depth32_float, n, null);
             p.blend = try self.pipeline("three_mesh_blend", f.mesh_vert, f.mesh_frag, hdr_format, .depth32_float, n, premul);
             p.outline = try self.pipeline("three_outline", f.outline_vert, f.outline_frag, hdr_format, .depth32_float, n, null);
         }
@@ -310,7 +315,7 @@ pub const Three = struct {
         self.pending.deinit(self.gpa);
         for (self.libraries.items) |l| l.release();
         self.libraries.deinit(self.gpa);
-        for (&self.mesh_pipelines) |*p| inline for (.{ "opaque", "blend", "outline" }) |n| if (@field(p, n)) |x| x.release();
+        for (&self.mesh_pipelines) |*p| inline for (.{ "opaque", "mask", "blend", "outline" }) |n| if (@field(p, n)) |x| x.release();
         inline for (.{ "shadow_pipeline", "ssao_pipeline", "blur_ao_pipeline", "blur_hdr_pipeline", "resolve_pipeline", "fxaa_pipeline", "composite_pipeline", "depth_reverse", "depth_reverse_read", "depth_standard", "clamp_sampler", "nearest_sampler", "shadow_sampler", "white", "dummy_depth", "dummy_buffer" }) |n| {
             if (@field(self, n)) |x| x.release();
         }
@@ -542,8 +547,15 @@ pub const Three = struct {
             }];
             const shadow_tex = if (plan.shadowsEnabled()) t.shadow.? else self.dummy_depth.?;
             if (plan.@"opaque".items.len > 0) {
+                var masked = false;
                 mtl.RenderEncoder.setPipeline(enc, mp.@"opaque".?);
-                for (plan.@"opaque".items) |*d| try self.drawMesh(enc, frame, d, frame_off, inst_off, shadow_tex);
+                for (plan.@"opaque".items) |*d| {
+                    if (d.alpha_mask != masked) {
+                        masked = d.alpha_mask;
+                        mtl.RenderEncoder.setPipeline(enc, if (masked) mp.mask.? else mp.@"opaque".?);
+                    }
+                    try self.drawMesh(enc, frame, d, frame_off, inst_off, shadow_tex);
+                }
             }
             if (plan.outlines.items.len > 0) {
                 mtl.RenderEncoder.setPipeline(enc, mp.outline.?);

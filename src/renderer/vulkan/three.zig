@@ -82,6 +82,8 @@ const Samples = enum(u2) { one, two, four };
 
 const MeshPipelines = struct {
     @"opaque": c.VkPipeline = null,
+    /// Alpha-tested (the only mesh pipeline whose shader may discard).
+    mask: c.VkPipeline = null,
     blend: c.VkPipeline = null,
     outline: c.VkPipeline = null,
 };
@@ -220,6 +222,7 @@ pub const Three = struct {
             if (s == .two and !self.two_samples) continue;
             const p = &self.mesh_pipelines[@intFromEnum(s)];
             p.@"opaque" = try self.pipeline(r, .{ .vert = &shaders.three_mesh_vert, .frag = &shaders.three_mesh_frag, .layout = self.mesh_layout, .color = hdr_format, .depth = .reverse, .samples = n, .mesh_state = true });
+            p.mask = try self.pipeline(r, .{ .vert = &shaders.three_mesh_vert, .frag = &shaders.three_mesh_mask_frag, .layout = self.mesh_layout, .color = hdr_format, .depth = .reverse, .samples = n, .mesh_state = true });
             p.blend = try self.pipeline(r, .{ .vert = &shaders.three_mesh_vert, .frag = &shaders.three_mesh_frag, .layout = self.mesh_layout, .color = hdr_format, .depth = .reverse, .samples = n, .blend = .premultiplied, .mesh_state = true });
             p.outline = try self.pipeline(r, .{ .vert = &shaders.three_outline_vert, .frag = &shaders.three_outline_frag, .layout = self.mesh_layout, .color = hdr_format, .depth = .reverse, .samples = n, .mesh_state = true });
         }
@@ -308,11 +311,11 @@ pub const Three = struct {
         self.* = undefined;
     }
 
-    fn allPipelines(self: *const Three) [16]c.VkPipeline {
+    fn allPipelines(self: *const Three) [19]c.VkPipeline {
         const a = self.mesh_pipelines[0];
         const b = self.mesh_pipelines[1];
         const d = self.mesh_pipelines[2];
-        return .{ a.@"opaque", a.blend, a.outline, b.@"opaque", b.blend, b.outline, d.@"opaque", d.blend, d.outline, self.shadow_pipeline, self.ssao_pipeline, self.blur_ao_pipeline, self.blur_hdr_pipeline, self.resolve_pipeline, self.fxaa_pipeline, self.composite_pipeline };
+        return .{ a.@"opaque", a.mask, a.blend, a.outline, b.@"opaque", b.mask, b.blend, b.outline, d.@"opaque", d.mask, d.blend, d.outline, self.shadow_pipeline, self.ssao_pipeline, self.blur_ao_pipeline, self.blur_hdr_pipeline, self.resolve_pipeline, self.fxaa_pipeline, self.composite_pipeline };
     }
 
     // -----------------------------------------------------------------------
@@ -652,8 +655,15 @@ pub const Three = struct {
         const mp = self.mesh_pipelines[@intFromEnum(samplesOf(plan.samples))];
         const shadow_view = if (plan.shadowsEnabled()) t.shadow.view else self.dummy_depth.view;
         if (plan.@"opaque".items.len > 0) {
+            var masked = false;
             c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, mp.@"opaque");
-            for (plan.@"opaque".items) |*d| self.drawMesh(rec, d, frame_addr, inst_addr, shadow_view, true);
+            for (plan.@"opaque".items) |*d| {
+                if (d.alpha_mask != masked) {
+                    masked = d.alpha_mask;
+                    c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, if (masked) mp.mask else mp.@"opaque");
+                }
+                self.drawMesh(rec, d, frame_addr, inst_addr, shadow_view, true);
+            }
         }
         if (plan.outlines.items.len > 0) {
             c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, mp.outline);
