@@ -19,7 +19,8 @@
 //! Carcassonne-sized board at 2560x1440 per tier and prints GPU timings, fps
 //! and the idle (cached) cost; `--shots` also writes zig-out/bench-<tier>.png;
 //! `--tier=low|medium|high` runs one tier; `--no-lod` draws every instance
-//! at full detail; `--scale=0.75` renders the 3D image at 75% and upscales.
+//! at full detail; `--scale=0.75` renders the 3D image at 75% and upscales;
+//! `--msaa=1|2|4` overrides the tier's MSAA.
 
 const std = @import("std");
 const zpui = @import("zpui");
@@ -119,6 +120,7 @@ pub fn main(init: std.process.Init) !void {
     var shots = false;
     var lod = true;
     var scale: f32 = 1;
+    var msaa: ?u8 = null;
     var only_tier: ?three.Tier = null;
     for (argv[1..]) |a| {
         if (std.mem.eql(u8, a, "--update-golden")) update_golden = true;
@@ -126,9 +128,10 @@ pub fn main(init: std.process.Init) !void {
         if (std.mem.eql(u8, a, "--shots")) shots = true;
         if (std.mem.eql(u8, a, "--no-lod")) lod = false;
         if (std.mem.startsWith(u8, a, "--scale=")) scale = std.fmt.parseFloat(f32, a[8..]) catch 1;
+        if (std.mem.startsWith(u8, a, "--msaa=")) msaa = std.fmt.parseInt(u8, a[7..], 10) catch null;
         if (std.mem.startsWith(u8, a, "--tier=")) only_tier = std.meta.stringToEnum(three.Tier, a[7..]);
     }
-    if (bench) return runBench(gpa, io, only_tier, shots, lod, scale);
+    if (bench) return runBench(gpa, io, .{ .tier = only_tier, .shots = shots, .lod = lod, .scale = scale, .msaa = msaa });
 
     const size: Size = .{ .width = case_w, .height = case_h };
     var renderer = try Renderer.init(gpa, .{ .size = size, .transparent = true, .validation = true });
@@ -470,7 +473,13 @@ fn spin(gpa: std.mem.Allocator, g: *three.Gfx3D, a: Assets) !void {
 // Benchmark: a Carcassonne-sized board
 // ---------------------------------------------------------------------------
 
-fn runBench(gpa: std.mem.Allocator, io: std.Io, only_tier: ?three.Tier, shots: bool, lod: bool, scale: f32) !void {
+const BenchOpts = struct { tier: ?three.Tier, shots: bool, lod: bool, scale: f32, msaa: ?u8 };
+
+fn runBench(gpa: std.mem.Allocator, io: std.Io, o: BenchOpts) !void {
+    const only_tier = o.tier;
+    const shots = o.shots;
+    const lod = o.lod;
+    const scale = o.scale;
     const size: Size = .{ .width = 2560, .height = 1440 };
     var renderer = try Renderer.init(gpa, .{ .size = size, .transparent = false, .validation = false });
     defer renderer.deinit();
@@ -544,6 +553,7 @@ fn runBench(gpa: std.mem.Allocator, io: std.Io, only_tier: ?three.Tier, shots: b
         if (only_tier) |t| if (t != tier) continue;
         s3.setTier(tier);
         s3.post.resolution_scale = scale;
+        if (o.msaa) |m| s3.post.msaa = m;
         var sum: f64 = 0;
         var parts: [3]f64 = .{ 0, 0, 0 };
         var samples: u32 = 0;

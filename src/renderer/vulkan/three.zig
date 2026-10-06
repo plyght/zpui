@@ -78,7 +78,7 @@ const GpuTexture = struct {
 const Garbage = union(enum) { buffer: vk.Buffer, image: vk.Image };
 const Retired = struct { frame: u64, item: Garbage };
 
-const Samples = enum(u1) { one, four };
+const Samples = enum(u2) { one, two, four };
 
 const MeshPipelines = struct {
     @"opaque": c.VkPipeline = null,
@@ -148,7 +148,8 @@ pub const Three = struct {
     post_set_layout: c.VkDescriptorSetLayout = null,
     mesh_layout: c.VkPipelineLayout = null,
     post_layout: c.VkPipelineLayout = null,
-    mesh_pipelines: [2]MeshPipelines = .{ .{}, .{} },
+    mesh_pipelines: [3]MeshPipelines = .{ .{}, .{}, .{} },
+    two_samples: bool = false,
     shadow_pipeline: c.VkPipeline = null,
     ssao_pipeline: c.VkPipeline = null,
     blur_ao_pipeline: c.VkPipeline = null,
@@ -181,7 +182,9 @@ pub const Three = struct {
     pub fn create(self: *Three, r: *Renderer) !void {
         const dev = r.device.handle;
         const l = r.device.limits;
-        self.max_samples = if (l.framebufferColorSampleCounts & l.framebufferDepthSampleCounts & c.VK_SAMPLE_COUNT_4_BIT != 0) 4 else 1;
+        const counts = l.framebufferColorSampleCounts & l.framebufferDepthSampleCounts;
+        self.max_samples = if (counts & c.VK_SAMPLE_COUNT_4_BIT != 0) 4 else 1;
+        self.two_samples = counts & c.VK_SAMPLE_COUNT_2_BIT != 0;
 
         var qcount: u32 = 0;
         c.vkGetPhysicalDeviceQueueFamilyProperties(r.device.physical, &qcount, null);
@@ -211,9 +214,10 @@ pub const Three = struct {
         try vk.check(c.vkCreatePipelineLayout(dev, &.{ .sType = c.VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &self.post_set_layout, .pushConstantRangeCount = 1, .pPushConstantRanges = &post_range }, null, &self.post_layout));
 
         // Pipelines.
-        for ([_]Samples{ .one, .four }) |s| {
-            const n: c.VkSampleCountFlagBits = if (s == .four) c.VK_SAMPLE_COUNT_4_BIT else c.VK_SAMPLE_COUNT_1_BIT;
+        for ([_]Samples{ .one, .two, .four }) |s| {
+            const n = sampleBits(s);
             if (s == .four and self.max_samples < 4) continue;
+            if (s == .two and !self.two_samples) continue;
             const p = &self.mesh_pipelines[@intFromEnum(s)];
             p.@"opaque" = try self.pipeline(r, .{ .vert = &shaders.three_mesh_vert, .frag = &shaders.three_mesh_frag, .layout = self.mesh_layout, .color = hdr_format, .depth = .reverse, .samples = n, .mesh_state = true });
             p.blend = try self.pipeline(r, .{ .vert = &shaders.three_mesh_vert, .frag = &shaders.three_mesh_frag, .layout = self.mesh_layout, .color = hdr_format, .depth = .reverse, .samples = n, .blend = .premultiplied, .mesh_state = true });
@@ -304,10 +308,11 @@ pub const Three = struct {
         self.* = undefined;
     }
 
-    fn allPipelines(self: *const Three) [13]c.VkPipeline {
+    fn allPipelines(self: *const Three) [16]c.VkPipeline {
         const a = self.mesh_pipelines[0];
         const b = self.mesh_pipelines[1];
-        return .{ a.@"opaque", a.blend, a.outline, b.@"opaque", b.blend, b.outline, self.shadow_pipeline, self.ssao_pipeline, self.blur_ao_pipeline, self.blur_hdr_pipeline, self.resolve_pipeline, self.fxaa_pipeline, self.composite_pipeline };
+        const d = self.mesh_pipelines[2];
+        return .{ a.@"opaque", a.blend, a.outline, b.@"opaque", b.blend, b.outline, d.@"opaque", d.blend, d.outline, self.shadow_pipeline, self.ssao_pipeline, self.blur_ao_pipeline, self.blur_hdr_pipeline, self.resolve_pipeline, self.fxaa_pipeline, self.composite_pipeline };
     }
 
     // -----------------------------------------------------------------------
@@ -348,7 +353,7 @@ pub const Three = struct {
             const t = try self.targetFor(s3, occurrence);
             t.last_used = self.frame_number;
             try self.bindStore(r, s3.gfx);
-            try three.plan.build(&t.plan, s3, w, h, .{ .max_samples = self.max_samples, .max_texture_size = r.device.limits.maxImageDimension2D });
+            try three.plan.build(&t.plan, s3, w, h, .{ .max_samples = self.max_samples, .two_samples = self.two_samples, .max_texture_size = r.device.limits.maxImageDimension2D });
             // Surface last frame's statistics to the app.
             v.scene3d.stats = t.stats;
             v.scene3d.stats.cached = t.plan.hash == t.rendered_hash and t.final != null;
@@ -644,7 +649,7 @@ pub const Three = struct {
             depth_att.resolveImageLayout = c.VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
         }
         beginRendering(cmd, &color_att, &depth_att, plan.width, plan.height);
-        const mp = self.mesh_pipelines[if (msaa) 1 else 0];
+        const mp = self.mesh_pipelines[@intFromEnum(samplesOf(plan.samples))];
         const shadow_view = if (plan.shadowsEnabled()) t.shadow.view else self.dummy_depth.view;
         if (plan.@"opaque".items.len > 0) {
             c.vkCmdBindPipeline(cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, mp.@"opaque");
@@ -892,7 +897,7 @@ pub const Three = struct {
         const hh = @max(h / 2, 1);
         const msaa = plan.samples > 1;
         const ssao = plan.ssao() != null;
-        const n: c.VkSampleCountFlagBits = if (msaa) c.VK_SAMPLE_COUNT_4_BIT else c.VK_SAMPLE_COUNT_1_BIT;
+        const n = sampleBits(samplesOf(plan.samples));
         if (t.width != w or t.height != h or t.samples != plan.samples) {
             for (t.images()) |img| {
                 if (img == &t.shadow) continue;
@@ -1107,4 +1112,20 @@ fn destroyGarbage(dev: c.VkDevice, g: *Garbage) void {
 
 fn sharpenOf(plan: *const Plan) f32 {
     return if (plan.post.resolution_scale < 1) std.math.clamp(plan.post.sharpen, 0, 1) else 0;
+}
+
+fn samplesOf(n: u32) Samples {
+    return switch (n) {
+        4 => .four,
+        2 => .two,
+        else => .one,
+    };
+}
+
+fn sampleBits(s: Samples) c.VkSampleCountFlagBits {
+    return switch (s) {
+        .one => c.VK_SAMPLE_COUNT_1_BIT,
+        .two => c.VK_SAMPLE_COUNT_2_BIT,
+        .four => c.VK_SAMPLE_COUNT_4_BIT,
+    };
 }

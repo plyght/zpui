@@ -69,7 +69,10 @@ jobs:
       - name: zpui.three bench (Metal)
         if: runner.os == 'macOS' && (success() || failure())
         continue-on-error: true
-        run: zig build render-test-3d -Doptimize=ReleaseFast -- --bench
+        run: |
+          zig build render-test-3d -Doptimize=ReleaseFast -- --bench --shots
+          zig build render-test-3d -Doptimize=ReleaseFast -- --bench --no-lod
+          zig build render-test-3d -Doptimize=ReleaseFast -- --bench --scale=0.75
       - uses: actions/upload-artifact@v4
         if: always()
         with:

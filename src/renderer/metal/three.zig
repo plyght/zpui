@@ -175,7 +175,8 @@ pub const Three = struct {
     frame_number: u64 = 0,
 
     libraries: std.ArrayList(id) = .empty,
-    mesh_pipelines: [2]MeshPipelines = .{ .{}, .{} },
+    mesh_pipelines: [3]MeshPipelines = .{ .{}, .{}, .{} },
+    two_samples: bool = false,
     shadow_pipeline: ?id = null,
     ssao_pipeline: ?id = null,
     blur_ao_pipeline: ?id = null,
@@ -216,6 +217,7 @@ pub const Three = struct {
                 break;
             }
         }
+        self.two_samples = d.msg(objc.BOOL, "supportsTextureSampleCount:", .{@as(NSUInteger, 2)}) != objc.NO;
         const lib = struct {
             fn load(t: *Three, comptime src: [:0]const u8, comptime name: [:0]const u8) !id {
                 var err: ?id = null;
@@ -248,8 +250,8 @@ pub const Three = struct {
         defer inline for (@typeInfo(@TypeOf(f)).@"struct".field_names) |n| @field(f, n).release();
 
         const premul: mtl.Blend = .{ .src_rgb = .one, .src_alpha = .one, .dst_rgb = .one_minus_source_alpha, .dst_alpha = .one_minus_source_alpha };
-        for ([_]u32{ 1, 4 }, 0..) |n, i| {
-            if (n > self.max_samples) continue;
+        for ([_]u32{ 1, 2, 4 }, 0..) |n, i| {
+            if (n > self.max_samples or (n == 2 and !self.two_samples)) continue;
             const p = &self.mesh_pipelines[i];
             p.@"opaque" = try self.pipeline("three_mesh", f.mesh_vert, f.mesh_frag, hdr_format, .depth32_float, n, null);
             p.blend = try self.pipeline("three_mesh_blend", f.mesh_vert, f.mesh_frag, hdr_format, .depth32_float, n, premul);
@@ -336,7 +338,7 @@ pub const Three = struct {
             const t = try self.targetFor(s3, occurrence);
             t.last_used = self.frame_number;
             try self.bindStore(s3.gfx);
-            try three.plan.build(&t.plan, s3, w, h, .{ .max_samples = self.max_samples, .max_texture_size = 16384 });
+            try three.plan.build(&t.plan, s3, w, h, .{ .max_samples = self.max_samples, .two_samples = self.two_samples, .max_texture_size = 16384 });
             t.pollTimings();
             v.scene3d.stats = t.stats;
             v.scene3d.stats.cached = t.plan.hash == t.rendered_hash and t.final != null;
@@ -533,7 +535,11 @@ pub const Three = struct {
             const enc = try beginPass(cbs[1], pass, plan.width, plan.height);
             defer mtl.RenderEncoder.endEncoding(enc);
             mtl.RenderEncoder.setFrontFacingWinding(enc, front_face);
-            const mp = self.mesh_pipelines[if (msaa) 1 else 0];
+            const mp = self.mesh_pipelines[switch (plan.samples) {
+                4 => 2,
+                2 => 1,
+                else => 0,
+            }];
             const shadow_tex = if (plan.shadowsEnabled()) t.shadow.? else self.dummy_depth.?;
             if (plan.@"opaque".items.len > 0) {
                 mtl.RenderEncoder.setPipeline(enc, mp.@"opaque".?);

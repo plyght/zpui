@@ -95,8 +95,10 @@ pub const Plan = struct {
 };
 
 pub const Options = struct {
-    /// Largest MSAA sample count the device supports for color+depth (1 or 4).
+    /// Largest MSAA sample count the device supports for color+depth (1, 2 or 4).
     max_samples: u32 = 4,
+    /// Whether 2x MSAA is supported (otherwise a request for 2 falls back to 1).
+    two_samples: bool = true,
     /// Largest 2D image size (caps the shadow map).
     max_texture_size: u32 = 8192,
 };
@@ -111,7 +113,9 @@ pub fn build(plan: *Plan, scene: *const Scene3D, width: u32, height: u32, opts: 
     plan.post.resolution_scale = scale;
     // Pixel-sized effects stay the same size on screen.
     if (plan.post.tilt_shift) |*t| t.blur *= scale;
-    plan.samples = if (scene.post.msaa >= 4 and opts.max_samples >= 4) 4 else 1;
+    plan.samples = if (scene.post.msaa >= 4 and opts.max_samples >= 4)
+        4
+    else if (scene.post.msaa >= 2 and opts.max_samples >= 2 and opts.two_samples) 2 else 1;
     plan.clear = scene.clear;
     // Tilt-shift on an orthographic top-down view reads as a smudge; skip it.
     if (scene.camera.isOrthographic()) plan.post.tilt_shift = null;
@@ -460,6 +464,12 @@ test "plan culls, splits passes and hashes stably" {
     s.camera.eye.x -= 0.01;
     try build(&plan, &s, 640, 480, .{ .max_samples = 1 });
     try testing.expectEqual(@as(u32, 1), plan.samples);
+    s.post.msaa = 2;
+    try build(&plan, &s, 640, 480, .{});
+    try testing.expectEqual(@as(u32, 2), plan.samples);
+    try build(&plan, &s, 640, 480, .{ .two_samples = false });
+    try testing.expectEqual(@as(u32, 1), plan.samples);
+    s.post.msaa = 4;
     try testing.expect(plan.hash != h1);
 }
 

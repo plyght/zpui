@@ -257,7 +257,7 @@ pub const Post = struct {
     saturation: f32 = 1,
     /// Darkening toward the corners (0 = off).
     vignette: f32 = 0,
-    /// 1 or 4 (clamped to what the device supports).
+    /// 1, 2 or 4 (clamped to what the device supports).
     msaa: u8 = 4,
     /// Post-tonemap FXAA (useful with `msaa = 1`).
     fxaa: bool = false,

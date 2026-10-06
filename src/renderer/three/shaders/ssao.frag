@@ -11,6 +11,15 @@ vec3 view_pos(vec2 uv, float depth) {
   return p.xyz / p.w;
 }
 
+// View-space z only (rows 2 and 3 of the inverse projection).
+float view_z(vec2 uv, float depth) {
+  vec4 v = vec4(uv * 2.0 - 1.0, depth, 1.0);
+  mat4 m = FRAME.inv_proj;
+  float z = m[0][2] * v.x + m[1][2] * v.y + m[2][2] * v.z + m[3][2];
+  float w = m[0][3] * v.x + m[1][3] * v.y + m[2][3] * v.z + m[3][3];
+  return z / w;
+}
+
 const vec3 KERNEL[16] = vec3[16](
   vec3(0.5381, 0.1856, 0.4319), vec3(0.1379, 0.2486, 0.4430), vec3(0.3371, 0.5679, 0.0057), vec3(-0.6999, -0.0451, 0.0019),
   vec3(0.0689, -0.1598, 0.8547), vec3(0.0560, 0.0069, 0.1843), vec3(-0.0146, 0.1402, 0.0762), vec3(0.0100, -0.1924, 0.0344),
@@ -54,7 +63,7 @@ void main() {
     if (suv.x < 0.0 || suv.y < 0.0 || suv.x > 1.0 || suv.y > 1.0) continue;
     float sd = texture(tex0, suv).r;
     if (sd <= 0.0) continue;
-    float scene_z = view_pos(suv, sd).z;
+    float scene_z = view_z(suv, sd);
     float range = smoothstep(0.0, 1.0, radius / max(abs(p.z - scene_z), 1e-4));
     occlusion += (scene_z >= s.z + P.p0.w ? 1.0 : 0.0) * range;
   }
