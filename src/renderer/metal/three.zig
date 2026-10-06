@@ -340,6 +340,7 @@ pub const Three = struct {
             t.pollTimings();
             v.scene3d.stats = t.stats;
             v.scene3d.stats.cached = t.plan.hash == t.rendered_hash and t.final != null;
+            v.scene3d.updateDynamicResolution();
             try self.frame_targets.append(self.gpa, t);
         }
         var i: usize = 0;
@@ -686,7 +687,7 @@ pub const Three = struct {
             .p0 = .{ v.bounds.origin.x, v.bounds.origin.y, v.bounds.size.width, v.bounds.size.height },
             .p1 = .{ m.origin.x, m.origin.y, m.size.width, m.size.height },
             .p2 = .{ v.corner_radii.top_left, v.corner_radii.top_right, v.corner_radii.bottom_right, v.corner_radii.bottom_left },
-            .p3 = .{ viewport[0], viewport[1], v.opacity, 0 },
+            .p3 = .{ viewport[0], viewport[1], v.opacity, if (t.plan.post.resolution_scale < 1) std.math.clamp(t.plan.post.sharpen, 0, 1) else 0 },
         };
         const E = mtl.RenderEncoder;
         E.setPipeline(enc, self.composite_pipeline.?);

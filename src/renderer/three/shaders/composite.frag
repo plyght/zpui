@@ -20,6 +20,17 @@ void main() {
   vec2 p = gl_FragCoord.xy;
   if (p.x < P.p1.x || p.y < P.p1.y || p.x > P.p1.x + P.p1.z || p.y > P.p1.y + P.p1.w) discard;
   vec4 c = texture(tex0, v_uv);
+  if (P.p3.w > 0.0) {
+    // Upscaled image: unsharp mask clamped to the 4-neighborhood (no halos).
+    vec2 px = 1.0 / vec2(textureSize(tex0, 0));
+    vec4 n = texture(tex0, v_uv - vec2(0.0, px.y));
+    vec4 s = texture(tex0, v_uv + vec2(0.0, px.y));
+    vec4 e = texture(tex0, v_uv + vec2(px.x, 0.0));
+    vec4 w = texture(tex0, v_uv - vec2(px.x, 0.0));
+    vec4 lo = min(c, min(min(n, s), min(e, w)));
+    vec4 hi = max(c, max(max(n, s), max(e, w)));
+    c = clamp(c + (c - (n + s + e + w) * 0.25) * 2.0 * P.p3.w, lo, hi);
+  }
   float coverage = clamp(0.5 - corner_sdf(p), 0.0, 1.0) * P.p3.z;
   out_color = c * coverage;
 }

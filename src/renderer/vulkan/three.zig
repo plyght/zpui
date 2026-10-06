@@ -352,6 +352,7 @@ pub const Three = struct {
             // Surface last frame's statistics to the app.
             v.scene3d.stats = t.stats;
             v.scene3d.stats.cached = t.plan.hash == t.rendered_hash and t.final != null;
+            v.scene3d.updateDynamicResolution();
             try self.frame_targets.append(self.gpa, t);
             if (t.plan.hash != t.rendered_hash or t.final == null) total += hostBytes(&t.plan);
         }
@@ -869,7 +870,7 @@ pub const Three = struct {
             .p0 = .{ v.bounds.origin.x, v.bounds.origin.y, v.bounds.size.width, v.bounds.size.height },
             .p1 = .{ m.origin.x, m.origin.y, m.size.width, m.size.height },
             .p2 = .{ v.corner_radii.top_left, v.corner_radii.top_right, v.corner_radii.bottom_right, v.corner_radii.bottom_left },
-            .p3 = .{ vs[0], vs[1], v.opacity, 0 },
+            .p3 = .{ vs[0], vs[1], v.opacity, sharpenOf(&t.plan) },
         }, .frame = self.dummy_buffer.address };
         rec.bind(self.composite_pipeline);
         c.vkCmdBindDescriptorSets(rec.cmd, c.VK_PIPELINE_BIND_POINT_GRAPHICS, self.post_layout, 0, 1, &set, 0, null);
@@ -1102,4 +1103,8 @@ fn destroyGarbage(dev: c.VkDevice, g: *Garbage) void {
         .buffer => |*b| b.destroy(dev),
         .image => |*img| img.destroy(dev),
     }
+}
+
+fn sharpenOf(plan: *const Plan) f32 {
+    return if (plan.post.resolution_scale < 1) std.math.clamp(plan.post.sharpen, 0, 1) else 0;
 }

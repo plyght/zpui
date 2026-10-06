@@ -125,6 +125,17 @@ fragment composite_frag_out composite_frag(composite_frag_in in [[stage_in]], co
         discard_fragment();
     }
     float4 c = tex0.sample(tex0Smplr, in.v_uv);
+    if (P.p3.w > 0.0)
+    {
+        float2 px = float2(1.0) / float2(int2(tex0.get_width(), tex0.get_height()));
+        float4 n = tex0.sample(tex0Smplr, (in.v_uv - float2(0.0, px.y)));
+        float4 s = tex0.sample(tex0Smplr, (in.v_uv + float2(0.0, px.y)));
+        float4 e = tex0.sample(tex0Smplr, (in.v_uv + float2(px.x, 0.0)));
+        float4 w = tex0.sample(tex0Smplr, (in.v_uv - float2(px.x, 0.0)));
+        float4 lo = fast::min(c, fast::min(fast::min(n, s), fast::min(e, w)));
+        float4 hi = fast::max(c, fast::max(fast::max(n, s), fast::max(e, w)));
+        c = fast::clamp(c + (((c - ((((n + s) + e) + w) * 0.25)) * 2.0) * P.p3.w), lo, hi);
+    }
     float2 param = p;
     float coverage = fast::clamp(0.5 - corner_sdf(param, P), 0.0, 1.0) * P.p3.z;
     out.out_color = c * coverage;

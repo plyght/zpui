@@ -104,9 +104,13 @@ pub const Options = struct {
 /// Fill `plan` for drawing `scene` into a `width` x `height` target.
 pub fn build(plan: *Plan, scene: *const Scene3D, width: u32, height: u32, opts: Options) Allocator.Error!void {
     plan.reset();
-    plan.width = @max(width, 1);
-    plan.height = @max(height, 1);
+    const scale = std.math.clamp(scene.post.resolution_scale, 0.25, 1);
+    plan.width = @max(@as(u32, @intFromFloat(@round(@as(f32, @floatFromInt(width)) * scale))), 1);
+    plan.height = @max(@as(u32, @intFromFloat(@round(@as(f32, @floatFromInt(height)) * scale))), 1);
     plan.post = scene.post;
+    plan.post.resolution_scale = scale;
+    // Pixel-sized effects stay the same size on screen.
+    if (plan.post.tilt_shift) |*t| t.blur *= scale;
     plan.samples = if (scene.post.msaa >= 4 and opts.max_samples >= 4) 4 else 1;
     plan.clear = scene.clear;
     // Tilt-shift on an orthographic top-down view reads as a smudge; skip it.
@@ -248,7 +252,7 @@ pub fn build(plan: *Plan, scene: *const Scene3D, width: u32, height: u32, opts: 
                     od.cull = .front;
                     od.depth_bias = 0;
                     od.data.outline_color = o.color;
-                    od.data.outline = .{ o.width, 0, 0, 0 };
+                    od.data.outline = .{ if (o.units == .pixels) o.width * scale else o.width, 0, 0, 0 };
                     if (o.units == .pixels) od.data.flags[0] |= gpu.DrawFlags.outline_pixels;
                     try plan.outlines.append(plan.gpa, od);
                 };
@@ -404,7 +408,8 @@ fn hashPlan(plan: *const Plan, gfx: *const gfx_mod.Gfx3D) u64 {
         @floatFromInt(plan.shadow_size),             @floatFromInt(plan.width),
         @floatFromInt(plan.height),                  plan.clear[0],
         plan.clear[1],                               plan.clear[2],
-        plan.clear[3],
+        plan.clear[3],                               p.resolution_scale,
+        p.sharpen,
     };
     h.update(std.mem.sliceAsBytes(&words));
     h.update(std.mem.asBytes(&gfx.revision));
@@ -503,6 +508,36 @@ test "plan picks LOD levels per instance; shadow map survives camera moves" {
     try s.draw(hi, Mat4.translation(.new(0, 0, -200)), .{ .index_count = 30 });
     try build(&plan, &s, 640, 480, .{});
     try testing.expectEqual(hi.slot().?, plan.@"opaque".items[0].mesh_slot);
+}
+
+test "resolution scale shrinks the target; dynamic resolution steps toward the budget" {
+    var g = gfx_mod.Gfx3D.init(testing.allocator);
+    defer g.deinit();
+    var s = Scene3D.init(testing.allocator, &g);
+    defer s.deinit();
+    var plan = Plan.init(testing.allocator);
+    defer plan.deinit();
+    s.post.resolution_scale = 0.5;
+    try build(&plan, &s, 1000, 600, .{});
+    try testing.expectEqual(@as(u32, 500), plan.width);
+    try testing.expectEqual(@as(u32, 300), plan.height);
+
+    s.post.resolution_scale = 1;
+    s.dynamic_resolution = .{ .target_ms = 8 };
+    s.stats = .{ .gpu_ms = 12 };
+    s.updateDynamicResolution();
+    try testing.expectEqual(@as(f32, 0.875), s.post.resolution_scale);
+    s.stats = .{ .gpu_ms = 12, .cached = true }; // stale numbers: no change
+    s.updateDynamicResolution();
+    try testing.expectEqual(@as(f32, 0.875), s.post.resolution_scale);
+    for (0..10) |_| {
+        s.stats = .{ .gpu_ms = 20 };
+        s.updateDynamicResolution();
+    }
+    try testing.expectEqual(@as(f32, 0.5), s.post.resolution_scale);
+    s.stats = .{ .gpu_ms = 2 };
+    s.updateDynamicResolution();
+    try testing.expectEqual(@as(f32, 0.625), s.post.resolution_scale);
 }
 
 test "shadow fit contains the region" {

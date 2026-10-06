@@ -263,6 +263,22 @@ pub const Post = struct {
     fxaa: bool = false,
     ssao: ?Ssao = null,
     tilt_shift: ?TiltShift = null,
+    /// Render the 3D image at this fraction of the viewport's device pixels
+    /// (0.25..1) and upscale in the composite. `dynamic_resolution` drives it.
+    resolution_scale: f32 = 1,
+    /// Contrast-adaptive sharpening of the upscaled image (0..1; only when
+    /// `resolution_scale < 1`).
+    sharpen: f32 = 0.3,
+};
+
+/// Opt-in: adjusts `Post.resolution_scale` from the measured GPU time.
+pub const DynamicResolution = struct {
+    /// GPU budget for the viewport's 3D passes.
+    target_ms: f32 = 8.3,
+    min_scale: f32 = 0.5,
+    max_scale: f32 = 1,
+    /// Scale steps (avoids reallocating targets every frame).
+    step: f32 = 0.125,
 };
 
 /// Rendering-cost presets: `low` (no shadows, FXAA), `medium` (shadows + 4x
@@ -391,6 +407,7 @@ pub const Scene3D = struct {
     /// Window-space bounds (logical pixels) where the scene was last painted;
     /// set by `Window.paintViewport3D`, used by `pickAt`.
     last_viewport: ?Rect = null,
+    dynamic_resolution: ?DynamicResolution = null,
     /// Renderer statistics from the last rendered frame (informational).
     stats: Stats = .{},
 
@@ -448,6 +465,24 @@ pub const Scene3D = struct {
         const first: u32 = @intCast(self.instances.items.len);
         try self.instances.appendSlice(self.gpa, instances);
         try self.draws.append(self.gpa, .{ .mesh = mesh, .opts = opts, .first_instance = first, .instance_count = @intCast(instances.len) });
+    }
+
+    /// Called by the renderer with fresh statistics: one `dynamic_resolution`
+    /// step down when over budget, one step up when well under it.
+    pub fn updateDynamicResolution(self: *Scene3D) void {
+        const dr = self.dynamic_resolution orelse return;
+        const ms = self.stats.gpu_ms;
+        if (self.stats.cached or ms <= 0) return;
+        var scale = self.post.resolution_scale;
+        // GPU time scales with pixels (scale^2): predict the next step's cost.
+        const down = scale - dr.step;
+        const up = scale + dr.step;
+        if (ms > dr.target_ms) {
+            scale = down;
+        } else if (ms * (up * up) / (scale * scale) < dr.target_ms * 0.85) {
+            scale = up;
+        }
+        self.post.resolution_scale = std.math.clamp(scale, @max(dr.min_scale, 0.25), @min(dr.max_scale, 1));
     }
 
     /// Apply a cost preset to shadows and post (keeps colors and look settings).

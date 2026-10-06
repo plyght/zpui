@@ -1,6 +1,6 @@
 #version 450
 // zpui.three: viewport composite in the UI pass. p0 = bounds (x, y, w, h,
-// device px), p1 = content mask, p2 = corner radii (tl, tr, br, bl), p3 = (viewport w, h, opacity).
+// device px), p1 = content mask, p2 = corner radii (tl, tr, br, bl), p3 = (viewport w, h, opacity, sharpen).
 #include "post.glsl"
 
 layout(location = 0) out vec2 v_uv;

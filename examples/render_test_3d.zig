@@ -19,7 +19,7 @@
 //! Carcassonne-sized board at 2560x1440 per tier and prints GPU timings, fps
 //! and the idle (cached) cost; `--shots` also writes zig-out/bench-<tier>.png;
 //! `--tier=low|medium|high` runs one tier; `--no-lod` draws every instance
-//! at full detail.
+//! at full detail; `--scale=0.75` renders the 3D image at 75% and upscales.
 
 const std = @import("std");
 const zpui = @import("zpui");
@@ -118,15 +118,17 @@ pub fn main(init: std.process.Init) !void {
     var bench = false;
     var shots = false;
     var lod = true;
+    var scale: f32 = 1;
     var only_tier: ?three.Tier = null;
     for (argv[1..]) |a| {
         if (std.mem.eql(u8, a, "--update-golden")) update_golden = true;
         if (std.mem.eql(u8, a, "--bench")) bench = true;
         if (std.mem.eql(u8, a, "--shots")) shots = true;
         if (std.mem.eql(u8, a, "--no-lod")) lod = false;
+        if (std.mem.startsWith(u8, a, "--scale=")) scale = std.fmt.parseFloat(f32, a[8..]) catch 1;
         if (std.mem.startsWith(u8, a, "--tier=")) only_tier = std.meta.stringToEnum(three.Tier, a[7..]);
     }
-    if (bench) return runBench(gpa, io, only_tier, shots, lod);
+    if (bench) return runBench(gpa, io, only_tier, shots, lod, scale);
 
     const size: Size = .{ .width = case_w, .height = case_h };
     var renderer = try Renderer.init(gpa, .{ .size = size, .transparent = true, .validation = true });
@@ -468,7 +470,7 @@ fn spin(gpa: std.mem.Allocator, g: *three.Gfx3D, a: Assets) !void {
 // Benchmark: a Carcassonne-sized board
 // ---------------------------------------------------------------------------
 
-fn runBench(gpa: std.mem.Allocator, io: std.Io, only_tier: ?three.Tier, shots: bool, lod: bool) !void {
+fn runBench(gpa: std.mem.Allocator, io: std.Io, only_tier: ?three.Tier, shots: bool, lod: bool, scale: f32) !void {
     const size: Size = .{ .width = 2560, .height = 1440 };
     var renderer = try Renderer.init(gpa, .{ .size = size, .transparent = false, .validation = false });
     defer renderer.deinit();
@@ -521,7 +523,7 @@ fn runBench(gpa: std.mem.Allocator, io: std.Io, only_tier: ?three.Tier, shots: b
     for (0..10) |i| for (0..8) |j| {
         const x = @as(f32, @floatFromInt(i)) - 4.5;
         const z = @as(f32, @floatFromInt(j)) - 3.5;
-        try s3.draw(tile_mesh, M.translation(.new(x, 0.09, z)), .{ .material = .{ .roughness = 0.88, .detail = .{ .scale = 40, .amount = 0.1 } } });
+        try s3.draw(tile_mesh, M.translation(.new(x, 0.1, z)), .{ .material = .{ .roughness = 0.88, .detail = .{ .scale = 40, .amount = 0.1 } } });
         try s3.draw(slab_mesh, M.translation(.new(x, 0.045, z)), .{ .material = .{ .base_color = three.rgb(0xe3cfa6) } });
         for (0..8) |_| try houses.append(gpa, .{ .model = M.translation(.new(x + rand.float(f32) - 0.5, 0.125, z + rand.float(f32) - 0.5)).mul(M.rotationY(rand.float(f32) * 6)), .tint = three.rgb(0xad452b) });
         for (0..14) |_| try bushes.append(gpa, .{ .model = M.translation(.new(x + rand.float(f32) - 0.5, 0.11, z + rand.float(f32) - 0.5)), .tint = three.rgb(0x26562b) });
@@ -537,10 +539,11 @@ fn runBench(gpa: std.mem.Allocator, io: std.Io, only_tier: ?three.Tier, shots: b
     scene.finish();
 
     var orbit: three.Orbit = .{ .distance = 11, .pitch = 0.75, .fov_y = std.math.pi / 5.0 };
-    std.debug.print("bench: 2560x1440, {s}\n", .{@tagName(zpui.renderer.backend)});
+    std.debug.print("bench: 2560x1440 (3D at {d:.0}%), {s}{s}\n", .{ scale * 100, @tagName(zpui.renderer.backend), if (lod) "" else ", no LOD" });
     for ([_]three.Tier{ .low, .medium, .high }) |tier| {
         if (only_tier) |t| if (t != tier) continue;
         s3.setTier(tier);
+        s3.post.resolution_scale = scale;
         var sum: f64 = 0;
         var parts: [3]f64 = .{ 0, 0, 0 };
         var samples: u32 = 0;
