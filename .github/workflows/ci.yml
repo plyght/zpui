@@ -4,6 +4,11 @@ on:
   push:
   pull_request:
 
+# A newer push supersedes older runs on the same branch (macOS runners are scarce).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   LINUX_DEPS: >-
     libvulkan-dev mesa-vulkan-drivers glslc

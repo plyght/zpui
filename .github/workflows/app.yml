@@ -10,6 +10,11 @@ name: Build app
 on:
   workflow_dispatch:
 
+# A newer push supersedes older runs on the same branch (macOS runners are scarce).
+concurrency:
+  group: app-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   zeron-bundle:
     runs-on: macos-latest
