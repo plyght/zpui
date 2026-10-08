@@ -263,7 +263,8 @@ pub fn headerBar(window: *Window, look: Look, title: []const u8) AnyElement {
             const bg = if (look.dark) theme.rgbA(0x2e2e32, 1) else theme.rgbA(0xffffff, 1);
             const shade = if (look.dark) black(0.36) else black(0.12);
             const btn_bg = if (look.dark) theme.rgbA(0xffffff, 0.1) else black(0.08);
-            return element.intoAnyElement(div().relative().flex().flexNone().itemsCenter().justifyCenter().wFull().h(px(47))
+            return element.intoAnyElement(div().id("zpui-headerbar").relative().flex().flexNone().itemsCenter().justifyCenter().wFull().h(px(47))
+                .onMouseDown(.left, moveWindow)
                 .bg(bg).borderB1().borderColor(shade).fontFamily(family).textSize(px(look.font_size)).textColor(look.fg)
                 .child(div().fontWeight(700).child(title))
                 .child(div().id("zpui-headerbar-close").absolute().right(px(12)).top(px(11.5)).w(px(24)).h(px(24)).roundedFull()
@@ -276,7 +277,8 @@ pub fn headerBar(window: *Window, look: Look, title: []const u8) AnyElement {
         .breeze => {
             // Breeze decoration: title bar in the header color, title centered, buttons right.
             const bg = if (look.dark) theme.rgbA(0x2a2e32, 1) else theme.rgbA(0xdee0e2, 1);
-            return element.intoAnyElement(div().relative().flex().flexNone().itemsCenter().justifyCenter().wFull().h(px(30))
+            return element.intoAnyElement(div().id("zpui-headerbar").relative().flex().flexNone().itemsCenter().justifyCenter().wFull().h(px(30))
+                .onMouseDown(.left, moveWindow)
                 .bg(bg).borderB1().borderColor(look.separator).fontFamily(family).textSize(px(look.font_size)).textColor(look.fg)
                 .child(div().child(title))
                 .child(div().id("zpui-headerbar-close").absolute().right(px(6)).top(px(6)).w(px(18)).h(px(18)).roundedFull()
@@ -287,6 +289,13 @@ pub fn headerBar(window: *Window, look: Look, title: []const u8) AnyElement {
                 .child(dc.icon("zpui-close", dc.icons.close, 12, look.fg))));
         },
     }
+}
+
+/// Dragging the header bar moves the window (client-side decorations).
+fn moveWindow(ev: *const @import("../input.zig").MouseDownEvent, window: *Window, _: *App) void {
+    // The close button (right end) takes its own clicks.
+    if (ev.position.x > window.viewportSize().width - 48) return;
+    window.startWindowMove();
 }
 
 fn closeWindow(_: *const ClickEvent, window: *Window, _: *App) void {
