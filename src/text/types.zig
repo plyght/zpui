@@ -133,6 +133,6 @@ pub const StrikethroughStyle = struct {
 
 test "RenderGlyphParams has no implicit padding (hashed and compared as bytes)" {
     var sum: usize = 0;
-    inline for (std.meta.fields(RenderGlyphParams)) |f| sum += @sizeOf(f.type);
+    inline for (@typeInfo(RenderGlyphParams).@"struct".fields) |f| sum += @sizeOf(f.type);
     try std.testing.expectEqual(sum, @sizeOf(RenderGlyphParams));
 }
