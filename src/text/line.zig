@@ -71,7 +71,8 @@ pub const GlyphPainter = struct {
 
     /// gpui `Window::paint_glyph` quantization: snap to 1/4 device px horizontally.
     pub fn paintGlyph(self: GlyphPainter, origin: Point, font_id: FontId, glyph_id: GlyphId, font_size: Pixels, color: Hsla) !void {
-        const g = glyphRenderParams(font_id, glyph_id, font_size, origin, self.scale_factor, self.subpixel_rendering);
+        var g = glyphRenderParams(font_id, glyph_id, font_size, origin, self.scale_factor, self.subpixel_rendering);
+        g.params.dilation = self.text_system.glyphDilation(color);
         try self.vtable.paintGlyph(self.ptr, g.params, g.origin, color);
     }
 

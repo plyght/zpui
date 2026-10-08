@@ -313,7 +313,8 @@ fn shouldUseSubpixel(w: *const Window) bool {
 
 /// Paint one shaped glyph whose baseline origin is `origin` (gpui `paint_glyph`).
 pub fn paintGlyph(w: *Window, origin: Point, font_id: text_mod.FontId, glyph_id: text_mod.GlyphId, font_size: Pixels, c: Hsla) void {
-    const g = text_mod.line.glyphRenderParams(font_id, glyph_id, font_size, origin, w.scale_factor, shouldUseSubpixel(w));
+    var g = text_mod.line.glyphRenderParams(font_id, glyph_id, font_size, origin, w.scale_factor, shouldUseSubpixel(w));
+    g.params.dilation = w.text_system.text_system.glyphDilation(c);
     insertGlyph(w, g.params, g.origin, c);
 }
 

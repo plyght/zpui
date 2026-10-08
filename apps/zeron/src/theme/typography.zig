@@ -103,6 +103,27 @@ pub const UiFontSize = struct {
     }
 };
 
+/// The interface size the system font starts at while the user never chose one.
+pub const system_font_default_size: UiFontSize = .{ .px = 14 };
+
+/// The base size that renders: the system font reads large at Geist's 16 px default, so
+/// an untouched default (16, never chosen in Settings) renders at 14 px while the
+/// interface font is the system font. A chosen size is never overridden.
+pub fn effectiveUiFontSize(size: UiFontSize, family: UiFontFamily, chosen: bool) UiFontSize {
+    const n = size.normalized();
+    if (!chosen and family == .system and n.px == UiFontSize.default.px) return system_font_default_size;
+    return n;
+}
+
+/// Label for a size choice; 14 px names the font it is the default for.
+pub fn uiFontSizeLabel(buf: []u8, size: UiFontSize) []const u8 {
+    if (size.px == system_font_default_size.px) {
+        const fam = if (builtin.os.tag == .macos) "SF Pro" else "System UI";
+        return std.fmt.bufPrint(buf, "{d} px (default for {s})", .{ size.px, fam }) catch "14 px";
+    }
+    return std.fmt.bufPrint(buf, "{d} px", .{size.px}) catch "";
+}
+
 /// A size designed at the 16px baseline, in rems of the user's base size.
 pub fn uiRems(pixels_at_default: f32) f32 {
     return pixels_at_default / 16.0;
@@ -183,4 +204,23 @@ test "font size normalization and rems" {
     try testing.expectEqual(@as(u8, 12), (UiFontSize{ .px = 3 }).normalized().px);
     try testing.expectEqual(@as(f32, 15), uiPx(12, .{ .px = 20 }));
     try testing.expectEqual(@as(f32, 32), clampFontSize(99));
+}
+
+test "the system font starts at 14 px until a size is chosen" {
+    const t = std.testing;
+    const sixteen: UiFontSize = .{};
+    // Untouched default + system font: 14.
+    try t.expectEqual(@as(u8, 14), effectiveUiFontSize(sixteen, .system, false).px);
+    // Back to Geist (or any other family): the stored 16.
+    try t.expectEqual(@as(u8, 16), effectiveUiFontSize(sixteen, .geist, false).px);
+    try t.expectEqual(@as(u8, 16), effectiveUiFontSize(sixteen, .{ .installed = "Inter" }, false).px);
+    // An explicit choice is never overridden, 16 included.
+    try t.expectEqual(@as(u8, 16), effectiveUiFontSize(sixteen, .system, true).px);
+    try t.expectEqual(@as(u8, 18), effectiveUiFontSize(.{ .px = 18 }, .system, false).px);
+    try t.expectEqual(@as(u8, 13), effectiveUiFontSize(.{ .px = 13 }, .system, true).px);
+    var buf: [48]u8 = undefined;
+    const fam = if (builtin.os.tag == .macos) "SF Pro" else "System UI";
+    var want: [48]u8 = undefined;
+    try t.expectEqualStrings(try std.fmt.bufPrint(&want, "14 px (default for {s})", .{fam}), uiFontSizeLabel(&buf, .{ .px = 14 }));
+    try t.expectEqualStrings("16 px", uiFontSizeLabel(&buf, .{ .px = 16 }));
 }

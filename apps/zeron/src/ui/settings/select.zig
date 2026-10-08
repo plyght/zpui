@@ -243,9 +243,13 @@ pub fn spec(v: *SettingsView, id: SelectId, cx: anytype) Spec {
             return .{ .label = "Font", .options = list.items, .selected = familyIx(fams, cur), .width = 168 };
         },
         .ui_size => {
-            for (typography.UiFontSize.all) |sz| list.append(a, .{ .label = zpui.fmt("{d} px", .{sz.px}) }) catch {};
+            for (typography.UiFontSize.all) |sz| {
+                var buf: [48]u8 = undefined;
+                list.append(a, .{ .label = zpui.fmt("{s}", .{typography.uiFontSizeLabel(&buf, sz)}) }) catch {};
+            }
             var sel: usize = 0;
-            for (typography.UiFontSize.all, 0..) |sz, i| if (sz.px == t.ui_font_size.normalized().px) {
+            const shown = store.effectiveUiFontSize(appOf(cx), s);
+            for (typography.UiFontSize.all, 0..) |sz, i| if (sz.px == shown.px) {
                 sel = i;
             };
             return .{ .label = "Interface font size", .options = list.items, .selected = sel, .width = 128 };
@@ -421,6 +425,8 @@ pub fn commit(v: *SettingsView, id: SelectId, ix: usize, cx: *Context(SettingsVi
             store.applyTheme(cx.app);
         },
         .ui_size => if (ix < typography.UiFontSize.all.len) {
+            // Picking a size (any, the default included) makes it the user's choice.
+            model.ui_font_size_choice.set(cx.app, true);
             store.update(cx, .debounced, ix, T.uiSize);
             store.applyTheme(cx.app);
         },

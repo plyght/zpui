@@ -16,10 +16,10 @@
 //! * Rasterization: `CTFontDrawGlyphs` into an A8 bitmap (or RGBA for color
 //!   emoji, converted to BGRA with straight alpha as zui's
 //!   `swap_rgba_pa_to_bgra` does, which the polychrome sprite shader expects),
-//!   with subpixel-positioned origins. Font smoothing (stroke dilation) is
-//!   used only when `glyphDilationForColor` says so; `RenderGlyphParams` has no
-//!   dilation field yet, so rasterization runs with dilation 0 (unsmoothed),
-//!   which is zui's behavior for dark text and for users who disabled smoothing.
+//!   with subpixel-positioned origins. Font smoothing (stroke dilation) follows
+//!   `RenderGlyphParams.dilation`, which the painters set from the fill color
+//!   (`glyphDilationForColor`, zui): light text on dark is thickened the way
+//!   AppKit draws it; 0 (dark text, or smoothing disabled) is unsmoothed.
 //!
 //! Thread-safe: every entry point takes an `os_unfair_lock`.
 
@@ -43,7 +43,77 @@ const FontEntry = struct {
     units_per_em: f32,
     is_emoji: bool,
     metrics: types.FontMetrics,
+    /// System UI face (".SystemUIFont"): sized copies are created fresh from AppKit's UI
+    /// usage descriptor at the real size (`sizedFont`), so CoreText picks the optical size
+    /// (SF Text / SF Display) and size-specific tracking like `NSFont.systemFont(ofSize:weight:)`.
+    /// A copy of the size-upem face would keep the optical size of 2048 pt (Display, too tight).
+    system: ?SystemFace = null,
 };
+
+const SystemFace = struct {
+    usage: UiUsage,
+    italic: bool,
+    /// Features / cascade list to re-apply on every sized copy (retained; null if none).
+    attrs: ?cf.CTFontDescriptorRef,
+};
+
+/// AppKit's system font weights (`NSCTFontUIUsageAttribute` values, the descriptors
+/// `NSFont.systemFont(ofSize:weight:)` builds), with their CSS weights.
+const UiUsage = enum {
+    ultra_light,
+    thin,
+    light,
+    regular,
+    medium,
+    demi,
+    bold,
+    heavy,
+    black,
+
+    fn name(u: UiUsage) []const u8 {
+        return switch (u) {
+            .ultra_light => "CTFontUltraLightUsage",
+            .thin => "CTFontThinUsage",
+            .light => "CTFontLightUsage",
+            .regular => "CTFontRegularUsage",
+            .medium => "CTFontMediumUsage",
+            .demi => "CTFontDemiUsage",
+            .bold => "CTFontBoldUsage",
+            .heavy => "CTFontHeavyUsage",
+            .black => "CTFontBlackUsage",
+        };
+    }
+};
+
+extern "c" fn CTFontCreateCopyWithSymbolicTraits(font: cf.CTFontRef, size: cf.CGFloat, matrix: ?*const anyopaque, value: u32, mask: u32) ?cf.CTFontRef;
+
+/// The system UI font for `usage` at `size` (optionally italic), with `attrs` applied.
+fn createSystemFont(face: SystemFace, size: cf.CGFloat) ?cf.CTFontRef {
+    const key = cf.string("NSCTFontUIUsageAttribute") orelse return null;
+    defer cf.CFRelease(key);
+    const value = cf.string(face.usage.name()) orelse return null;
+    defer cf.CFRelease(value);
+    const dict = cf.dictionary(&.{key}, &.{value}) orelse return null;
+    defer cf.CFRelease(dict);
+    const desc = cf.CTFontDescriptorCreateWithAttributes(dict) orelse return null;
+    defer cf.CFRelease(desc);
+    var font = cf.CTFontCreateWithFontDescriptor(desc, size, null) orelse return null;
+    if (face.italic) {
+        const it = CTFontCreateCopyWithSymbolicTraits(font, size, null, cf.kCTFontItalicTrait, cf.kCTFontItalicTrait);
+        cf.CFRelease(font);
+        font = it orelse return null;
+    }
+    if (face.attrs) |a| {
+        const with = cf.CTFontCreateCopyWithAttributes(font, size, null, a);
+        cf.CFRelease(font);
+        font = with orelse return null;
+    }
+    return font;
+}
+
+fn isSystemFamily(name: []const u8) bool {
+    return std.mem.eql(u8, name, ".SystemUIFont") or std.mem.eql(u8, name, ".AppleSystemUIFont");
+}
 
 /// CSS-ish font properties of a face, for best-match selection.
 /// `width`: CoreText width trait (-1 condensed .. 0 normal .. 1 expanded).
@@ -70,6 +140,10 @@ pub const CoreTextSystem = struct {
     by_native_key: std.StringHashMapUnmanaged(FontId) = .empty,
     /// Descriptors from `addFont`, searched before system fonts (retained).
     memory_descriptors: std.ArrayList(cf.CTFontDescriptorRef) = .empty,
+    /// (face, size) → sized CTFont (retained), for faces with `system` set.
+    sized: std.AutoHashMapUnmanaged(SizedKey, cf.CTFontRef) = .empty,
+
+    const SizedKey = struct { font_id: u32, size_bits: u32 };
 
     pub fn create(gpa: Allocator) !*CoreTextSystem {
         const self = try gpa.create(CoreTextSystem);
@@ -79,8 +153,13 @@ pub const CoreTextSystem = struct {
 
     pub fn destroy(self: *CoreTextSystem) void {
         const gpa = self.gpa;
-        for (self.fonts.items) |f| cf.CFRelease(f.font);
+        for (self.fonts.items) |f| {
+            cf.CFRelease(f.font);
+            if (f.system) |sf| if (sf.attrs) |a| cf.CFRelease(a);
+        }
         self.fonts.deinit(gpa);
+        self.clearSized();
+        self.sized.deinit(gpa);
         freeKeys(gpa, &self.selections);
         self.selections.deinit(gpa);
         var it = self.families.iterator();
@@ -94,6 +173,26 @@ pub const CoreTextSystem = struct {
         for (self.memory_descriptors.items) |d| cf.CFRelease(d);
         self.memory_descriptors.deinit(gpa);
         gpa.destroy(self);
+    }
+
+    fn clearSized(self: *CoreTextSystem) void {
+        var it = self.sized.valueIterator();
+        while (it.next()) |f| cf.CFRelease(f.*);
+        self.sized.clearRetainingCapacity();
+    }
+
+    /// `font_id` at `size` (+1 retained; the caller releases). System faces come from the
+    /// UI usage descriptor at that size (cached); every other face is a copy of the upem face.
+    fn sizedFont(self: *CoreTextSystem, font_id: FontId, size: f32) ?cf.CTFontRef {
+        const e = self.entry(font_id);
+        const face = e.system orelse return cf.CTFontCreateCopyWithAttributes(e.font, size, null, null);
+        const key: SizedKey = .{ .font_id = @backingInt(font_id), .size_bits = @bitCast(size) };
+        if (self.sized.get(key)) |f| return @ptrCast(cf.CFRetain(f));
+        const f = createSystemFont(face, size) orelse return cf.CTFontCreateCopyWithAttributes(e.font, size, null, null);
+        // Animated sizes would grow this without bound; it's only a cache.
+        if (self.sized.count() >= 1024) self.clearSized();
+        self.sized.put(self.gpa, key, f) catch return f;
+        return @ptrCast(cf.CFRetain(f));
     }
 
     fn freeKeys(gpa: Allocator, map: *std.StringHashMapUnmanaged(FontId)) void {
@@ -114,6 +213,7 @@ pub const CoreTextSystem = struct {
         .glyphRasterBounds = vGlyphRasterBounds,
         .rasterizeGlyph = vRasterizeGlyph,
         .layoutLine = vLayoutLine,
+        .glyphDilationForColor = glyphDilationForColor,
     };
 
     fn cast(ptr: *anyopaque) *CoreTextSystem {
@@ -191,6 +291,11 @@ pub const CoreTextSystem = struct {
 
     /// zui `load_family`: every face of the family, with features/fallbacks applied.
     fn loadFamily(self: *CoreTextSystem, font: types.Font) ![]FontId {
+        if (isSystemFamily(font.family)) {
+            const ids = try self.loadSystemFamily(font);
+            if (ids.len > 0) return ids;
+            self.gpa.free(ids);
+        }
         const name = if (std.mem.eql(u8, font.family, ".SystemUIFont")) ".AppleSystemUIFont" else font.family;
 
         var descriptors: std.ArrayList(cf.CTFontDescriptorRef) = .empty;
@@ -235,6 +340,40 @@ pub const CoreTextSystem = struct {
             const id = try self.registerFont(unit, key);
             try ids.append(self.gpa, id);
         }
+        return ids.toOwnedSlice(self.gpa);
+    }
+
+    /// The system font as AppKit builds it: one face per UI usage weight (and italic),
+    /// each sized on demand from its usage descriptor (`FontEntry.system`).
+    fn loadSystemFamily(self: *CoreTextSystem, font: types.Font) ![]FontId {
+        var ids: std.ArrayList(FontId) = .empty;
+        errdefer ids.deinit(self.gpa);
+        for ([_]bool{ false, true }) |italic| for (std.enums.values(UiUsage)) |usage| {
+            const plain: SystemFace = .{ .usage = usage, .italic = italic, .attrs = null };
+            const probe = createSystemFont(plain, 16) orelse continue;
+            defer cf.CFRelease(probe);
+            const attrs = makeFeatureAndFallbackDescriptor(probe, font);
+            const face: SystemFace = .{ .usage = usage, .italic = italic, .attrs = attrs };
+            const upem: f32 = @floatFromInt(cf.CTFontGetUnitsPerEm(probe));
+            const unit = createSystemFont(face, upem) orelse {
+                if (attrs) |a| cf.CFRelease(a);
+                continue;
+            };
+            // An italic request the font can't satisfy comes back upright: skip the duplicate.
+            if (italic and cf.CTFontGetSymbolicTraits(unit) & cf.kCTFontItalicTrait == 0) {
+                cf.CFRelease(unit);
+                if (attrs) |a| cf.CFRelease(a);
+                continue;
+            }
+            var key_buf: [512]u8 = undefined;
+            const key = std.fmt.bufPrint(&key_buf, "system|{t}|{d}", .{ usage, @intFromBool(italic) }) catch unreachable;
+            const id = self.registerFont(unit, key) catch |err| {
+                if (attrs) |a| cf.CFRelease(a);
+                return err;
+            };
+            self.fonts.items[@backingInt(id)].system = face;
+            try ids.append(self.gpa, id);
+        };
         return ids.toOwnedSlice(self.gpa);
     }
 
@@ -327,8 +466,7 @@ pub const CoreTextSystem = struct {
     /// font-kit `raster_bounds` (y-down, device pixels, rounded out) dilated by 1px
     /// on every side to leave CoreGraphics room for antialiasing (zui).
     fn rasterBounds(self: *CoreTextSystem, params: types.RenderGlyphParams) !geometry.Bounds(DevicePixels) {
-        const sized = cf.CTFontCreateCopyWithAttributes(self.entry(params.font_id).font, params.font_size, null, null) orelse
-            return error.FontCreationFailed;
+        const sized = self.sizedFont(params.font_id, params.font_size) orelse return error.FontCreationFailed;
         defer cf.CFRelease(sized);
         const g: cf.CGGlyph = @truncate(params.glyph_id);
         const r = cf.CTFontGetBoundingRectsForGlyphs(sized, cf.kCTFontOrientationDefault, @ptrCast(&g), null, 1);
@@ -352,7 +490,7 @@ pub const CoreTextSystem = struct {
         const self = cast(ptr);
         self.lock.lock();
         defer self.lock.unlock();
-        return self.rasterize(gpa, params, bounds, 0);
+        return self.rasterize(gpa, params, bounds, if (params.is_emoji) 0 else params.dilation);
     }
 
     /// zui `rasterize_glyph`. `dilation` (0..4, see `glyphDilationForColor`) enables font smoothing.
@@ -374,7 +512,10 @@ pub const CoreTextSystem = struct {
                 defer cf.CGColorSpaceRelease(space);
                 break :blk cf.CGBitmapContextCreate(bytes.ptr, w, h, 8, w * 4, space, cf.kCGImageAlphaPremultipliedLast);
             }
-            break :blk cf.CGBitmapContextCreate(bytes.ptr, w, h, 8, w, null, cf.kCGImageAlphaOnly);
+            // Device gray like zui: font smoothing (dilation) keys off the gray fill color.
+            const gray = cf.CGColorSpaceCreateDeviceGray() orelse return error.ColorSpaceFailed;
+            defer cf.CGColorSpaceRelease(gray);
+            break :blk cf.CGBitmapContextCreate(bytes.ptr, w, h, 8, w, gray, cf.kCGImageAlphaOnly);
         } orelse return error.BitmapContextFailed;
         defer cf.CGContextRelease(ctx);
 
@@ -397,8 +538,7 @@ pub const CoreTextSystem = struct {
             cf.CGContextSetGrayFillColor(ctx, 0, 1);
         }
 
-        const sized = cf.CTFontCreateCopyWithAttributes(self.entry(params.font_id).font, params.font_size, null, null) orelse
-            return error.FontCreationFailed;
+        const sized = self.sizedFont(params.font_id, params.font_size) orelse return error.FontCreationFailed;
         defer cf.CFRelease(sized);
         // zui divides both axes by SUBPIXEL_VARIANTS_X.
         const variants: f32 = @floatFromInt(types.subpixel_variants_x);
@@ -431,6 +571,13 @@ pub const CoreTextSystem = struct {
         cf.CFAttributedStringBeginEditing(astr);
         var rest = text;
         var break_ligature = true;
+        // The sized fonts this line set, so runs CoreText kept on them map back to their face
+        // (a system face's sized font has another identity than its upem face).
+        var line_fonts: std.ArrayList(struct { font: cf.CTFontRef, id: FontId }) = .empty;
+        defer {
+            for (line_fonts.items) |lf| cf.CFRelease(lf.font);
+            line_fonts.deinit(self.gpa);
+        }
         for (font_runs) |run| {
             const len = @min(run.len, rest.len);
             const run_text = rest[0..len];
@@ -452,8 +599,11 @@ pub const CoreTextSystem = struct {
             const size: f32 = if (break_ligature) std.math.nextAfter(f32, font_size, std.math.inf(f32)) else font_size;
             break_ligature = !break_ligature;
             if (utf16_end == utf16_start) continue;
-            const sized = cf.CTFontCreateCopyWithAttributes(e.font, size, null, null) orelse continue;
-            defer cf.CFRelease(sized);
+            const sized = self.sizedFont(run.font_id, size) orelse continue;
+            line_fonts.append(self.gpa, .{ .font = sized, .id = run.font_id }) catch {
+                cf.CFRelease(sized);
+                continue;
+            };
             cf.CFAttributedStringSetAttribute(astr, .{ .location = utf16_start, .length = utf16_end - utf16_start }, cf.kCTFontAttributeName, sized);
         }
         cf.CFAttributedStringEndEditing(astr);
@@ -472,7 +622,9 @@ pub const CoreTextSystem = struct {
             const run: cf.CTRunRef = @ptrCast(cf.CFArrayGetValueAtIndex(glyph_runs, @intCast(ri)).?);
             const attrs = cf.CTRunGetAttributes(run);
             const run_font: cf.CTFontRef = @ptrCast(cf.CFDictionaryGetValue(attrs, cf.kCTFontAttributeName) orelse continue);
-            const font_id = try self.idForNativeFont(run_font);
+            const font_id = for (line_fonts.items) |lf| {
+                if (lf.font == run_font or cf.CFEqual(lf.font, run_font) != 0) break lf.id;
+            } else try self.idForNativeFont(run_font);
             const is_emoji = self.entry(font_id).is_emoji;
 
             if (current_font == null or current_font.? != font_id) {
@@ -938,4 +1090,34 @@ test "CoreText end to end (macOS only)" {
         while (i < ebytes.len) : (i += 4) alpha += ebytes[i];
         try std.testing.expect(alpha > 0);
     };
+}
+
+test "the system font lays out like AppKit's at its real size (optical size + tracking; macOS only)" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const ts = try create(gpa);
+    defer destroy(ts);
+    const v = ts.vtable;
+    const regular = try v.fontId(ts.ptr, .{ .family = ".SystemUIFont" });
+    const sample = "Hamburgefonstiv quick brown fox 0123456789";
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    for ([_]f32{ 11, 13, 20, 28 }) |size| {
+        const layout = try v.layoutLine(ts.ptr, arena_state.allocator(), sample, size, &.{.{ .len = sample.len, .font_id = regular }});
+        // NSFont.systemFont(ofSize:) regular == CTFontCreateUIFontForLanguage(.system, size).
+        const native = cf.CTFontCreateUIFontForLanguage(cf.kCTFontUIFontSystem, size, null) orelse return error.NoSystemFont;
+        defer cf.CFRelease(native);
+        const astr = cf.CFAttributedStringCreateMutable(null, 0) orelse return error.OutOfMemory;
+        defer cf.CFRelease(astr);
+        const s = cf.string(sample) orelse return error.OutOfMemory;
+        defer cf.CFRelease(s);
+        cf.CFAttributedStringReplaceString(astr, .{ .location = 0, .length = 0 }, s);
+        cf.CFAttributedStringSetAttribute(astr, .{ .location = 0, .length = cf.CFAttributedStringGetLength(astr) }, cf.kCTFontAttributeName, native);
+        const line = cf.CTLineCreateWithAttributedString(@ptrCast(astr)) orelse return error.ShapingFailed;
+        defer cf.CFRelease(line);
+        const want: f32 = @floatCast(cf.CTLineGetTypographicBounds(line, null, null, null));
+        try std.testing.expectApproxEqAbs(want, layout.width, 0.5);
+        // Shaped glyphs stay on the system face (not a re-registered fallback copy).
+        try std.testing.expectEqual(regular, layout.runs[0].font_id);
+    }
 }

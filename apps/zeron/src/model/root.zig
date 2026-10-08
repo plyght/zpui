@@ -30,6 +30,8 @@ pub const composer_defaults = @import("composer_defaults.zig");
 /// The composer-defaults global (+ explicit new-thread defaults).
 pub const composer_store = @import("composer_store.zig");
 pub const background_fade = @import("background_fade.zig");
+/// Whether the interface font size was ever chosen (`ui-font-size-chosen.json`).
+pub const ui_font_size_choice = @import("ui_font_size_choice.zig");
 pub const types = @import("types.zig");
 pub const engine_state = @import("engine_state.zig");
 pub const workspace = @import("workspace.zig");

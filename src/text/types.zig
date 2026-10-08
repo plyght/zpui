@@ -103,6 +103,11 @@ pub const RenderGlyphParams = extern struct {
     is_emoji: bool,
     subpixel_rendering: bool,
     scale_factor: f32,
+    /// Font smoothing (stroke dilation) level 0..4 for the fill color (gpui
+    /// `RenderGlyphParams::dilation`, `glyphDilationForColor`); 0 = unsmoothed.
+    dilation: u8 = 0,
+    /// Explicit padding: params are hashed and compared as bytes.
+    _pad: [3]u8 = .{ 0, 0, 0 },
 };
 
 /// gpui `TextRun`: styling for `len` UTF-8 bytes of a styled text.
@@ -125,3 +130,9 @@ pub const StrikethroughStyle = struct {
     thickness: Pixels = 1,
     color: ?color.Hsla = null,
 };
+
+test "RenderGlyphParams has no implicit padding (hashed and compared as bytes)" {
+    var sum: usize = 0;
+    inline for (std.meta.fields(RenderGlyphParams)) |f| sum += @sizeOf(f.type);
+    try std.testing.expectEqual(sum, @sizeOf(RenderGlyphParams));
+}
