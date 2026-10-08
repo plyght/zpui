@@ -189,7 +189,7 @@ pub const Underline = extern struct {
     wavy: PaddedBool32 = 0,
 };
 
-/// Single-channel atlas sprite tinted with `color` (glyphs, SVG icons). 144 bytes.
+/// Single-channel atlas sprite tinted with `color` (glyphs, SVG icons). 152 bytes.
 pub const MonochromeSprite = extern struct {
     order: DrawOrder = 0,
     pad: u32 = 0,
@@ -201,6 +201,11 @@ pub const MonochromeSprite = extern struct {
     /// Offset 88 (WGSL mat2x2 has align 8).
     transformation: TransformationMatrix = .{},
     fade: EdgeFadeParams = .{},
+    /// Gaussian blur sigma in device pixels; 0 samples the glyph crisp. The quad must be inflated
+    /// by `3 * blur` on each side (see `Window.paintGlyphTransformed`) so the halo has room.
+    blur: f32 = 0,
+    /// Keeps the struct's size a multiple of 8 bytes for the WGSL/GLSL mirror.
+    pad2: f32 = 0,
 };
 
 /// LCD subpixel-antialiased glyph (wgpu dual-source blending). Same layout as `MonochromeSprite`.
@@ -213,6 +218,9 @@ pub const SubpixelSprite = extern struct {
     tile: AtlasTile,
     transformation: TransformationMatrix = .{},
     fade: EdgeFadeParams = .{},
+    /// Unused; keeps the layout identical to `MonochromeSprite` (both share one shader struct).
+    blur: f32 = 0,
+    pad2: f32 = 0,
 };
 
 /// GPU form of `ImageAlphaMask` in device pixels. Zero `feather` disables the mask. 40 bytes.
@@ -450,10 +458,11 @@ comptime {
     assert(@offsetOf(Quad, "border_color") == 112);
     assert(@offsetOf(Quad, "fade") == 160);
     assert(@sizeOf(Underline) == 64);
-    assert(@sizeOf(MonochromeSprite) == 144);
+    assert(@sizeOf(MonochromeSprite) == 152);
+    assert(@offsetOf(MonochromeSprite, "blur") == 144);
     assert(@offsetOf(MonochromeSprite, "tile") == 56);
     assert(@offsetOf(MonochromeSprite, "transformation") == 88);
-    assert(@sizeOf(SubpixelSprite) == 144);
+    assert(@sizeOf(SubpixelSprite) == 152);
     assert(@sizeOf(ImageAlphaMaskParams) == 40);
     assert(@sizeOf(PolychromeSprite) == 168);
     assert(@offsetOf(PolychromeSprite, "alpha_mask") == 96);

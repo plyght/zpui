@@ -543,7 +543,7 @@ All take logical pixels, apply content mask / opacity / edge fade and snap to de
 pixels: `paintQuad(PaintQuad)` (`zpui.fill`, `zpui.outline`, `zpui.quad`, `.cornerRadii`,
 `.borderWidths`, `.borderColor`), `paintDropShadows` / `paintInsetShadows` / `paintShadows`,
 `paintBackdropBlur(bounds, radii, blur)`, `paintPath(path, bg)`, `paintUnderline`,
-`paintStrikethrough`, `paintGlyph`, `paintEmoji`, `paintSvg(bounds, path, bytes, transform, color)`,
+`paintStrikethrough`, `paintGlyph`, `paintGlyphTransformed(origin, font, glyph, size, color, matrix, blur)`, `paintEmoji`, `paintSvg(bounds, path, bytes, transform, color)`,
 `paintImage(bounds, radii, *RenderImage, frame, grayscale)`, `paintImageFitted(..., alpha_mask)`,
 `paintStyle` / `paintStyleBorder` (a `Style`'s background/shadows and border),
 `glyphPainter()` (for `ShapedLine.paint`). Scoped state uses explicit push/pop pairs

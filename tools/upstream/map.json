@@ -5,8 +5,8 @@
   "zui": {
    "url": "https://github.com/zeronsh/zui",
    "branch": "main",
-   "pinned": "667d0aaf9531d2d1b2d0674a5e55f977df1b09f6",
-   "pinned_date": "2026-09-30",
+   "pinned": "dce5c1f737a834b32c2b531d552ea78035e54093",
+   "pinned_date": "2026-10-07",
    "local": "/home/user/research/zui"
   },
   "zeron": {
@@ -19,9 +19,10 @@
   "gpui-component": {
    "url": "https://github.com/zeronsh/gpui-component",
    "branch": "main",
-   "pinned": "2f73e5c2bc03d6768cb5fcc92442c4cf4b963b70",
+   "pinned": "47ccd07295858d66f8fe826df9651a56218eb887",
    "local": "/home/user/research/gpui-component",
-   "optional": true
+   "optional": true,
+   "pinned_date": "2026-10-07"
   }
  },
  "pins": [

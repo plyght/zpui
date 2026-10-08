@@ -18,5 +18,14 @@ void main() {
   gl_ClipDistance[3] = clip.w;
   v_id = gl_InstanceIndex;
   v_color = hsla_to_rgba(sprite.color);
-  v_tile_position = to_tile_position(unit_vertex, sprite.tile, pc.texture_size);
+  // A blurred sprite's quad is inflated by 3*sigma per side (the CPU and this derivation must
+  // agree); map uv so the content keeps its size and the margin addresses past the tile — the
+  // fragment zeroes those taps. Tile pixels scale by tile/quad (SVGs rasterize oversampled), so
+  // with zero blur this is exactly to_tile_position. Subpixel sprites always carry blur = 0.
+  float blur_pad = 3.0 * sprite.blur;
+  vec2 quad_size = sprite.bounds.size;
+  vec2 unpadded_size = max(quad_size - 2.0 * blur_pad, vec2(1e-6));
+  vec2 tile_size = vec2(sprite.tile.size);
+  vec2 tile_px = (unit_vertex * quad_size - blur_pad) * (tile_size / unpadded_size);
+  v_tile_position = (vec2(sprite.tile.origin) + tile_px) / pc.texture_size;
 }

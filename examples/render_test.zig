@@ -4,8 +4,8 @@
 //! solid and dashed borders, sRGB/Oklab gradients, patterns, drop and inset
 //! shadows, straight and wavy underlines, a vector path, monochrome glyph
 //! sprites from a hand-made bitmap, a polychrome image tile, a frosted-glass
-//! backdrop blur, an edge-faded scroll region and translucency over a
-//! transparent framebuffer), renders it offscreen, writes
+//! backdrop blur, an edge-faded scroll region, translucency over a
+//! transparent framebuffer, and transformed / gaussian-blurred glyphs), renders it offscreen, writes
 //! zig-out/render-test.png and compares it with tests/golden/render-test.png.
 //!
 //! Flags: `--update-golden` overwrites the golden image with this render.
@@ -24,7 +24,7 @@ const Renderer = zpui.renderer.Renderer;
 
 const scale: f32 = 2;
 const logical_w = 680;
-const logical_h = 520;
+const logical_h = 600;
 /// Per backend: rasterization (AA, dithering, MSAA) differs between Metal and lavapipe.
 const golden_path = if (zpui.renderer.backend == .metal) "tests/golden/render-test-metal.png" else "tests/golden/render-test.png";
 const output_path = "zig-out/render-test.png";
@@ -319,6 +319,63 @@ fn buildScene(gpa: std.mem.Allocator, scene: *Scene, atlas: *atlas_mod.Atlas) !v
     outline.border_widths = edges(1);
     outline.border_color = hex(0xcbd5e1);
     try scene.insertQuad(gpa, outline);
+
+    // Row 5: transformed and blurred monochrome glyphs (zui 0966d06 `paint_glyph_transformed`):
+    // crisp, rotated and scaled about the glyph center, blurred at sigma 1/3/6 (6 hits the 12-tap
+    // radius cap), rotated + blurred, and a blurred glow under a crisp copy.
+    try scene.insertQuad(gpa, quad(rect(36, 512, 610, 64), solid(hex(0xffffff)), corners(12, 12, 12, 12)));
+    const ink = hex(0x0f172a);
+    const big: TextOptions = .{ .size = 2 };
+    try insertText(gpa, scene, atlas, "ZP", 52, 524, ink, big);
+    try insertGlyphFx(gpa, scene, atlas, 'Z', 140, 524, hex(0x7c3aed), .{ .rotate = 0.35 });
+    try insertGlyphFx(gpa, scene, atlas, 'P', 204, 524, hex(0x059669), .{ .scale = 1.3 });
+    try insertGlyphFx(gpa, scene, atlas, 'U', 270, 524, ink, .{ .blur = 1 });
+    try insertGlyphFx(gpa, scene, atlas, 'U', 334, 524, ink, .{ .blur = 3 });
+    try insertGlyphFx(gpa, scene, atlas, 'I', 398, 524, hex(0xdc2626), .{ .blur = 6 });
+    try insertGlyphFx(gpa, scene, atlas, 'Z', 462, 524, hex(0x2563eb), .{ .rotate = -0.3, .blur = 2 });
+    try insertGlyphFx(gpa, scene, atlas, 'P', 532, 524, hex(0x0ea5e9), .{ .blur = 4 });
+    try insertGlyphFx(gpa, scene, atlas, 'P', 532, 524, hex(0xffffff), .{});
+}
+
+const GlyphFx = struct {
+    /// Clockwise rotation about the glyph center, radians.
+    rotate: f32 = 0,
+    /// Uniform scale about the glyph center.
+    scale: f32 = 1,
+    /// Gaussian sigma, logical px.
+    blur: f32 = 0,
+};
+
+/// One 2x-size glyph built like `Window.paintGlyphTransformed`: the matrix is applied at composite
+/// time in device px, and the quad is inflated by 3 * sigma per side for the blur halo.
+fn insertGlyphFx(gpa: std.mem.Allocator, scene: *Scene, atlas: *atlas_mod.Atlas, ch: u8, x: f32, y: f32, c: Hsla, fx: GlyphFx) !void {
+    const gw = glyph_logical_w * 2;
+    const gh = glyph_logical_h * 2;
+    const w: i32 = @intFromFloat(gw * scale);
+    const h: i32 = @intFromFloat(gh * scale);
+    var buf: [64 * 64 * 4]u8 = undefined;
+    var builder: GlyphBuilder = .{ .ch = ch, .w = w, .h = h, .buf = buf[0..@intCast(w * h)] };
+    const tile = (try atlas.getOrInsertWith(.{ .glyph = .init(0, ch, gh, scale) }, &builder)) orelse return;
+    const glyph = rect(x, y, gw, gh);
+    const center: zpui.Point(f32) = .{ .x = glyph.origin.x + glyph.size.width / 2, .y = glyph.origin.y + glyph.size.height / 2 };
+    const xf = scene_mod.TransformationMatrix.unit
+        .translate(center)
+        .rotate(fx.rotate)
+        .scale(.{ .width = fx.scale, .height = fx.scale })
+        .translate(.{ .x = -center.x, .y = -center.y });
+    const sigma = fx.blur * scale;
+    const pad = 3 * sigma;
+    try scene.insertMonochromeSprite(gpa, .{
+        .bounds = .{
+            .origin = .{ .x = glyph.origin.x - pad, .y = glyph.origin.y - pad },
+            .size = .{ .width = glyph.size.width + 2 * pad, .height = glyph.size.height + 2 * pad },
+        },
+        .content_mask = full_mask,
+        .color = c,
+        .tile = tile,
+        .transformation = xf,
+        .blur = sigma,
+    });
 }
 
 /// A five-pointed star, triangulated around its center (as gpui's lyon

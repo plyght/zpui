@@ -333,6 +333,49 @@ fn insertGlyph(w: *Window, params: text_mod.RenderGlyphParams, origin: geometry.
     }
 }
 
+/// Paint a monochrome glyph like `paintGlyph`, with a `TransformationMatrix` applied at composite
+/// time (device-pixel space, e.g. scale or rotate about the glyph's center) and an optional
+/// gaussian `blur` (sigma, logical pixels) (gpui `paint_glyph_transformed`, zui 0966d06).
+///
+/// Always renders through the plain-alpha pipeline: subpixel RGB masks cannot be transformed or
+/// blurred. The glyph rasterizes once at `font_size`; motion belongs in the matrix, so animating it
+/// never grows the atlas.
+pub fn paintGlyphTransformed(
+    w: *Window,
+    origin: Point,
+    font_id: text_mod.FontId,
+    glyph_id: text_mod.GlyphId,
+    font_size: Pixels,
+    c: Hsla,
+    transformation: scene.TransformationMatrix,
+    blur: Pixels,
+) void {
+    assertPaint(w);
+    const g = text_mod.line.glyphRenderParams(font_id, glyph_id, font_size, origin, w.scale_factor, false);
+    const ts = w.text_system.text_system;
+    const sprite = (ts.rasterizeToAtlas(w.sprite_atlas, g.params, g.origin) catch |err| {
+        std.log.warn("glyph raster failed: {t}", .{err});
+        return;
+    }) orelse return;
+    const sigma = @max(blur * w.scale_factor, 0);
+    // The shaders re-derive this inflation from `blur` to map the quad onto the tile, so the two
+    // must stay in lockstep.
+    const pad = 3.0 * sigma;
+    const gb = sprite.bounds;
+    sceneOf(w).insertMonochromeSprite(w.gpa, .{
+        .bounds = .{
+            .origin = .{ .x = gb.origin.x - pad, .y = gb.origin.y - pad },
+            .size = .{ .width = gb.size.width + pad + pad, .height = gb.size.height + pad + pad },
+        },
+        .content_mask = snappedContentMask(w),
+        .color = c.opacity(w.element_opacity),
+        .tile = sprite.tile,
+        .transformation = transformation,
+        .fade = scaledEdgeFade(w),
+        .blur = sigma,
+    }) catch @panic("OOM");
+}
+
 /// Paint a color emoji glyph (gpui `paint_emoji`).
 pub fn paintEmoji(w: *Window, origin: Point, font_id: text_mod.FontId, glyph_id: text_mod.GlyphId, font_size: Pixels) void {
     const s = w.scale_factor;

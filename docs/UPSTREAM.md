@@ -8,12 +8,12 @@ revision we ported from and diff forward from there.
 
 | upstream | repo | pinned | date | what tracks it |
 |---|---|---|---|---|
-| zui | https://github.com/zeronsh/zui | `667d0aaf9531d2d1b2d0674a5e55f977df1b09f6` | 2026-09-30 | `src/**` (zpui) |
+| zui | https://github.com/zeronsh/zui | `dce5c1f737a834b32c2b531d552ea78035e54093` | 2026-10-07 | `src/**` (zpui) |
 | zeron | https://github.com/zeronsh/zeron | `9e1a11158b0626237c814f4bd36f5948483ed797` | 2026-10-02 | `apps/zeron/**` |
-| gpui-component | https://github.com/zeronsh/gpui-component | `2f73e5c2bc03d6768cb5fcc92442c4cf4b963b70` | — | `apps/zeron/src/ui/editor/**`, `src/elements/scrollbar.zig` (optional) |
+| gpui-component | https://github.com/zeronsh/gpui-component | `47ccd07295858d66f8fe826df9651a56218eb887` | 2026-10-07 | `apps/zeron/src/ui/editor/**`, `src/elements/scrollbar.zig` (optional) |
 
-zeron's own `Cargo.toml` pins zui at the same `667d0aa` and gpui-component (`gpui-base`) at
-`2f73e5c`, so the three pins agree today. The source of truth for the pins is
+zeron's own `Cargo.toml` pins zui at the same `dce5c1f` and gpui-component (`gpui-base`) at
+`47ccd07`, so the three pins agree today. The source of truth for the pins is
 `tools/upstream/map.json` (`upstreams.*.pinned`); keep this table in sync when bumping.
 
 The local zeron checkout at `/home/user/zeron` has `origin` = `plyght/zeron` (a mirror); the tracker

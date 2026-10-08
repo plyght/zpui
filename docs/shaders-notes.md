@@ -27,7 +27,7 @@ are plain 4-byte scalars and match `extern struct` exactly. WGSL storage buffers
 | `Shadow` | 112 | |
 | `Quad` | 192 | background at 40, fade at 160 |
 | `Underline` | 64 | |
-| `MonochromeSprite` / `SubpixelSprite` | 144 | tile at 56, transformation at 88 |
+| `MonochromeSprite` / `SubpixelSprite` | 152 | tile at 56, transformation at 88, blur at 144 (+ pad2; subpixel leaves blur 0) |
 | `PolychromeSprite` | 168 | alpha_mask at 96, tile at 136 |
 | `BackdropBlur` | 56 | Metal instance only; WGSL uses `BackdropBlurUniform` |
 | `PathRasterizationVertex` | 104 | bounds at 88 |

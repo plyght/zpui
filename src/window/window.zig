@@ -774,6 +774,13 @@ pub const Window = struct {
         try self.bounds_observers.append(self.gpa, .{ .func = Gen.call, .cap = .init(ctx) });
     }
 
+    /// The composition layer native children mount into, when supported (gpui
+    /// `Window::native_composition`; always null outside Windows).
+    pub fn nativeComposition(self: *const Window) ?platform.NativeComposition {
+        if (self.platform_closed) return null;
+        return self.platform_window.nativeComposition();
+    }
+
     /// The display the window is on (`platform.Display.id`), when the backend knows.
     pub fn displayId(self: *const Window) ?u32 {
         if (self.platform_closed) return null;
@@ -2292,6 +2299,7 @@ pub const Window = struct {
     pub const paintUnderline = paint_mod.paintUnderline;
     pub const paintStrikethrough = paint_mod.paintStrikethrough;
     pub const paintGlyph = paint_mod.paintGlyph;
+    pub const paintGlyphTransformed = paint_mod.paintGlyphTransformed;
     pub const paintEmoji = paint_mod.paintEmoji;
     pub const paintSvg = paint_mod.paintSvg;
     pub const paintImage = paint_mod.paintImage;

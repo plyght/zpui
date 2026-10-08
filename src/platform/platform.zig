@@ -193,6 +193,16 @@ pub const WindowCallbacks = struct {
     native_control: ?*const fn (ctx: ?*anyopaque, view: NativeViewId, event: NativeControlEvent) void = null,
 };
 
+/// gpui `NativeComposition` (zui dce5c1f): raw composition handles for embedding native surfaces
+/// between the base and overlay planes. Windows-only upstream (`IDCompositionDevice*` and an
+/// `IDCompositionVisual*` layer); zpui has no Windows backend, so `Window.nativeComposition` is
+/// always null. Borrowed handles, valid only while `generation` is unchanged.
+pub const NativeComposition = struct {
+    device: *anyopaque,
+    layer: *anyopaque,
+    generation: u64,
+};
+
 /// gpui `PlatformWindow`. Owned by the platform; destroyed via `close` + the `close` callback.
 pub const Window = struct {
     ptr: *anyopaque,
@@ -293,6 +303,12 @@ pub const Window = struct {
         /// until the next call or until the window closes.
         a11yUpdate: ?*const fn (ptr: *anyopaque, update: a11y.Update) void = null,
     };
+
+    /// gpui `PlatformWindow::native_composition`: null on every zpui backend (Windows-only upstream).
+    pub fn nativeComposition(w: Window) ?NativeComposition {
+        _ = w;
+        return null;
+    }
 
     /// Whether this backend can host native child views (`attachNativeView`).
     pub fn supportsNativeViews(w: Window) bool {

@@ -1453,3 +1453,40 @@ test "event handlers can use the element arena (zpui.fmt, div) outside a draw" {
     try testing.expectEqual(@as(u8, '0'), v.seen[0]);
     try testing.expect(window_mod.arena_mod.currentOrNull() == null); // nothing left installed
 }
+
+const GlyphFxView = struct {
+    fn init(_: *Window, _: *Context(GlyphFxView)) GlyphFxView {
+        return .{};
+    }
+    fn paintGlyphs(_: *GlyphFxView, _: Bounds, window: *Window, _: *App) void {
+        const font: @import("../text/types.zig").FontId = @enumFromInt(0);
+        window.paintGlyph(.{ .x = 10, .y = 30 }, font, 'a', px(16), color.black);
+        const xf = zpui_scene.TransformationMatrix.unit.rotate(0.25).scale(.{ .width = 1.5, .height = 1.5 });
+        window.paintGlyphTransformed(.{ .x = 10, .y = 30 }, font, 'a', px(16), color.black, xf, px(2));
+        window.paintGlyphTransformed(.{ .x = 40, .y = 30 }, font, ' ', px(16), color.black, xf, px(2)); // empty: no sprite
+    }
+    pub fn render(self: *GlyphFxView, _: *Window, _: *Context(GlyphFxView)) elements.Div {
+        return div().size(px(100)).child(elements.canvas(self, GlyphFxView.paintGlyphs).size(px(100)));
+    }
+};
+
+test "paintGlyphTransformed inflates the quad by 3 sigma and carries the matrix and blur" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, GlyphFxView, GlyphFxView.init, .{});
+    const w = handle.window(app).?;
+    const sprites = w.rendered_frame.scene.monochrome_sprites.items;
+    try testing.expectEqual(@as(usize, 2), sprites.len);
+    const crisp = sprites[0];
+    const fx = sprites[1];
+    const sigma = 2 * w.scale_factor;
+    try testing.expectEqual(@as(f32, 0), crisp.blur);
+    try testing.expect(crisp.transformation.eql(.unit));
+    try testing.expectEqual(sigma, fx.blur);
+    try testing.expect(!fx.transformation.eql(.unit));
+    try testing.expect(std.meta.eql(fx.tile, crisp.tile)); // rasterized once, same atlas tile
+    try testing.expectEqual(crisp.bounds.origin.x - 3 * sigma, fx.bounds.origin.x);
+    try testing.expectEqual(crisp.bounds.origin.y - 3 * sigma, fx.bounds.origin.y);
+    try testing.expectEqual(crisp.bounds.size.width + 6 * sigma, fx.bounds.size.width);
+    try testing.expectEqual(crisp.bounds.size.height + 6 * sigma, fx.bounds.size.height);
+}
