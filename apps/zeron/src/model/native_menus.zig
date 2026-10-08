@@ -32,8 +32,10 @@ pub const available = builtin.os.tag == .macos;
 pub const default = true;
 
 /// The current value for code without an `App` at hand (popover styling): the
-/// process has one app, and `init` / `set` keep this in step with its store.
-var cached: bool = default;
+/// process has one app, and `init` / `initMemory` / `set` keep this in step with its
+/// store. Off until a store is installed, so headless tests (no store) keep the drawn
+/// look on macOS too and lay out exactly as on Linux.
+var cached: bool = false;
 
 /// Native menus + metrics are on (always false off macOS).
 pub fn look() bool {
@@ -154,9 +156,11 @@ pub fn stored(app: *App) bool {
     return s.value;
 }
 
-/// Native menus are on for `app` (macOS and the option on).
+/// Native menus are on for `app` (macOS, a store installed — the app always installs
+/// one at launch, headless tests do not — and the option on).
 pub fn enabled(app: *App) bool {
-    return available and stored(app);
+    const s = app.tryGlobal(NativeMenusStore) orelse return false;
+    return available and s.value;
 }
 
 /// Turn native menus on / off: saved (persisting stores) and every window repaints.
@@ -217,4 +221,11 @@ test "native menus persist to their own file" {
     try testing.expect(!load(gpa, io, dir));
     try save(true, gpa, io, dir);
     try testing.expect(load(gpa, io, dir));
+}
+
+test "no store: native menus and the native look stay off (headless tests match Linux)" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    try testing.expect(!enabled(app));
+    try testing.expect(stored(app)); // the option itself defaults on
 }

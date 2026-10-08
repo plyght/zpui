@@ -347,7 +347,7 @@ test "native menus: the context menu pops up natively with the drawn rows and ru
 test "native menus off: the drawn context menu is the fallback" {
     var h = try Harness.init("notes.txt", "alpha\n");
     defer h.deinit();
-    h.tw().native_menus = true; // the platform could, but the option is off here (Linux)
+    h.tw().native_menus = true; // the platform could, but no native-menus store is installed (off)
     h.focus();
     _ = h.tw().simulateInput(.{ .mouse_down = .{ .button = .right, .position = .{ .x = 200, .y = 60 } } });
     h.settle();

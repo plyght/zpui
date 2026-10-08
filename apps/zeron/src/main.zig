@@ -152,7 +152,8 @@ fn onLaunch(l: *Launch, app: *App) void {
     }
     actions.keymap.applyKeymap(app, &keymap_cfg, send) catch |err| log.err("keymap: {t}", .{err});
     // Settings → Appearance → Native menus (macOS; its own native-menus.json, Rust drops unknown ui-settings keys).
-    if (l.data_dir) |dir| model.native_menus.init(app, l.io, dir) catch |err| log.warn("native menus: {t}", .{err});
+    // Fixture runs (no data dir) keep the default (on), never written.
+    if (l.data_dir) |dir| model.native_menus.init(app, l.io, dir) catch |err| log.warn("native menus: {t}", .{err}) else model.native_menus.initMemory(app, model.native_menus.default) catch |err| log.warn("native menus: {t}", .{err});
     // [dictation] the voice model + the composer's dictation service (voice/service.zig).
     voice_service.install(app, l.io, l.environ, if (l.fixtures_dir == null) l.data_dir else null);
 
