@@ -132,6 +132,35 @@ test "appearance changes re-theme the app live" {
     try testing.expectEqual(@as(u8, 14), h.settings().theme.ui_font_size.px);
 }
 
+test "the system font starts at 14 px until a size is chosen; Geist returns to 16" {
+    var h = try Harness.init();
+    defer h.deinit();
+    h.tw().typeKey(mod ++ "-,");
+    h.app.runUntilParked();
+    const v = h.view().?;
+    const win = h.handle.window(h.app).?;
+    try testing.expect(!model.ui_font_size_choice.current(h.app));
+    try testing.expectEqual(@as(u8, 16), h.settings().theme.ui_font_size.px);
+    try testing.expectEqual(@as(f32, 16), win.remSize());
+
+    // Interface font → SF Pro (System): an untouched 16 renders at 14 (the stored 16 stays).
+    v.update(h.app, commitSelect, .{ select.SelectId.ui_font, 2 });
+    try testing.expect(h.settings().theme.ui_font_family == .system);
+    try testing.expectEqual(@as(f32, 14), win.remSize());
+    try testing.expectEqual(@as(u8, 16), h.settings().theme.ui_font_size.px);
+    try testing.expectEqual(@as(u8, 14), store.effectiveUiFontSize(h.app, h.settings()).px);
+
+    // Back to Geist: 16 again.
+    v.update(h.app, commitSelect, .{ select.SelectId.ui_font, 0 });
+    try testing.expectEqual(@as(f32, 16), win.remSize());
+
+    // An explicit 16 is never overridden, with the system font either.
+    v.update(h.app, commitSelect, .{ select.SelectId.ui_size, 4 });
+    try testing.expect(model.ui_font_size_choice.current(h.app));
+    v.update(h.app, commitSelect, .{ select.SelectId.ui_font, 2 });
+    try testing.expectEqual(@as(f32, 16), win.remSize());
+}
+
 test "switches write through the settings store" {
     var h = try Harness.init();
     defer h.deinit();
