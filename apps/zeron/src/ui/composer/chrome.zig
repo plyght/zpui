@@ -80,15 +80,15 @@ pub const Frosted = struct {
 
 /// Backdrop-blur `child` when the theme is frosted (`frost::frosted`).
 /// [background-fade] The pill's fill over the new-thread artwork, where the
-/// cutout dims the art to `reveal` (Rust: 0.5). Light frost's 35% tint is the
-/// only fill not already opaque or contrast-checked against a worst-case
-/// backdrop, so with a brighter cutout it rises just enough that no more of
-/// the artwork shows through than under Rust's half-strength cutout:
-/// `(1 - a) * reveal <= (1 - a0) * 0.5`. Null (no artwork) or 0.5 is unchanged.
+/// cutout dims the art to `reveal` (Rust: 0.5). Frost's translucent tint was
+/// tuned for that half-strength art, so with a brighter cutout it rises just
+/// enough that no more of the artwork shows through than under Rust's cutout:
+/// `(1 - a) * reveal <= (1 - a0) * 0.5`. Opaque surfaces, no artwork (null)
+/// and Full (0.5) are unchanged.
 pub fn heroSurfaceBg(theme: *const Theme, reveal: ?f32) Hsla {
     const bg = theme.composerSurfaceBg();
     const r = reveal orelse return bg;
-    if (!theme.isFrost() or theme.appearance != .light or !(r > rust_cutout_reveal)) return bg;
+    if (!theme.isFrost() or !(r > rust_cutout_reveal)) return bg;
     var out = bg;
     out.a = @max(bg.a, 1 - (1 - bg.a) * rust_cutout_reveal / @min(r, 1));
     return out;
