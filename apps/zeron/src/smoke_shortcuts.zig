@@ -216,6 +216,8 @@ const Runner = struct {
                 if (on_done) |d| d(win, app, .{ .failures = next.failures, .passes = next.passes });
                 if (builtin.os.tag == .macos) mac.postKey(win, "cmd-q");
                 next.quit_frames = 240;
+                // The run loop may end and the process still hang in teardown.
+                if (std.Thread.spawn(.{}, quitWatchdog, .{})) |t| t.detach() else |_| {}
             },
         }
         win.onNextFrame(next, tick);
@@ -252,6 +254,13 @@ const Runner = struct {
         app.quit();
     }
 };
+
+fn quitWatchdog() void {
+    const ts: std.c.timespec = .{ .sec = 20, .nsec = 0 };
+    _ = std.c.nanosleep(&ts, null);
+    std.debug.print("FAIL: zeron smoke: shortcuts: cmd-q did not exit the process within 20 s\n", .{});
+    std.process.exit(1);
+}
 
 var current_focus: Focus = .root;
 

@@ -125,12 +125,22 @@ pub const Pty = struct {
         return c.W.EXITSTATUS(s);
     }
 
+    /// Close the terminal like a terminal emulator does: hang up (closing the master and
+    /// SIGHUP; interactive shells ignore SIGTERM, which made a blocking wait here hang
+    /// ⌘Q / window close forever once a terminal had been opened), give the child a
+    /// moment to exit, then SIGKILL so the wait is bounded.
     pub fn deinit(self: *Pty) void {
-        if (self.poll(false) == null) {
-            _ = c.kill(self.pid, .TERM);
-            _ = self.poll(true);
-        }
         _ = c.close(self.master);
+        if (self.poll(false) != null) return;
+        _ = c.kill(self.pid, .HUP);
+        var waited: u32 = 0;
+        while (waited < 50) : (waited += 1) {
+            if (self.poll(false) != null) return;
+            const ts: c.timespec = .{ .sec = 0, .nsec = 2 * std.time.ns_per_ms };
+            _ = c.nanosleep(&ts, null);
+        }
+        _ = c.kill(self.pid, .KILL);
+        _ = self.poll(true);
     }
 };
 
@@ -210,4 +220,17 @@ test "resize sets the PTY window size" {
     const s1 = p.size().?;
     try std.testing.expectEqual(@as(u16, 132), s1.cols);
     try std.testing.expectEqual(@as(u16, 40), s1.rows);
+}
+
+test "deinit returns promptly when the child ignores SIGTERM and SIGHUP (interactive shells)" {
+    var p = try Pty.spawn(&.{ "/bin/sh", "-c", "trap '' TERM HUP; sleep 30" }, .{});
+    // Let the shell install its traps.
+    const ts: c.timespec = .{ .sec = 0, .nsec = 200 * std.time.ns_per_ms };
+    _ = c.nanosleep(&ts, null);
+    var t0: c.timespec = undefined;
+    _ = c.clock_gettime(.MONOTONIC, &t0);
+    p.deinit();
+    var t1: c.timespec = undefined;
+    _ = c.clock_gettime(.MONOTONIC, &t1);
+    try std.testing.expect(t1.sec - t0.sec < 5);
 }
