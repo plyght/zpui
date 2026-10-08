@@ -41,6 +41,12 @@ pub const breeze_accent: u32 = 0x3daee9;
 /// macOS controlAccentColor (blue).
 pub const macos_accent: u32 = 0x007aff;
 
+/// GNOME 48+ ships Adwaita Sans (an Inter derivative); older GNOME uses Cantarell.
+const adwaita_fonts = [_][]const u8{ "Adwaita Sans", "Cantarell", "Inter", "sans-serif" };
+/// Plasma's default UI font.
+const breeze_fonts = [_][]const u8{ "Noto Sans", "Inter", "sans-serif" };
+const macos_fonts = [_][]const u8{".SystemUIFont"};
+
 /// `0xRRGGBB` with alpha.
 pub fn rgbA(v: u32, a: f32) Hsla {
     var c = color.rgb(v);
@@ -136,6 +142,8 @@ pub const Look = struct {
     item_hover: Hsla,
 
     // -- metrics ------------------------------------------------------------------------
+    /// UI font families, preferred first (the first one installed is used).
+    fonts: []const []const u8,
     font_size: Pixels,
     small_font_size: Pixels,
     line_height: Pixels,
@@ -202,7 +210,8 @@ fn adwaita(dark: bool, accent_rgb: u32) Look {
             .check_border = rgbA(0xffffff, 0.15),
             .check_bg = rgbA(0xffffff, 0),
             .item_hover = rgbA(0xffffff, 0.07),
-            .font_size = 14.67,
+            .fonts = &adwaita_fonts,
+        .font_size = 14.67,
             .small_font_size = 12.5,
             .line_height = 20,
             .control_height = 34,
@@ -240,6 +249,7 @@ fn adwaita(dark: bool, accent_rgb: u32) Look {
         .check_border = rgbA(0x000006, 0.12),
         .check_bg = rgbA(0xffffff, 0),
         .item_hover = rgbA(0x000006, 0.06),
+        .fonts = &adwaita_fonts,
         .font_size = 14.67,
         .small_font_size = 12.5,
         .line_height = 20,
@@ -286,6 +296,7 @@ fn breeze(dark: bool, accent_rgb: u32) Look {
         .check_border = outline,
         .check_bg = view_bg,
         .item_hover = mix(view_bg, accent, 0.25),
+        .fonts = &breeze_fonts,
         .font_size = 13.33,
         .small_font_size = 11.5,
         .line_height = 18,
@@ -327,6 +338,7 @@ fn macos(dark: bool, accent_rgb: u32) Look {
         .check_border = if (dark) rgbA(0xffffff, 0.2) else rgbA(0x000000, 0.2),
         .check_bg = if (dark) rgbA(0xffffff, 0.1) else rgbA(0xffffff, 1),
         .item_hover = accent,
+        .fonts = &macos_fonts,
         .font_size = 13,
         .small_font_size = 11,
         .line_height = 16,

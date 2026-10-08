@@ -23,6 +23,9 @@
 //! technology sees the AppKit control itself (`label` is its accessible name), and the
 //! element adds no zpui accessibility node of its own.
 //!
+//! Windows that opt in with `Window.setDesktopControls(true)` and have no native controls
+//! (Linux) draw libadwaita / Breeze look-alikes instead (desktop_controls.zig).
+//!
 //! Elsewhere (Linux, Windows, the headless test platform unless a test opts in with
 //! `TestWindow.native_controls`, or after `Window.setNativeControlsEnabled(false)`) the
 //! element is exactly its `fallback`: same layout, paint, ids, listeners and
@@ -43,6 +46,7 @@ const Window = @import("../window/window.zig").Window;
 const native_controls = @import("../window/native_controls.zig");
 const element = @import("../window/element.zig");
 const arena_mod = @import("../window/arena.zig");
+const desktop_controls = @import("desktop_controls.zig");
 
 const AnyElement = element.AnyElement;
 const ElementId = element.ElementId;
@@ -155,6 +159,9 @@ pub const NativeControlData = struct {
     fallback: ?AnyElement,
     /// Decided in request layout: the native control (true) or the fallback.
     native: bool = false,
+    /// Set in request layout when the window draws desktop controls instead
+    /// (`Window.setDesktopControls`, desktop_controls.zig).
+    drawn: ?AnyElement = null,
 };
 
 /// Any native control from a full `State` (the typed constructors above wrap this).
@@ -209,17 +216,25 @@ const NativeControlElement = struct {
             return window.requestLayout(s, &.{});
         }
         d.native = false;
+        if (desktop_controls.controlLook(window, d.state.dark)) |look| {
+            const el = desktop_controls.drawn(d.id, d.state, d.width, d.listener, look);
+            d.drawn = el;
+            return el.requestLayout(window, cx);
+        }
         if (d.fallback) |f| return f.requestLayout(window, cx);
         return window.requestLayout(.{}, &.{});
     }
 
     pub fn prepaint(self: *NativeControlElement, _: ?GlobalElementId, _: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
-        if (!self.d.native) if (self.d.fallback) |f| f.prepaint(window, cx);
+        if (self.d.native) return;
+        if (self.d.drawn) |e| return e.prepaint(window, cx);
+        if (self.d.fallback) |f| f.prepaint(window, cx);
     }
 
     pub fn paint(self: *NativeControlElement, _: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
         const d = self.d;
         if (!d.native) {
+            if (d.drawn) |e| return e.paint(window, cx);
             if (d.fallback) |f| f.paint(window, cx);
             return;
         }

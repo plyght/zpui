@@ -706,6 +706,9 @@ pub const DesktopTheme = struct {
     /// System accent color as 0xRRGGBB (XDG settings portal `accent-color`); null = the
     /// toolkit default (Adwaita blue #3584e4, Breeze #3daee9).
     accent: ?u32 = null,
+    /// Pin light / dark (an app theme or a forced demo look); null = the window's
+    /// appearance.
+    dark: ?bool = null,
 };
 
 /// A user change reported by a native control (`WindowCallbacks.native_control`).

@@ -60,6 +60,10 @@ pub const Pool = struct {
     measured: std.ArrayList(Measured) = .empty,
     /// Force the fallbacks (no native controls) in this window.
     disabled: bool = false,
+    /// Where the window has no native controls, draw desktop-toolkit controls
+    /// (libadwaita / Breeze; src/elements/desktop_controls.zig) instead of the fallbacks.
+    /// Opt-in: `Window.setDesktopControls`.
+    desktop_drawn: bool = false,
     /// Total attaches (diagnostics / tests).
     attach_count: u32 = 0,
     /// User changes received from the backend (diagnostics / tests).

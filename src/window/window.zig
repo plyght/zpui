@@ -2239,6 +2239,15 @@ pub const Window = struct {
         self.refresh();
     }
 
+    /// Opt in (or out) of desktop-toolkit controls: where this window has no native
+    /// controls (Linux), `native*` elements draw libadwaita / Breeze controls
+    /// (src/elements/desktop_controls.zig) instead of their fallbacks. Default off.
+    pub fn setDesktopControls(self: *Window, enabled: bool) void {
+        if (self.native_controls.desktop_drawn == enabled) return;
+        self.native_controls.desktop_drawn = enabled;
+        self.refresh();
+    }
+
     /// The desktop look `native*` controls are drawn in where the platform has no
     /// embeddable controls (Linux: libadwaita / Breeze; src/elements/desktop_controls.zig).
     pub fn desktopTheme(self: *const Window) platform.DesktopTheme {
