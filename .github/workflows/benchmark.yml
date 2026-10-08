@@ -26,7 +26,7 @@ env:
   # zeron's own Linux release deps (upstream .github/workflows/release.yml).
   RUST_LINUX_DEPS: >-
     libfontconfig1-dev libasound2-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
-    xvfb xauth
+    xvfb xauth openbox
   CARGO_TERM_COLOR: never
 
 jobs:
@@ -218,11 +218,16 @@ jobs:
             --bundle rust="$RUST_BUNDLE" --bundle zig="$ZIG_BUNDLE" --bundle-exclude zig="$ZIG_BUNDLE_ENGINE" \
             --build-times bench-out/build-times.json \
             --zeron-src zeron-src --zui-src zui-src --zpui-src .
-      - name: Start Xvfb (Linux)
+      - name: Start Xvfb + openbox (Linux)
         if: runner.os == 'Linux'
         run: |
           Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp >/dev/null 2>&1 &
           echo "DISPLAY=:99" >> "$GITHUB_ENV"
+          sleep 2
+          # A window manager for both clients: without one, gpui's X11 backend never
+          # starts its refresh loop (MapNotify is missed until another X event arrives),
+          # so the Rust window stays black under a bare Xvfb. zpui renders either way.
+          DISPLAY=:99 openbox >/dev/null 2>&1 &
           sleep 2
       - name: Benchmark (interleaved runs)
         timeout-minutes: 150

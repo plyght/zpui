@@ -384,6 +384,11 @@ def launch(a, fixture, run_ix, cold, workdir):
             engine.kill()
             engine.wait()
         eng_log.close()
+        # Keep the clients' and engine's own logs ({data}/logs) with the run's logs.
+        try:
+            shutil.copytree(os.path.join(data, "logs"), os.path.join(workdir, f"datalogs-{run_ix}-{cold}"), dirs_exist_ok=True)
+        except OSError:
+            pass
         if not a.keep:
             shutil.rmtree(data, ignore_errors=True)
 
