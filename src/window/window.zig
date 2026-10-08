@@ -448,6 +448,11 @@ pub var default_text_style: TextStyle = .{};
 // ---------------------------------------------------------------------------------------
 
 pub const Window = struct {
+    /// Benchmark hook (apps/zeron/src/bench.zig): called before (`false`) and after
+    /// (`true`) each drawn frame's draw + present, the span gpui times as
+    /// `ZED_MEASUREMENTS` "frame duration". Null (the default) = off.
+    pub var frame_observer: ?*const fn (end: bool) void = null;
+
     app: *App,
     gpa: Allocator,
     id: WindowId,
@@ -676,8 +681,10 @@ pub const Window = struct {
         defer self.in_frame = false;
         self.runFrameCallbacks();
         if (self.dirty or force_render) {
+            if (frame_observer) |f| f(false);
             self.draw();
             self.present();
+            if (frame_observer) |f| f(true);
         } else if (self.needs_present) {
             self.present();
         }

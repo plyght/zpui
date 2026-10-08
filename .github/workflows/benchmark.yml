@@ -1,0 +1,266 @@
+name: Benchmark
+
+# Rust zeron vs the Zig port (apps/zeron), both clients against the same UI-free
+# engine binary (apps/zeron/engine-host, built from the same zeron commit), on the
+# same generated fixture (bench/seed_fixture.py), window size and theme.
+# Methodology and results: docs/BENCHMARKS.md. Scripts: bench/.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: "Launches per configuration (each = one cold + one warm launch)"
+        default: "5"
+      zeron_ref:
+        description: "zeron commit, full sha (default: the tools/upstream/map.json pin)"
+        default: ""
+
+env:
+  LINUX_DEPS: >-
+    libvulkan-dev mesa-vulkan-drivers glslc
+    libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev
+    libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev libxcursor-dev libxi-dev libxrandr-dev
+    libfreetype-dev libharfbuzz-dev libfontconfig-dev fonts-inter fonts-jetbrains-mono fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
+  # zeron's own Linux release deps (upstream .github/workflows/release.yml).
+  RUST_LINUX_DEPS: >-
+    libfontconfig1-dev libasound2-dev pkg-config cmake libwebkit2gtk-4.1-dev libjson-glib-dev
+    xvfb xauth
+  CARGO_TERM_COLOR: never
+
+jobs:
+  bench:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            plain: 1
+          # Apple Silicon. Hosted arm64 VMs have historically exposed no usable Metal
+          # device; if neither client can draw there the job says so and moves on.
+          - os: macos-26
+            plain: 1
+          # macOS 26 with a Metal device: the Liquid Glass default vs glass off.
+          - os: macos-26-intel
+            plain: 1
+          - os: ubuntu-24.04
+            plain: 0
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'macos-26' }}
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Resolve the zeron commit
+        id: pin
+        run: |
+          ref="${{ inputs.zeron_ref }}"
+          [ -n "$ref" ] || ref=$(python3 -c 'import json; print(json.load(open("tools/upstream/map.json"))["upstreams"]["zeron"]["pinned"])')
+          echo "sha=$ref" >> "$GITHUB_OUTPUT"
+          echo "zeron @ $ref"
+      - uses: actions/checkout@v4
+        with:
+          repository: zeronsh/zeron
+          ref: ${{ steps.pin.outputs.sha }}
+          path: zeron-src
+          fetch-depth: 1
+          persist-credentials: false
+      - name: zui revision zeron pins (for lines of code)
+        id: zui
+        run: echo "rev=$(grep -m1 -o 'zeronsh/zui", rev = "[0-9a-f]*' zeron-src/Cargo.toml | sed 's/.*rev = "//')" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: zeronsh/zui
+          ref: ${{ steps.zui.outputs.rev }}
+          path: zui-src
+          fetch-depth: 1
+          persist-credentials: false
+      - name: System info
+        run: |
+          uname -a
+          if [ "$(uname)" = Darwin ]; then sw_vers; sysctl -n machdep.cpu.brand_string; sysctl -n hw.ncpu hw.memsize; system_profiler SPDisplaysDataType | head -40 || true
+          else nproc; free -m; lscpu | head -20; fi
+          df -h .
+      - name: Linux dependencies (+ Xvfb, lavapipe)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends $LINUX_DEPS $RUST_LINUX_DEPS
+          echo "VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.json" >> "$GITHUB_ENV"
+      - name: Rust toolchain (zeron's rust-toolchain.toml)
+        working-directory: zeron-src
+        run: |
+          rustup update stable --no-self-update || true
+          rustup show active-toolchain || rustup toolchain install
+          rustc --version; cargo --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: zeron-src -> target
+          shared-key: zeron-bench-${{ matrix.os }}
+          cache-on-failure: true
+      - name: Add the benchmark timeline hook to the Rust client (inert without ZERON_BENCH=1)
+        run: python3 bench/patch_rust_client.py zeron-src
+      - name: Build the engine (zeron-engine, release; shared by both clients)
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/zeron-src/target
+        run: |
+          mkdir -p bench-out
+          t0=$(date +%s)
+          bash apps/zeron/scripts/build-engine.sh zeron-src "$PWD/zig-out/zeron-engine"
+          echo "{\"engine_release_cached_s\": $(( $(date +%s) - t0 ))}" > bench-out/t-engine.json
+          zig-out/zeron-engine --version
+      - name: Fetch Rust dependencies (not timed)
+        working-directory: zeron-src
+        run: cargo fetch --locked
+      - name: Rust client, clean release build (timed)
+        working-directory: zeron-src
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/zeron-src/target-clean
+        run: |
+          t0=$(date +%s)
+          cargo build --release --locked -p zeron
+          t1=$(date +%s)
+          echo "// bench: incremental rebuild touch" >> crates/ui/src/bench_hook.rs
+          cargo build --release --locked -p zeron
+          t2=$(date +%s)
+          echo "{\"rust_release_clean_s\": $((t1 - t0)), \"rust_release_incremental_ui_s\": $((t2 - t1))}" > ../bench-out/t-rust.json
+          cat ../bench-out/t-rust.json
+          ls -la target-clean/release/zeron
+      - name: Zig client, clean ReleaseFast + ReleaseSafe builds (timed)
+        run: |
+          zb() { # <optimize> <prefix> <cache>
+            zig build zeron -Doptimize="$1" --prefix "$2" --cache-dir "$RUNNER_TEMP/$3" --global-cache-dir "$RUNNER_TEMP/$3-global" --summary none
+          }
+          t0=$(date +%s); zb ReleaseFast zig-out/fast zc-fast; t1=$(date +%s)
+          echo "// bench: incremental rebuild touch" >> apps/zeron/src/bench.zig
+          zb ReleaseFast zig-out/fast zc-fast; t2=$(date +%s)
+          git checkout apps/zeron/src/bench.zig
+          zb ReleaseSafe zig-out/safe zc-safe; t3=$(date +%s)
+          echo "// bench: incremental rebuild touch" >> apps/zeron/src/bench.zig
+          zb ReleaseSafe zig-out/safe zc-safe; t4=$(date +%s)
+          git checkout apps/zeron/src/bench.zig
+          zb ReleaseSafe zig-out/safe zc-safe
+          echo "{\"zig_releasefast_clean_s\": $((t1 - t0)), \"zig_releasefast_incremental_app_s\": $((t2 - t1)), \"zig_releasesafe_clean_s\": $((t3 - t2)), \"zig_releasesafe_incremental_app_s\": $((t4 - t3))}" > bench-out/t-zig.json
+          cat bench-out/t-zig.json
+          ls -la zig-out/fast/bin zig-out/safe/bin
+      - name: Bundles (as shipped, this arch only), engine excluded in the comparison
+        run: |
+          set -x
+          if [ "$(uname)" = Darwin ]; then
+            ZERON_ENGINE="$PWD/zig-out/zeron-engine" zig build zeron-app-bundle -Doptimize=ReleaseSafe --prefix zig-out/bundle \
+              --cache-dir "$RUNNER_TEMP/zc-safe" --global-cache-dir "$RUNNER_TEMP/zc-safe-global" --summary none
+            # Rust: scripts/package-macos.sh's Zeron.app layout, without the dmg.
+            app=zig-out/rust-bundle/Zeron.app; src=zeron-src
+            mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/licenses/fonts"
+            install -m 755 zeron-src/target-clean/release/zeron "$app/Contents/MacOS/zeron"
+            sed "s/__VERSION__/0.0.0/" $src/dist/macos/Info.plist > "$app/Contents/Info.plist"
+            cp $src/crates/ui/assets/fonts/licenses/* "$app/Contents/Resources/licenses/fonts/"
+            cp $src/THIRD_PARTY_NOTICES.md $src/LICENSE "$app/Contents/Resources/licenses/"
+            cp $src/crates/voice/NOTICE.md "$app/Contents/Resources/licenses/parakeet-v3.txt"
+            iconset=$RUNNER_TEMP/zeron.iconset; mkdir -p "$iconset"
+            for s in 16 32 128 256 512; do
+              sips -z $s $s $src/dist/macos/icon-1024.png --out "$iconset/icon_${s}x${s}.png" >/dev/null
+              sips -z $((s*2)) $((s*2)) $src/dist/macos/icon-1024.png --out "$iconset/icon_${s}x${s}@2x.png" >/dev/null
+            done
+            iconutil -c icns "$iconset" -o "$app/Contents/Resources/zeron.icns"
+            codesign --deep --force --sign - "$app"
+            echo "RUST_BUNDLE=$PWD/$app" >> "$GITHUB_ENV"
+            echo "ZIG_BUNDLE=$PWD/zig-out/bundle/Zeron.app" >> "$GITHUB_ENV"
+            echo "ZIG_BUNDLE_ENGINE=Contents/Helpers/zeron-engine" >> "$GITHUB_ENV"
+          else
+            ZERON_ENGINE="$PWD/zig-out/zeron-engine" zig build zeron-dist -Doptimize=ReleaseSafe --prefix zig-out/bundle \
+              --cache-dir "$RUNNER_TEMP/zc-safe" --global-cache-dir "$RUNNER_TEMP/zc-safe-global" --summary none
+            mkdir -p zig-out/zig-dist && tar -xzf zig-out/bundle/zeron-*-linux-*.tar.gz -C zig-out/zig-dist
+            zdir=$(ls -d zig-out/zig-dist/*/)
+            # Rust: scripts/package-linux.sh's stage, without install.sh.
+            st=zig-out/rust-dist/zeron; src=zeron-src
+            mkdir -p "$st/licenses/fonts"
+            install -m 755 zeron-src/target-clean/release/zeron "$st/zeron"
+            install -m 644 $src/dist/zeron.desktop $src/dist/zeron.png $src/LICENSE $src/THIRD_PARTY_NOTICES.md "$st/"
+            cp $src/crates/ui/assets/fonts/licenses/* "$st/licenses/fonts/"
+            cp $src/crates/voice/NOTICE.md "$st/licenses/parakeet-v3.txt"
+            echo "RUST_BUNDLE=$PWD/$st" >> "$GITHUB_ENV"
+            echo "ZIG_BUNDLE=$PWD/$zdir" >> "$GITHUB_ENV"
+            echo "ZIG_BUNDLE_ENGINE=zeron-engine" >> "$GITHUB_ENV"
+          fi
+      - name: Static metrics (sizes, dylibs, build times, lines of code, tests)
+        run: |
+          python3 - <<'PY'
+          import glob, json
+          d = {}
+          for p in sorted(glob.glob("bench-out/t-*.json")):
+              d.update(json.load(open(p)))
+          json.dump(d, open("bench-out/build-times.json", "w"), indent=1)
+          PY
+          python3 bench/static_metrics.py --out bench-out/static.json \
+            --bin rust=zeron-src/target-clean/release/zeron \
+            --bin zig-fast=zig-out/fast/bin/zeron --bin zig-safe=zig-out/safe/bin/zeron \
+            --bin engine=zig-out/zeron-engine \
+            --bundle rust="$RUST_BUNDLE" --bundle zig="$ZIG_BUNDLE" --bundle-exclude zig="$ZIG_BUNDLE_ENGINE" \
+            --build-times bench-out/build-times.json \
+            --zeron-src zeron-src --zui-src zui-src --zpui-src .
+      - name: Start Xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          Xvfb :99 -screen 0 1600x1000x24 -nolisten tcp >/dev/null 2>&1 &
+          echo "DISPLAY=:99" >> "$GITHUB_ENV"
+          sleep 2
+      - name: Benchmark (interleaved runs)
+        timeout-minutes: 150
+        env:
+          ENGINE: ${{ github.workspace }}/zig-out/zeron-engine
+          RUST_APP: ${{ github.workspace }}/zeron-src/target-clean/release/zeron
+          ZIG_FAST: ${{ github.workspace }}/zig-out/fast/bin/zeron
+          ZIG_SAFE: ${{ github.workspace }}/zig-out/safe/bin/zeron
+          RUNS: ${{ inputs.runs }}
+          PLAIN: ${{ matrix.plain }}
+          OUT: ${{ github.workspace }}/bench-out
+          STATIC: ${{ github.workspace }}/bench-out/static.json
+          TITLE: "${{ matrix.os }} (zeron ${{ steps.pin.outputs.sha }})"
+        run: bash bench/run_all.sh
+      - name: Job summary
+        if: always()
+        run: |
+          echo "zeron commit: ${{ steps.pin.outputs.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          [ -f bench-out/summary.md ] && cat bench-out/summary.md >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-${{ matrix.os }}
+          path: |
+            bench-out/*.json
+            bench-out/*.md
+            bench-out/*.log
+            bench-out/runs/
+            bench-out/logs/**/*.log
+          if-no-files-found: warn
+
+  summary:
+    needs: bench
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-*
+          path: all
+      - name: Combined summary
+        run: |
+          {
+            echo "# Benchmark: Rust zeron vs Zig port"
+            for f in all/*/summary.md; do echo; cat "$f"; done
+          } > benchmark-summary.md
+          cat benchmark-summary.md >> "$GITHUB_STEP_SUMMARY"
+          python3 - <<'PY'
+          import glob, json
+          out = {}
+          for p in glob.glob("all/*/summary.json"):
+              out[p.split("/")[1]] = json.load(open(p))
+          json.dump(out, open("benchmark-summary.json", "w"), indent=1)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-summary
+          path: |
+            benchmark-summary.md
+            benchmark-summary.json

@@ -49,6 +49,7 @@ const shell_mod = @import("ui/shell/shell.zig");
 const settings_ui = @import("ui/settings/root.zig");
 const voice_service = @import("voice/service.zig"); // [dictation]
 const smoke = @import("smoke.zig");
+const bench = @import("bench.zig");
 const glass_lab = @import("glass_lab.zig"); // [glass-lab]
 const lifecycle = @import("lifecycle/root.zig"); // [lifecycle] menus, quit/reopen, deep links, updates, logs
 const engine_bin = @import("engine_bin.zig");
@@ -251,6 +252,8 @@ fn onLaunch(l: *Launch, app: *App) void {
         return;
     };
     if (l.open_url) |url| zpui.lifecycle.openUrls(app, &.{url});
+    // --- benchmark timeline (ZERON_BENCH=1; bench.zig, docs/BENCHMARKS.md) ---
+    bench.start(l.gpa, l.io, l.environ, app, window, state);
     // --- smoke test (CI): render N frames, capture, exit (smoke.zig) ---
     if (l.smoke_frames) |n|
         smoke.start(l.gpa, l.io, window, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT"), .browser_url = l.environ.get("ZERON_SMOKE_BROWSER_URL"), .diag = l.environ.get("ZERON_SMOKE_DIAG") != null, .menu = l.environ.get("ZERON_SMOKE_MENU") != null, .settings = l.environ.get("ZERON_SMOKE_SETTINGS"), .settings_stress = l.environ.get("ZERON_SMOKE_SETTINGS_STRESS"), .shortcuts = l.environ.get("ZERON_SMOKE_SHORTCUTS") != null, .new_chat = l.environ.get("ZERON_SMOKE_NEW_CHAT") != null });
