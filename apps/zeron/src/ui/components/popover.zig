@@ -12,6 +12,16 @@
 //! `card` is radius 12 with a 4px inset; rows have radius 7 (concentric), a
 //! 10px gap and 8×6 padding. On frosted themes the card is wrapped in a 16px
 //! backdrop blur and has no shadow; opaque themes get `shadow_lg`.
+//!
+//! **Native look** (macOS with Settings → Appearance → Native menus on,
+//! `nativeLook()`): the menus that stay custom (pickers, palette, ...) take
+//! NSMenu's metrics instead — 13 pt system font, 24 px rows with 10 px side
+//! padding inside a 5 px card inset, the macOS 26 menu radius (12, rows 7
+//! concentric), an inset rounded accent selection with white text, inset
+//! hairline separators, plain-text shortcut hints, NSMenu's soft shadow on
+//! every surface (glass via `frostedCard` when Liquid Glass is on), and NSMenu
+//! timing: no entrance animation, a short in-place fade out. Linux (and the
+//! option off) keeps the look above. `native` holds the numbers.
 
 const std = @import("std");
 const zpui = @import("zpui");
@@ -19,6 +29,8 @@ const theme_mod = @import("theme.zig");
 const effects = @import("effects.zig");
 const anim = @import("anim.zig");
 const motion = @import("zeron_theme").motion;
+
+const native_menus = @import("zeron_model").native_menus;
 
 const Theme = theme_mod.Theme;
 const div = zpui.div;
@@ -31,6 +43,57 @@ pub const menu_gap: f32 = 2;
 pub const menu_item_radius: f32 = card_radius - 1 - card_inset;
 pub const palette_item_radius: f32 = 14 - card_inset;
 
+/// NSMenu metrics (macOS 26) for the native look.
+pub const native = struct {
+    pub const font_family = ".SystemUIFont";
+    pub const font_size: f32 = 13;
+    pub const card_radius: f32 = 12;
+    /// Card padding around the rows (the selection's inset from the edge).
+    pub const card_inset: f32 = 5;
+    pub const row_height: f32 = 24;
+    pub const row_padding_x: f32 = 10;
+    pub const row_radius: f32 = native.card_radius - native.card_inset;
+    pub const icon_gap: f32 = 6;
+    pub const separator_inset_x: f32 = 10;
+    pub const separator_margin_y: f32 = 5;
+    pub const heading_size: f32 = 11;
+    /// Fade-out when a menu closes (NSMenu dismisses in place, it does not travel).
+    pub const exit_travel: f32 = 0;
+    /// The selection text / icon color.
+    pub const selected_text: zpui.Hsla = zpui.hsla(0, 0, 1, 1);
+
+    /// NSMenu's window shadow: a wide soft drop plus a tight contact shadow.
+    pub const shadow = [_]zpui.BoxShadow{
+        .{ .color = zpui.hsla(0, 0, 0, 0.22), .offset = .{ .x = 0, .y = 8 }, .blur_radius = 24 },
+        .{ .color = zpui.hsla(0, 0, 0, 0.12), .offset = .{ .x = 0, .y = 1 }, .blur_radius = 3 },
+    };
+};
+
+/// The native look is on (macOS + Settings → Appearance → Native menus).
+pub fn nativeLook() bool {
+    return native_menus.look();
+}
+
+/// The card's corner radius in the current look.
+pub fn cardRadius() f32 {
+    return if (nativeLook()) native.card_radius else card_radius;
+}
+
+/// The card's padding around its rows in the current look.
+pub fn cardInset() f32 {
+    return if (nativeLook()) native.card_inset else card_inset;
+}
+
+/// A menu row's corner radius in the current look.
+pub fn rowRadius() f32 {
+    return if (nativeLook()) native.row_radius else menu_item_radius;
+}
+
+/// The native selection fill: the accent.
+pub fn nativeSelectionBg(theme: *const Theme) zpui.Hsla {
+    return theme.accent;
+}
+
 /// `popover::surface_bg`.
 pub fn surfaceBg(theme: *const Theme) zpui.Hsla {
     if (theme.isFrost()) {
@@ -42,6 +105,16 @@ pub fn surfaceBg(theme: *const Theme) zpui.Hsla {
 /// The card body (callers add width / children). Pass `theme.forPopup()`
 /// for the text hierarchy of floating surfaces.
 pub fn card(theme: *const Theme) zpui.Div {
+    if (nativeLook()) return div()
+        .border1().borderColor(theme.onGlassBorder(theme.border)) // [liquid-glass] onGlassBorder
+        .rounded(px(native.card_radius))
+        .bg(surfaceBg(theme))
+        .p(px(native.card_inset)).gap(px(0))
+        .flex().flexCol()
+        .overflowHidden()
+        .fontFamily(native.font_family)
+        .textSize(px(native.font_size)).textColor(theme.text)
+        .shadow(&native.shadow);
     var d = div()
         .border1().borderColor(theme.onGlassBorder(theme.border)) // [liquid-glass] onGlassBorder
         .rounded(px(card_radius))
@@ -57,12 +130,24 @@ pub fn card(theme: *const Theme) zpui.Div {
 
 /// The card wrapped in its backdrop blur (what a mount helper paints).
 pub fn frostedCard(c: anytype) effects.Frosted {
-    return effects.frosted(card_radius, theme_mod.layout.menu_blur, c);
+    return effects.frosted(cardRadius(), theme_mod.layout.menu_blur, c);
 }
 
 /// A menu row: 13px, text @0.9 → text on hover, hover wash `card_selected_bg`.
 /// Add `.id(...)` + `.onClick(...)` and children (icon 16, label).
 pub fn menuRow(theme: *const Theme, active: bool) zpui.Div {
+    if (nativeLook()) {
+        // NSMenu: 24 px rows, the selection an inset accent capsule with white text.
+        const r = div()
+            .flex().flexRow().itemsCenter().gap(px(native.icon_gap))
+            .minH(px(native.row_height)).px(px(native.row_padding_x)).py(px(2))
+            .rounded(px(native.row_radius))
+            .textSize(px(native.font_size))
+            .cursorDefault();
+        if (active) return r.bg(nativeSelectionBg(theme)).textColor(native.selected_text);
+        return r.textColor(theme.text)
+            .hover(sb.bg(nativeSelectionBg(theme)).textColor(native.selected_text));
+    }
     const row = div()
         .flex().flexRow().itemsCenter().gap(px(10))
         .px(px(8)).py(px(6))
@@ -76,6 +161,10 @@ pub fn menuRow(theme: *const Theme, active: bool) zpui.Div {
 
 /// Small uppercase heading (`MenuHeading`): 10px medium muted.
 pub fn heading(theme: *const Theme, upper_label: []const u8) zpui.Div {
+    if (nativeLook()) return div().px(px(native.row_padding_x)).pb(px(2)).pt(px(5))
+        .textSize(px(native.heading_size)).fontWeight(600)
+        .textColor(theme.text_muted)
+        .child(upper_label);
     return div().px(px(8)).pb(px(4)).pt(px(6))
         .textSize(theme_mod.rems(10)).fontWeight(500)
         .textColor(theme.text_muted)
@@ -84,11 +173,19 @@ pub fn heading(theme: *const Theme, upper_label: []const u8) zpui.Div {
 
 /// Full-bleed hairline between menu sections.
 pub fn separator(theme: *const Theme) zpui.Div {
+    // NSMenu: an inset hairline with room above and below.
+    if (nativeLook()) return div().h(px(1)).mx(px(native.separator_inset_x - native.card_inset)).my(px(native.separator_margin_y))
+        .bg(theme_mod.ink(theme, 0.1));
     return div().h(px(1)).mx(px(-card_inset)).my(px(2)).bg(theme_mod.ink(theme, 0.07));
 }
 
 /// A muted kbd hint chip inside menu rows (`⌘↵`-style accelerators).
 pub fn kbdHint(theme: *const Theme, label: []const u8) zpui.Div {
+    // NSMenu shows key equivalents as plain secondary text.
+    if (nativeLook()) return div().flexNone().pl(px(12))
+        .textSize(px(native.font_size)).fontFamily(native.font_family)
+        .textColor(theme.text_muted)
+        .child(label);
     return div().flexNone().px(px(5)).py(px(1)).rounded(px(5))
         .bg(theme_mod.ink(theme, 0.05))
         .textSize(theme_mod.rems(10)).fontFamily(theme.font_mono)
@@ -189,7 +286,7 @@ pub fn settle(open: bool, exit: *Exit, now: u64) ?f32 {
 /// `frosted_menu`: the card's blur radius rides the exit down to 0 (the
 /// backdrop primitive ignores element opacity).
 pub fn frostedCardExit(c: anytype, exit: ?f32) effects.Frosted {
-    return effects.frosted(card_radius, theme_mod.layout.menu_blur * (1 - (exit orelse 0)), c);
+    return effects.frosted(cardRadius(), theme_mod.layout.menu_blur * (1 - (exit orelse 0)), c);
 }
 
 const MenuOut = struct { exit: f32, toward: f32 };
@@ -202,10 +299,15 @@ fn menuOutFrame(c: MenuOut, el: zpui.Div, _: f32) zpui.Div {
 /// toward the trigger under a fresh id (pumping frames for the exit span)
 /// with an occluding overlay so the dying rows take no clicks.
 pub fn menuMotion(comptime id: []const u8, exit: ?f32, inner: zpui.Div, from: f32) zpui.AnyElement {
+    const native_look = nativeLook();
     if (exit) |t| {
         const dying = inner.relative().child(div().absolute().inset0().occlude());
-        return zpui.intoAnyElement(zpui.withAnimationCtx(dying, id ++ "-out", motion.menu_out.animation(), MenuOut{ .exit = t, .toward = from }, menuOutFrame));
+        // Native look: NSMenu fades out in place.
+        const toward = if (native_look) native.exit_travel else from;
+        return zpui.intoAnyElement(zpui.withAnimationCtx(dying, id ++ "-out", motion.menu_out.animation(), MenuOut{ .exit = t, .toward = toward }, menuOutFrame));
     }
+    // Native look: NSMenu appears at once.
+    if (native_look) return zpui.intoAnyElement(inner);
     return zpui.intoAnyElement(anim.menuIn(id, inner, from));
 }
 

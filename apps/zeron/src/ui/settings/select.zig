@@ -86,6 +86,8 @@ pub const Toggle = enum(u8) {
     escape_stops,
     match_wallpaper,
     pause_animations,
+    /// Appearance → Native menus (macOS; `model.native_menus`, its own file).
+    native_menus,
     desktop_notifications,
     agent_updates,
     background_only,
@@ -111,6 +113,7 @@ pub fn toggleLabel(t: Toggle) []const u8 {
         .escape_stops => "Stop active agent with Escape",
         .match_wallpaper => "Match wallpaper colors",
         .pause_animations => "Pause animations in background",
+        .native_menus => "Native menus",
         .desktop_notifications => "Desktop notifications",
         .agent_updates => "Agent update notifications",
         .background_only => "Only notify when Zeron is in the background",
@@ -467,6 +470,8 @@ pub fn commit(v: *SettingsView, id: SelectId, ix: usize, cx: *Context(SettingsVi
 
 /// Flip a settings switch.
 pub fn flip(v: *SettingsView, which: Toggle, cx: *Context(SettingsView)) void {
+    // Not a ui-settings.json key (Rust drops unknown keys): its own native-menus.json.
+    if (which == .native_menus) return model.native_menus.set(cx.app, !model.native_menus.stored(cx.app));
     const F = struct {
         fn f(t: Toggle, s: *UiSettings, _: std.mem.Allocator) void {
             switch (t) {
@@ -475,6 +480,7 @@ pub fn flip(v: *SettingsView, which: Toggle, cx: *Context(SettingsView)) void {
                 .escape_stops => s.escapeStopsActiveAgent = !s.escapeStopsActiveAgent,
                 .match_wallpaper => s.theme.wallpaper_theme_colors = !s.theme.wallpaper_theme_colors,
                 .pause_animations => s.theme.pause_animations_in_background = !s.theme.pause_animations_in_background,
+                .native_menus => {},
                 .desktop_notifications => s.notificationsEnabled = !s.notificationsEnabled,
                 .agent_updates => s.agentUpdateNotifications = !s.agentUpdateNotifications,
                 .background_only => s.notificationsBackgroundOnly = !s.notificationsBackgroundOnly,

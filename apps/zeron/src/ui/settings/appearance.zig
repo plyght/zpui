@@ -176,7 +176,8 @@ pub fn render(v: *SettingsView, t: *const Theme, window: *zpui.Window, cx: *Cont
         .child(select.render(v, .reduce_motion, t, cx)))
         .child(w.cardRow(t, false)
         .child(w.textBlock(t, "Pause animations in background", &.{.{ .text = "Hold animations still while Zeron isn't the focused window." }}).minW0())
-        .child(v.toggle(.pause_animations, ts.pause_animations_in_background, true, t, cx)));
+        .child(v.toggle(.pause_animations, ts.pause_animations_in_background, true, t, cx)))
+        .when(model.native_menus.available, nativeMenusRow, .{ v, t, cx });
 
     const library = theme_library.libraryCard(v, t, cx);
 
@@ -209,6 +210,14 @@ fn sfSymbolsRow(card: zpui.Div, v: *SettingsView, t: *const Theme, cx: *Context(
     return card.child(w.cardRow(t, false)
         .child(w.textBlock(t, "Use SF Symbols", &.{.{ .text = "Draw toolbar and menu icons with Apple's system symbols. Off uses Zeron's icons." }}).minW0())
         .child(v.toggle(.sf_symbols, model.sf_symbols.current(cx.app), true, t, cx)));
+}
+
+/// Appearance → Native menus (macOS only): plain menus as NSMenus, the custom ones
+/// with the system metrics; off = Zeron's drawn menus (`model.native_menus`).
+fn nativeMenusRow(card: zpui.Div, v: *SettingsView, t: *const Theme, cx: *Context(SettingsView)) zpui.Div {
+    return card.child(w.cardRow(t, false)
+        .child(w.textBlock(t, "Native menus", &.{.{ .text = "Show context and \u{22EF} menus as macOS menus and give pickers the system look. Off draws Zeron's menus." }}).minW0())
+        .child(v.toggle(.native_menus, model.native_menus.stored(cx.app), true, t, cx)));
 }
 
 /// Conversation width: a 240px slider with value/reset and range labels

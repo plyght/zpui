@@ -17,6 +17,7 @@ pub const icon = @import("icon.zig");
 pub const effects = @import("effects.zig");
 pub const tooltip = @import("tooltip.zig");
 pub const popover = @import("popover.zig");
+pub const native_menu = @import("native_menu.zig");
 pub const button = @import("button.zig");
 pub const badge = @import("badge.zig");
 pub const loaders = @import("loaders.zig");

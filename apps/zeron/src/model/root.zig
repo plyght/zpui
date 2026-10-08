@@ -30,6 +30,8 @@ pub const composer_defaults = @import("composer_defaults.zig");
 /// The composer-defaults global (+ explicit new-thread defaults).
 pub const composer_store = @import("composer_store.zig");
 pub const background_fade = @import("background_fade.zig");
+/// Settings → Appearance → Native menus (macOS; its own native-menus.json).
+pub const native_menus = @import("native_menus.zig");
 /// Settings → Appearance → Use SF Symbols (macOS; its own sf-symbols.json).
 pub const sf_symbols = @import("sf_symbols.zig");
 pub const types = @import("types.zig");
