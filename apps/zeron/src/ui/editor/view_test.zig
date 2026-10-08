@@ -306,3 +306,51 @@ test "review comments follow their line through edits and hold the send until sa
     try testing.expectEqual(@as(usize, 0), store.read(h.app).comments("").len);
     try testing.expect(!store.read(h.app).flushPending(""));
 }
+
+test "native menus: the context menu pops up natively with the drawn rows and runs them" {
+    var h = try Harness.init("notes.txt", "alpha beta\ngamma\n");
+    defer h.deinit();
+    ui.native_menu.force_for_testing = true;
+    defer ui.native_menu.force_for_testing = false;
+    h.tw().native_menus = true;
+    h.focus();
+    _ = h.tw().simulateInput(.{ .mouse_down = .{ .button = .right, .position = .{ .x = 200, .y = 60 } } });
+    _ = h.tw().simulateInput(.{ .mouse_up = .{ .button = .right, .position = .{ .x = 200, .y = 60 } } });
+    h.settle();
+    // Native: nothing drawn, the platform menu holds the same rows and states.
+    try testing.expect(h.ed.read(h.app).context_menu == null);
+    const m = h.tw().context_menu orelse return error.NoNativeMenu;
+    var buf: [8][]const u8 = undefined;
+    const labels = m.labels(&buf);
+    try testing.expectEqual(@as(usize, 5), labels.len);
+    for ([_][]const u8{ "Cut", "Copy", "Paste", "-", "Select All" }, labels) |want, got| try testing.expectEqualStrings(want, got);
+    try testing.expect(m.find("Cut").?.disabled); // no selection
+    try testing.expect(m.find("Copy").?.disabled);
+    try testing.expect(!m.find("Paste").?.disabled);
+    try testing.expectEqualStrings("a", m.find("Select All").?.shortcut.?.key);
+    try testing.expect(h.tw().simulateContextMenuSelectLabel("Select All"));
+    h.settle();
+    const sel = h.ed.read(h.app).core.sel;
+    try testing.expectEqual(@as(usize, 0), sel.range().start);
+    try testing.expectEqual(@as(usize, 17), sel.range().end);
+
+    // With a selection, Copy is enabled; dismissing leaves nothing behind.
+    _ = h.tw().simulateInput(.{ .mouse_down = .{ .button = .right, .position = .{ .x = 200, .y = 60 } } });
+    _ = h.tw().simulateInput(.{ .mouse_up = .{ .button = .right, .position = .{ .x = 200, .y = 60 } } });
+    h.settle();
+    try testing.expect(!h.tw().context_menu.?.find("Copy").?.disabled);
+    try testing.expect(h.tw().simulateContextMenuDismiss());
+    h.settle();
+    try testing.expect(h.ed.read(h.app).context_menu == null);
+}
+
+test "native menus off: the drawn context menu is the fallback" {
+    var h = try Harness.init("notes.txt", "alpha\n");
+    defer h.deinit();
+    h.tw().native_menus = true; // the platform could, but the option is off here (Linux)
+    h.focus();
+    _ = h.tw().simulateInput(.{ .mouse_down = .{ .button = .right, .position = .{ .x = 200, .y = 60 } } });
+    h.settle();
+    try testing.expect(h.tw().context_menu == null);
+    try testing.expect(h.ed.read(h.app).context_menu != null);
+}

@@ -548,6 +548,13 @@ pub const HistoryPane = struct {
         cx.stopPropagation();
         self.closeMenuAt(&self.author_menu_at, &self.author_exit, cx);
         if (self.column_menu_at == null or self.column_exit.isClosing()) {
+            // macOS: `columnMenu`'s rows as a native menu.
+            const items = [_]ui.native_menu.Item{
+                .{ .label = "Author", .tag = @intFromEnum(Column.author), .check = if (self.show_author) .on else .off },
+                .{ .label = "Date", .tag = @intFromEnum(Column.date), .check = if (self.show_date) .on else .off },
+                .{ .label = "SHA", .tag = @intFromEnum(Column.sha), .check = if (self.show_sha) .on else .off },
+            };
+            if (ui.native_menu.popUpAt(window, cx, ev.position, &items, cx.listener(onNativeColumns))) return cx.notify();
             self.column_menu_at = ev.position;
             self.column_exit.clear();
         } else self.closeMenuAt(&self.column_menu_at, &self.column_exit, cx);
@@ -558,9 +565,22 @@ pub const HistoryPane = struct {
         window.preventDefault();
         cx.stopPropagation();
         self.closeMenuAt(&self.column_menu_at, &self.column_exit, cx);
+        // macOS: `authorMenu`'s row as a native menu.
+        const items = [_]ui.native_menu.Item{.{ .label = "Name", .check = if (self.author_name_mode) .on else .off }};
+        if (ui.native_menu.popUpAt(window, cx, ev.position, &items, cx.listener(onNativeAuthor))) return cx.notify();
         self.author_menu_at = ev.position;
         self.author_exit.clear();
         cx.notify();
+    }
+
+    fn onNativeColumns(self: *HistoryPane, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(HistoryPane)) void {
+        const tag = sel.tag orelse return;
+        for (std.enums.values(Column)) |col| if (@intFromEnum(col) == tag) self.onToggleColumn(col, &.{ .keyboard = .{} }, window, cx);
+    }
+
+    fn onNativeAuthor(self: *HistoryPane, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(HistoryPane)) void {
+        if (sel.tag == null) return;
+        self.onToggleAuthorDisplay(&.{ .keyboard = .{} }, window, cx);
     }
 
     fn onMenuOutside(self: *HistoryPane, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(HistoryPane)) void {

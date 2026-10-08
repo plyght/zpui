@@ -578,3 +578,45 @@ test "explorer rename/delete propagate to open editors (file_mutations.rs)" {
     }
     try testing.expectEqual(@as(usize, 2), seen);
 }
+
+test "native menus: chat rows and the project filter pop up native menus with the drawn rows" {
+    var h = try Harness.init();
+    defer h.deinit();
+    ui.native_menu.force_for_testing = true;
+    defer ui.native_menu.force_for_testing = false;
+    h.tw().native_menus = true;
+    const sb = h.shell().sidebar;
+    // The project filter: All projects (checked) … New project….
+    h.tw().click(110, 60);
+    h.settle();
+    try testing.expect(!sb.read(h.app).spaces_menu_open);
+    {
+        const m = h.tw().context_menu orelse return error.NoNativeMenu;
+        try testing.expectEqual(.on, m.find("All projects").?.check);
+        try testing.expect(m.find("New project\u{2026}") != null);
+    }
+    try testing.expect(h.tw().simulateContextMenuDismiss());
+    h.settle();
+    try testing.expect(!sb.read(h.app).spaces_menu_open);
+
+    // A chat row's context menu: Rename / Pin / Archive / Copy ▸ / Delete….
+    _ = h.tw().simulateInput(.{ .mouse_down = .{ .button = .right, .position = .{ .x = 120, .y = 129 } } });
+    _ = h.tw().simulateInput(.{ .mouse_up = .{ .button = .right, .position = .{ .x = 120, .y = 129 } } });
+    h.settle();
+    try testing.expect(sb.read(h.app).ctx_native);
+    {
+        const m = h.tw().context_menu orelse return error.NoNativeMenu;
+        var buf: [8][]const u8 = undefined;
+        const labels = m.labels(&buf);
+        const want = [_][]const u8{ "Rename", "Pin", "Archive", "Copy", "-", "Delete\u{2026}" };
+        try testing.expectEqual(want.len, labels.len);
+        for (want, labels) |a, b| try testing.expectEqualStrings(a, b);
+        try testing.expect(m.find("Delete\u{2026}").?.destructive);
+        try testing.expect(m.find("Zeron conversation link") != null);
+    }
+    try testing.expect(h.tw().simulateContextMenuSelectLabel("Delete\u{2026}"));
+    h.settle();
+    try testing.expect(h.shell().wiring.delete_confirm != null);
+    try testing.expect(sb.read(h.app).ctx_menu == null and !sb.read(h.app).ctx_native);
+
+}

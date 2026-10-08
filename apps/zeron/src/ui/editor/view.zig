@@ -1279,6 +1279,13 @@ pub const FileEditor = struct {
         const off = self.offsetAt(ev.position, window);
         const r = self.core.sel.range();
         if (r.isEmpty() or off < r.start or off > r.end) self.core.moveTo(off);
+        // macOS: the same rows as a native menu (the drawn card stays the fallback).
+        if (self.showNativeContextMenu(ev.position, window, cx)) {
+            window.preventDefault();
+            cx.stopPropagation();
+            cx.notify();
+            return;
+        }
         self.context_menu = .{ .position = ev.position };
         self.context_exit.clear();
         window.preventDefault();
@@ -1641,6 +1648,27 @@ pub const FileEditor = struct {
             else => {},
         }
         cx.notify();
+    }
+
+    /// The context menu's rows (`renderContextMenu`) as a native menu; tags are the row
+    /// indices `onContextRow` takes.
+    fn showNativeContextMenu(self: *FileEditor, position: Point, window: *Window, cx: *Context(FileEditor)) bool {
+        const has_sel = !self.core.sel.isEmpty();
+        const editable = !self.core.read_only;
+        const cmd: zpui.input.Modifiers = .{ .platform = true };
+        const items = [_]ui.native_menu.Item{
+            .{ .label = "Cut", .tag = 0, .disabled = !(editable and has_sel), .shortcut = .{ .key = "x", .modifiers = cmd } },
+            .{ .label = "Copy", .tag = 1, .disabled = !has_sel, .shortcut = .{ .key = "c", .modifiers = cmd } },
+            .{ .label = "Paste", .tag = 2, .disabled = !editable, .shortcut = .{ .key = "v", .modifiers = cmd } },
+            .separator,
+            .{ .label = "Select All", .tag = 3, .shortcut = .{ .key = "a", .modifiers = cmd } },
+        };
+        return ui.native_menu.popUpAt(window, cx, position, &items, cx.listener(onNativeContext));
+    }
+
+    fn onNativeContext(self: *FileEditor, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(FileEditor)) void {
+        const tag = sel.tag orelse return;
+        self.onContextRow(tag, &.{ .keyboard = .{} }, window, cx);
     }
 
     fn onContextOutside(self: *FileEditor, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(FileEditor)) void {

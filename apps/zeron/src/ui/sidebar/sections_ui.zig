@@ -137,6 +137,8 @@ pub const State = struct {
     menu_exit: ui.popover.Exit = .{},
     /// Keyboard-highlighted menu row (`section_menu_active`).
     menu_active: ?usize = null,
+    /// The menu is a native menu (macOS): `menu` keeps its target, nothing is drawn.
+    menu_native: bool = false,
     /// The open menu's key focus (`section_menu_focus`).
     menu_focus: ?zpui.FocusHandle = null,
     header_hover: ?[]u8 = null,
@@ -639,8 +641,23 @@ fn onMenuButton(self: *Sidebar, ix: usize, ev: *const zpui.ClickEvent, window: *
     self.sec.menu = .{ .id = self.gpa.dupe(u8, id) catch return, .pos = ev.mousePosition() orelse .{ .x = 0, .y = 0 } };
     self.sec.menu_exit.clear();
     self.sec.menu_active = null;
+    // macOS: the same rows as a native menu under the ⋯ button.
+    const items = [_]ui.native_menu.Item{ .action("Edit section", 0), .action("Archive all", 1), .action("Delete", 2) };
+    self.sec.menu_native = ui.native_menu.popUpFromClick(window, cx, ev, &items, cx.listener(onNativeMenu));
+    if (self.sec.menu_native) return cx.notify();
     if (self.sec.menu_focus == null) self.sec.menu_focus = cx.focusHandle();
     window.focus(self.sec.menu_focus.?);
+    cx.notify();
+}
+
+fn onNativeMenu(self: *Sidebar, sel: *const ui.native_menu.Selection, _: *Window, cx: *Ctx) void {
+    if (!self.sec.menu_native) return;
+    if (sel.tag) |tag| activateMenu(self, @intCast(tag), cx);
+    // The native menu is gone: no exit to play.
+    self.sec.menu_native = false;
+    if (self.sec.menu) |m| self.gpa.free(m.id);
+    self.sec.menu = null;
+    self.sec.menu_exit.clear();
     cx.notify();
 }
 
@@ -708,6 +725,7 @@ pub fn renderMenu(self: *Sidebar, theme_in: *const Theme, cx: *Ctx) ?zpui.AnyEle
     }
     const exit = self.sec.menu_exit.progress(now);
     const m = self.sec.menu orelse return null;
+    if (self.sec.menu_native) return null;
     var known = false;
     for (active(self, zpui.window.arena_mod.frameAllocator(), cx)) |s| if (std.mem.eql(u8, s.id, m.id)) {
         known = true;

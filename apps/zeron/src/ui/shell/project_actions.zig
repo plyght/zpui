@@ -490,9 +490,70 @@ fn toggleMenu(shell: *Shell, cx: *Ctx) void {
     cx.notify();
 }
 
-fn onChevron(shell: *Shell, _: *const zpui.ClickEvent, _: *Window, cx: *Ctx) void {
+fn onChevron(shell: *Shell, ev: *const zpui.ClickEvent, window: *Window, cx: *Ctx) void {
     cx.stopPropagation();
+    if (!ctl(shell).menu_open and popUpNative(shell, ev, window, cx)) return;
     toggleMenu(shell, cx);
+}
+
+// ---- native menu (macOS; `renderMenu` stays the fallback) ---------------------------------------
+
+const native_import_base: u32 = 10_000;
+const native_edit_base: u32 = 20_000;
+const native_add: u32 = 30_000;
+const native_retry: u32 = 30_001;
+
+/// `renderMenu`'s rows as a native menu: actions run, the per-row edit buttons become
+/// an "Edit action" submenu, imports and Add action follow. Only once the list is
+/// loaded (the drawn menu fills in while loading).
+fn popUpNative(shell: *Shell, ev: *const zpui.ClickEvent, window: *Window, cx: *Ctx) bool {
+    if (!ui.native_menu.enabled(cx)) return false;
+    const c = ctl(shell);
+    const status = c.activeStatus() orelse return false;
+    const snapshot = c.visible() orelse return false;
+    if (status.* == .idle or status.* == .loading) return false;
+    const can_run = status.canRun();
+    if (!(snapshot.actions.len > 0 or snapshot.importableActions.len > 0 or !can_run)) return false;
+    const a = zpui.window.arena_mod.frameAllocator();
+    var items: std.ArrayList(ui.native_menu.Item) = .empty;
+    var edits: std.ArrayList(ui.native_menu.Item) = .empty;
+    items.append(a, .header("Project actions")) catch return false;
+    if (status.* == .unavailable) {
+        items.append(a, .{ .label = status.unavailable.message, .disabled = true }) catch return false;
+        if (actionContext(shell, cx) != null) items.append(a, .{ .label = "Retry", .tag = native_retry, .icon = ui.native_menu.icon(.refresh) }) catch return false;
+    }
+    for (snapshot.actions, 0..) |action, i| {
+        const label = if (action.runOnWorktreeCreate) zpui.fmt("{s} (setup)", .{action.name}) else action.name;
+        items.append(a, .{ .label = label, .tag = @intCast(i), .icon = ui.native_menu.icon(actionIcon(action.icon)), .disabled = !can_run }) catch return false;
+        edits.append(a, .{ .label = label, .tag = native_edit_base + @as(u32, @intCast(i)), .icon = ui.native_menu.icon(actionIcon(action.icon)) }) catch return false;
+    }
+    if (edits.items.len > 0) items.append(a, .{ .kind = .submenu, .label = "Edit action", .icon = ui.native_menu.icon(.settings_minimalistic), .submenu = edits.items }) catch return false;
+    if (snapshot.importableActions.len > 0) {
+        items.append(a, .separator) catch return false;
+        items.append(a, .header("Import from zeron.json")) catch return false;
+        for (snapshot.importableActions, 0..) |draft, i| {
+            items.append(a, .{ .label = draft.name, .tag = native_import_base + @as(u32, @intCast(i)), .icon = ui.native_menu.icon(actionIcon(draft.icon)) }) catch return false;
+        }
+    }
+    if (snapshot.projectFileIssue) |issue| items.append(a, .{ .label = issue, .disabled = true }) catch return false;
+    items.append(a, .separator) catch return false;
+    items.append(a, .{ .label = "Add action", .tag = native_add, .icon = ui.native_menu.icon(.plus) }) catch return false;
+    if (!ui.native_menu.popUpFromClick(window, cx, ev, items.items, cx.listener(onNativePick))) return false;
+    if (actionContext(shell, cx)) |context| refresh(shell, context, cx);
+    return true;
+}
+
+fn onNativePick(shell: *Shell, sel: *const ui.native_menu.Selection, window: *Window, cx: *Ctx) void {
+    const tag = sel.tag orelse return;
+    const ev: zpui.ClickEvent = .{ .keyboard = .{} };
+    switch (tag) {
+        native_add => onAdd(shell, &ev, window, cx),
+        native_retry => onRetry(shell, &ev, window, cx),
+        native_edit_base...native_add - 1 => onEditRow(shell, tag - native_edit_base, &ev, window, cx),
+        native_import_base...native_edit_base - 1 => onImportRow(shell, tag - native_import_base, &ev, window, cx),
+        else => onRunRow(shell, tag, &ev, window, cx),
+    }
+    cx.notify();
 }
 
 fn onMenuOutside(shell: *Shell, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Ctx) void {

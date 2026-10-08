@@ -253,6 +253,9 @@ pub const Sidebar = struct {
 
     // [wiring] context-menu page, inline rename, inline notice (Rust `sidebar_notice`).
     ctx_page: chat_menu.Page = .root,
+    /// The chat context menu is a native menu (macOS): `ctx_menu` keeps its target, the
+    /// card is not drawn.
+    ctx_native: bool = false,
     rename: ?ChatRename = null,
     notice: ?[]u8 = null,
 
@@ -445,11 +448,183 @@ pub const Sidebar = struct {
         }
     }
 
-    fn onRowContext(self: *Sidebar, ix: usize, ev: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(Sidebar)) void {
+    fn onRowContext(self: *Sidebar, ix: usize, ev: *const zpui.input.MouseDownEvent, window: *Window, cx: *Context(Sidebar)) void {
         self.ctx_menu = .{ .ix = ix, .pos = ev.position };
         self.ctx_exit.clear();
         self.ctx_page = .root;
+        self.ctx_native = self.popUpNativeCtx(ix, ev.position, window, cx);
         cx.notify();
+    }
+
+    // ---- native menus (macOS; the drawn cards below stay the fallback) ----------------
+
+    const NativeCtx = enum(u32) { rename, pin, archive, delete, copy_path = 10, copy_zeron, copy_harness, copy_session };
+
+    /// `renderContextMenu`'s rows as a native menu, its Copy ▸ page a submenu.
+    fn popUpNativeCtx(self: *Sidebar, ix: usize, pos: zpui.Point(f32), window: *Window, cx: *Context(Sidebar)) bool {
+        if (!ui.native_menu.enabled(cx)) return false;
+        const id = self.rowId(ix) orelse return false;
+        const pinned = prefs_mod.get(cx).isPinned(id);
+        const c = self.state.read(cx).workspace.read(cx).chat(id);
+        var copy: [4]ui.native_menu.Item = undefined;
+        var n: usize = 0;
+        const copy_icon = ui.native_menu.icon(.copy);
+        if (c != null and chat_menu.chatCopyPath(c.?) != null) {
+            copy[n] = .{ .label = "Path", .tag = @intFromEnum(NativeCtx.copy_path), .icon = copy_icon };
+            n += 1;
+        }
+        copy[n] = .{ .label = "Zeron conversation link", .tag = @intFromEnum(NativeCtx.copy_zeron), .icon = copy_icon };
+        n += 1;
+        if (c) |chat| if (chat.config) |cfg| if (cfg.harness == .codex and chat_menu.harnessSessionId(chat) != null) {
+            copy[n] = .{ .label = "Codex conversation link", .tag = @intFromEnum(NativeCtx.copy_harness), .icon = copy_icon };
+            n += 1;
+        };
+        if (c != null and chat_menu.harnessSessionId(c.?) != null) {
+            copy[n] = .{ .label = "Harness session ID", .tag = @intFromEnum(NativeCtx.copy_session), .icon = copy_icon };
+            n += 1;
+        }
+        const items = [_]ui.native_menu.Item{
+            .{ .label = "Rename", .tag = @intFromEnum(NativeCtx.rename), .icon = ui.native_menu.icon(.pen) },
+            .{ .label = if (pinned) "Unpin" else "Pin", .tag = @intFromEnum(NativeCtx.pin), .icon = ui.native_menu.icon(.pin) },
+            .{ .label = "Archive", .tag = @intFromEnum(NativeCtx.archive), .icon = ui.native_menu.icon(.archive_minimalistic) },
+            .{ .kind = .submenu, .label = "Copy", .icon = copy_icon, .submenu = copy[0..n] },
+            .separator,
+            .{ .label = "Delete\u{2026}", .tag = @intFromEnum(NativeCtx.delete), .icon = ui.native_menu.icon(.trash_bin_minimalistic), .destructive = true },
+        };
+        return ui.native_menu.popUpAt(window, cx, pos, &items, cx.listener(Sidebar.onNativeCtx));
+    }
+
+    fn onNativeCtx(self: *Sidebar, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(Sidebar)) void {
+        if (!self.ctx_native) return;
+        const ev: zpui.ClickEvent = .{ .keyboard = .{} };
+        if (sel.tag) |tag| switch (@as(NativeCtx, @enumFromInt(tag))) {
+            .rename => self.onCtxRename(&ev, window, cx),
+            .pin => self.onCtxPin(&ev, window, cx),
+            .archive => self.onCtxArchive(&ev, window, cx),
+            .delete => self.onCtxDelete(&ev, window, cx),
+            .copy_path, .copy_zeron, .copy_harness, .copy_session => self.onCtxCopy(@intCast(tag - @intFromEnum(NativeCtx.copy_path)), &ev, window, cx),
+        };
+        // The native menu is gone: no exit to play.
+        self.ctx_native = false;
+        self.ctx_menu = null;
+        self.ctx_exit.clear();
+        self.ctx_page = .root;
+        cx.notify();
+    }
+
+    /// The account menu (`renderFooter`) as a native menu, opening upward.
+    fn popUpNativeUser(self: *Sidebar, trigger: zpui.Bounds(f32), window: *Window, cx: *Context(Sidebar)) bool {
+        if (!ui.native_menu.enabled(cx)) return false;
+        const app_state = self.state.read(cx);
+        const scope = app_state.engine.read(cx).workspaceScope() orelse app_state.workspace.read(cx).workspace_scope;
+        const flow = sync_flow.current(cx.app);
+        _, const identity = sync_flow.identity(scope, flow, app_state.auth.read(cx).user());
+        var items: [3]ui.native_menu.Item = undefined;
+        var n: usize = 0;
+        items[n] = .header(identity);
+        n += 1;
+        if (sync_flow.accountMenuAction(scope, flow)) |action| {
+            items[n] = switch (action) {
+                .enable_sync => .{ .label = "Enable sync", .icon = ui.native_menu.icon(.global) },
+                .sync_in_progress => .{ .label = "Sync setup in progress", .icon = ui.native_menu.icon(.global), .disabled = true },
+                .restart_pending => .{ .label = "Finish sync setup", .icon = ui.native_menu.icon(.restart) },
+                .sign_out => .{ .label = "Sign out", .icon = ui.native_menu.icon(.logout_2) },
+            };
+            items[n].tag = @intCast(@intFromEnum(action));
+            n += 1;
+        }
+        if (@import("builtin").os.tag != .macos) {
+            items[n] = .{ .label = "Check for updates", .tag = native_check_updates, .icon = ui.native_menu.icon(.refresh) };
+            n += 1;
+        }
+        return ui.native_menu.popUpAbove(window, cx, trigger, items[0..n], cx.listener(Sidebar.onNativeUser));
+    }
+
+    const native_check_updates: u32 = 1000;
+
+    fn onNativeUser(self: *Sidebar, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(Sidebar)) void {
+        const tag = sel.tag orelse return;
+        const ev: zpui.ClickEvent = .{ .keyboard = .{} };
+        if (tag == native_check_updates) return self.onCheckUpdates(&ev, window, cx);
+        for (std.enums.values(sync_flow.AccountMenuAction)) |action| {
+            if (@intFromEnum(action) == tag) return self.onAccountAction(action, &ev, window, cx);
+        }
+    }
+
+    const native_all_projects: u32 = std.math.maxInt(u32);
+    const native_new_project: u32 = std.math.maxInt(u32) - 1;
+
+    /// The project filter (`renderSpacesMenu`) as a native menu. Its rows' right-click
+    /// menu (Rename… / Remove…) has no native equivalent: the drawn menu keeps it.
+    fn popUpNativeSpaces(self: *Sidebar, trigger: zpui.Bounds(f32), window: *Window, cx: *Context(Sidebar)) bool {
+        if (!ui.native_menu.enabled(cx)) return false;
+        const prefs = prefs_mod.get(cx);
+        const ws = self.state.read(cx).workspace.read(cx);
+        const arena = zpui.window.arena_mod.frameAllocator();
+        const spaces = ws.spacesSorted(arena) catch &.{};
+        self.clearIds(&self.menu_space_ids);
+        const items = arena.alloc(ui.native_menu.Item, spaces.len + 3) catch return false;
+        items[0] = .{ .label = "All projects", .tag = native_all_projects, .icon = ui.native_menu.icon(.folder), .check = if (prefs.space_filter == null) .on else .off };
+        var buf: [96]u8 = undefined;
+        for (spaces, 0..) |s, i| {
+            const dup = self.gpa.dupe(u8, s.id) catch return false;
+            self.menu_space_ids.append(self.gpa, dup) catch {
+                self.gpa.free(dup);
+                return false;
+            };
+            const active = if (prefs.space_filter) |f| std.mem.eql(u8, f, s.id) else false;
+            const tag, _ = ws.spaceDeviceTag(&buf, s, prefs.now(ws.io));
+            items[i + 1] = .{ .label = zpui.fmt("{s}  {s}", .{ view.spaceDisplayName(s), tag }), .tag = @intCast(i), .check = if (active) .on else .off };
+        }
+        items[spaces.len + 1] = .separator;
+        items[spaces.len + 2] = .{ .label = "New project\u{2026}", .tag = native_new_project, .icon = ui.native_menu.icon(.add_circle) };
+        return ui.native_menu.popUpBelow(window, cx, trigger, items, cx.listener(Sidebar.onNativeSpaces));
+    }
+
+    fn onNativeSpaces(self: *Sidebar, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(Sidebar)) void {
+        const tag = sel.tag orelse return;
+        const ev: zpui.ClickEvent = .{ .keyboard = .{} };
+        if (tag == native_new_project) return self.onNewProject(&ev, window, cx);
+        const ix: usize = if (tag == native_all_projects) std.math.maxInt(usize) else tag;
+        self.onPickSpace(ix, &ev, window, cx);
+    }
+
+    const native_create_section: u32 = 100;
+
+    /// The view options (`renderViewMenu`) as a native menu: Organize / Sort / Show
+    /// submenus with check marks, Compact, Create Section. Tags are `onToggleView`'s.
+    fn popUpNativeView(self: *Sidebar, trigger: zpui.Bounds(f32), window: *Window, cx: *Context(Sidebar)) bool {
+        _ = self;
+        if (!ui.native_menu.enabled(cx)) return false;
+        const prefs = prefs_mod.get(cx);
+        const labels = [_][]const u8{ "By device", "By project", "None", "Last updated", "Created", "Branch", "Pull request", "Harness", "Project icon", "Location" };
+        const icons = [_]icon.Icon{ .laptop, .folder, .list, .clock_circle, .calendar, .git_branch, .pull_request, .bot, .project_default, .folder };
+        const selected = [_]bool{
+            prefs.organization == .by_device, prefs.organization == .by_project, prefs.organization == .in_one_list,
+            prefs.sort == .last_updated,      prefs.sort == .created,            prefs.show_branch,
+            prefs.show_pull_request,          prefs.show_harness,                prefs.show_project_icon,
+            prefs.show_project_label,
+        };
+        var rows: [10]ui.native_menu.Item = undefined;
+        for (&rows, 0..) |*r, i| r.* = .{ .label = labels[i], .tag = @intCast(i), .icon = ui.native_menu.icon(icons[i]), .check = if (selected[i]) .on else .off };
+        const items = [_]ui.native_menu.Item{
+            .sub("Organize", rows[0..3]),
+            .sub("Sort", rows[3..5]),
+            .separator,
+            .sub("Show", rows[5..10]),
+            .separator,
+            .{ .label = "Compact", .tag = 10, .check = if (prefs.sidebar_compact) .on else .off },
+            .separator,
+            .{ .label = "Create Section", .tag = native_create_section, .icon = ui.native_menu.icon(.plus) },
+        };
+        return ui.native_menu.popUpBelow(window, cx, trigger, &items, cx.listener(Sidebar.onNativeView));
+    }
+
+    fn onNativeView(self: *Sidebar, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(Sidebar)) void {
+        const tag = sel.tag orelse return;
+        const ev: zpui.ClickEvent = .{ .keyboard = .{} };
+        if (tag == native_create_section) return self.onCreateSection(&ev, window, cx);
+        self.onToggleView(@intCast(tag), &ev, window, cx);
     }
 
     // ---- [wiring] Rename / Copy ▸ / Delete… -------------------------------------------
@@ -680,6 +855,7 @@ pub const Sidebar = struct {
         }
         const ctx_exit = self.ctx_exit.progress(cx.app.executor.now());
         const m = self.ctx_menu orelse return null;
+        if (self.ctx_native) return null;
         const id = self.rowId(m.ix) orelse return null;
         const theme = zpui.window.arena_mod.current().create(Theme, theme_in.forPopup());
         const pinned = prefs_mod.get(cx).isPinned(id);
@@ -777,7 +953,8 @@ pub const Sidebar = struct {
         cx.notify();
     }
 
-    fn onUserMenu(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+    fn onUserMenu(self: *Sidebar, ev: *const zpui.ClickEvent, window: *Window, cx: *Context(Sidebar)) void {
+        if (!self.user_menu_open and self.popUpNativeUser(ev.targetBounds(), window, cx)) return cx.notify();
         self.toggleMenu(&self.user_menu_open, &self.user_menu_exit, cx);
         cx.notify();
     }
@@ -809,13 +986,22 @@ pub const Sidebar = struct {
         cx.notify();
     }
 
-    fn onSpacesTrigger(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+    fn onSpacesTrigger(self: *Sidebar, ev: *const zpui.ClickEvent, window: *Window, cx: *Context(Sidebar)) void {
+        if (!self.spaces_menu_open and self.popUpNativeSpaces(ev.targetBounds(), window, cx)) {
+            self.shutMenu(&self.view_menu_open, &self.view_menu_exit, cx);
+            return cx.notify();
+        }
         self.toggleMenu(&self.spaces_menu_open, &self.spaces_menu_exit, cx);
         self.shutMenu(&self.view_menu_open, &self.view_menu_exit, cx);
         cx.notify();
     }
 
-    fn onViewTrigger(self: *Sidebar, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
+    fn onViewTrigger(self: *Sidebar, ev: *const zpui.ClickEvent, window: *Window, cx: *Context(Sidebar)) void {
+        if (!self.view_menu_open and self.popUpNativeView(ev.targetBounds(), window, cx)) {
+            self.view_submenu = null;
+            self.shutMenu(&self.spaces_menu_open, &self.spaces_menu_exit, cx);
+            return cx.notify();
+        }
         self.toggleMenu(&self.view_menu_open, &self.view_menu_exit, cx);
         self.view_submenu = null;
         self.shutMenu(&self.spaces_menu_open, &self.spaces_menu_exit, cx);

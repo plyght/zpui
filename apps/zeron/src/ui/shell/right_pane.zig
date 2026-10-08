@@ -746,10 +746,36 @@ pub const RightPane = struct {
         window.preventDefault();
     }
 
-    fn onPlus(self: *RightPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(RightPane)) void {
+    fn onPlus(self: *RightPane, ev: *const zpui.ClickEvent, window: *Window, cx: *Context(RightPane)) void {
         cx.stopPropagation();
+        if (!self.plus_open and self.popUpNativePlus(ev, window, cx)) return cx.notify();
         ui.popover.toggle(RightPane, &self.plus_open, &self.plus_exit, cx);
         cx.notify();
+    }
+
+    /// `plusMenu`'s rows as a native menu (macOS).
+    fn popUpNativePlus(self: *RightPane, ev: *const zpui.ClickEvent, window: *Window, cx: *Context(RightPane)) bool {
+        const entries = [_]struct { Kind, []const u8, Icon }{
+            .{ .files, "Files", .folder_with_files },
+            .{ .browser, "Browser", .globe },
+            .{ .terminal, "Terminal", .terminal },
+            .{ .diffs, "Diffs", .list },
+            .{ .history, "History", .git_branch },
+        };
+        const git = self.gitDetected(cx);
+        var items: [entries.len]ui.native_menu.Item = undefined;
+        var n: usize = 0;
+        for (entries) |e| {
+            if ((e[0] == .diffs or e[0] == .history) and !git) continue;
+            items[n] = .{ .label = e[1], .tag = @intFromEnum(e[0]), .icon = ui.native_menu.icon(e[2]) };
+            n += 1;
+        }
+        return ui.native_menu.popUpFromClick(window, cx, ev, items[0..n], cx.listener(onNativePlus));
+    }
+
+    fn onNativePlus(self: *RightPane, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(RightPane)) void {
+        const tag = sel.tag orelse return;
+        for (std.enums.values(Kind)) |kind| if (@intFromEnum(kind) == tag) return self.onMenuRow(kind, &.{ .keyboard = .{} }, window, cx);
     }
 
     fn onPlusOut(self: *RightPane, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(RightPane)) void {

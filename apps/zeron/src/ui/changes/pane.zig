@@ -1134,10 +1134,23 @@ pub const ChangesPane = struct {
 
     // ---- menus ----------------------------------------------------------------------
 
-    fn onScopeTrigger(self: *ChangesPane, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ChangesPane)) void {
+    fn onScopeTrigger(self: *ChangesPane, ev: *const zpui.ClickEvent, window: *Window, cx: *Context(ChangesPane)) void {
         cx.stopPropagation();
+        if (!self.scope_menu_open and self.popUpNativeScope(ev, window, cx)) return cx.notify();
         ui.popover.toggle(ChangesPane, &self.scope_menu_open, &self.scope_exit, cx);
         cx.notify();
+    }
+
+    /// `scopeMenu`'s rows as a native menu (macOS), the current scope checked.
+    fn popUpNativeScope(self: *ChangesPane, ev: *const zpui.ClickEvent, window: *Window, cx: *Context(ChangesPane)) bool {
+        var items: [m.DiffScope.menu.len]ui.native_menu.Item = undefined;
+        for (m.DiffScope.menu, &items, 0..) |scope, *it, ix| it.* = .{ .label = scope.label(), .tag = @intCast(ix), .check = if (scope == self.scope) .on else .off };
+        return ui.native_menu.popUpFromClick(window, cx, ev, &items, cx.listener(onNativeScope));
+    }
+
+    fn onNativeScope(self: *ChangesPane, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(ChangesPane)) void {
+        const tag = sel.tag orelse return;
+        if (tag < m.DiffScope.menu.len) self.onScopeRow(tag, &.{ .keyboard = .{} }, window, cx);
     }
 
     fn onScopeOutside(self: *ChangesPane, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(ChangesPane)) void {

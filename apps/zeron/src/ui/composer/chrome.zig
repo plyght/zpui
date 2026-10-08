@@ -10,6 +10,7 @@ const zpui = @import("zpui");
 const zt = @import("zeron_theme");
 const assets = @import("zeron_assets");
 const engine = @import("zeron_engine");
+const native_menus = @import("zeron_model").native_menus;
 
 const Window = zpui.Window;
 const App = zpui.App;
@@ -151,8 +152,17 @@ pub fn surfaceBg(theme: *const Theme) Hsla {
     return theme.inputGlassBg();
 }
 
-/// `popover_card`: hairline border, radius 12, 4px inset, 13px text.
+/// `popover_card`: hairline border, radius 12, 4px inset, 13px text. With the
+/// native look (macOS, Settings → Appearance → Native menus) the NSMenu metrics of
+/// `ui/components/popover.zig` (`native_menus.metrics`).
 pub fn card(theme: *const Theme) zpui.Div {
+    if (native_menus.look()) {
+        const n = native_menus.metrics;
+        return div().border1().borderColor(theme.onGlassBorder(theme.border)).rounded(px(n.card_radius))
+            .bg(surfaceBg(theme)).p(px(n.card_inset)).gap(px(0)).overflowHidden()
+            .fontFamily(n.font_family).textSize(px(n.font_size)).textColor(theme.text)
+            .shadow(&n.shadow);
+    }
     var d = div().border1().borderColor(theme.onGlassBorder(theme.border)).rounded(px(card_radius))
         .bg(surfaceBg(theme)).p(px(card_inset)).gap(px(menu_gap)).overflowHidden()
         .textSize(rems(13)).textColor(theme.text);
@@ -166,6 +176,14 @@ pub fn cardSelectedBg(theme: *const Theme) Hsla {
 
 /// `menu_row`: 10px gap, 8×6 padding, radius 7, 13px.
 pub fn menuRow(theme: *const Theme, id: anytype, active: bool) zpui.StatefulDiv {
+    if (native_menus.look()) {
+        // NSMenu rows: 24 px, an inset accent selection with white text.
+        const n = native_menus.metrics;
+        const r = div().id(id).flex().flexRow().itemsCenter().gap(px(n.icon_gap)).minH(px(n.row_height)).px(px(n.row_padding_x)).py(px(2))
+            .rounded(px(n.row_radius)).textSize(px(n.font_size)).cursorDefault();
+        if (active) return r.bg(theme.accent).textColor(n.selected_text);
+        return r.textColor(theme.text).hover(zpui.StyleBuilder.init.bg(theme.accent).textColor(n.selected_text));
+    }
     const row = div().id(id).flex().flexRow().itemsCenter().gap(px(10)).px(px(8)).py(px(6))
         .rounded(px(menu_item_radius)).textSize(rems(13)).cursorPointer();
     if (active) return row.bg(cardSelectedBg(theme)).textColor(theme.text);

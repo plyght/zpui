@@ -724,12 +724,25 @@ fn onRowClick(v: *SettingsView, ix: usize, _: *const zpui.ClickEvent, _: *Window
     accountAction(v, true, id, cx);
 }
 
-fn onMore(v: *SettingsView, ix: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {
+fn onMore(v: *SettingsView, ix: usize, ev: *const zpui.ClickEvent, window: *Window, cx: *Context(SettingsView)) void {
     cx.stopPropagation();
     const a = rowAccount(v, ix) orelse return;
     const open = if (v.accounts.row_menu) |m| std.mem.eql(u8, m, a.id) else false;
     if (open) return closeMenu(v, cx);
     closeMenu(v, cx);
+    // macOS: the row menu's items as a native menu. Tags: ix * 2 (+1 = remove).
+    var items: [2]ui.native_menu.Item = undefined;
+    var n: usize = 0;
+    const tag: u32 = @intCast(ix * 2);
+    if (!a.active and a.switchable) {
+        items[n] = .{ .label = "Switch to this account", .tag = tag };
+        n += 1;
+    }
+    if (a.switchable) {
+        items[n] = .{ .label = "Remove account", .tag = tag + 1, .destructive = true };
+        n += 1;
+    }
+    if (n > 0 and ui.native_menu.popUpFromClick(window, cx, ev, items[0..n], cx.listener(onNativeMenu))) return cx.notify();
     setOwned(v.gpa, &v.accounts.row_menu, a.id);
     cx.notify();
 }
@@ -756,6 +769,11 @@ fn onMenuPick(v: *SettingsView, pick: MenuPick, _: *const zpui.ClickEvent, _: *W
     const id = v.gpa.dupe(u8, a.id) catch return;
     defer v.gpa.free(id);
     accountAction(v, pick.activate, id, cx);
+}
+
+fn onNativeMenu(v: *SettingsView, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(SettingsView)) void {
+    const tag = sel.tag orelse return;
+    onMenuPick(v, .{ .ix = @intCast(tag / 2), .activate = tag % 2 == 0 }, &.{ .keyboard = .{} }, window, cx);
 }
 
 fn onCancel(v: *SettingsView, _: *const zpui.ClickEvent, _: *Window, cx: *Context(SettingsView)) void {

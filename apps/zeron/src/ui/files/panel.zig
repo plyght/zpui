@@ -151,6 +151,8 @@ const DeleteFlow = struct {
 const ContextMenu = struct {
     path: []u8,
     position: Point,
+    /// Shown as a native menu (macOS): kept for its target, never drawn.
+    native: bool = false,
 };
 
 pub const FilesPanel = struct {
@@ -562,6 +564,7 @@ pub const FilesPanel = struct {
         window.preventDefault();
         cx.stopPropagation();
         self.openMenu(rows[ix].path, ev.position, cx);
+        self.popUpNativeMenu(window, cx);
         window.focus(self.tree_focus);
     }
 
@@ -599,6 +602,7 @@ pub const FilesPanel = struct {
                     const p = self.gpa.dupe(u8, s) catch break :blk true;
                     defer self.gpa.free(p);
                     self.openMenu(p, .{ .x = 1360, .y = 120 }, cx);
+                    self.popUpNativeMenu(window, cx);
                 }
                 break :blk true;
             }
@@ -1013,6 +1017,30 @@ pub const FilesPanel = struct {
         cx.notify();
     }
 
+    /// The open menu's rows (`renderMenu`) as a native menu (macOS); the drawn card is
+    /// the fallback. Tags are the row indices `onMenuRow` takes.
+    fn popUpNativeMenu(self: *FilesPanel, window: *Window, cx: *Context(FilesPanel)) void {
+        const menu = self.menu orelse return;
+        const path = menu.path;
+        const items = [_]ui.native_menu.Item{
+            .{ .label = "Add to chat", .tag = 0, .icon = ui.native_menu.icon(.chat_round_line) },
+            .{ .label = "Copy path", .tag = 1, .icon = ui.native_menu.icon(.copy) },
+            .separator,
+            .{ .label = "Rename\u{2026}", .tag = 2, .icon = ui.native_menu.icon(.pen), .disabled = !self.canMutate(path, false) },
+            .{ .label = "Delete\u{2026}", .tag = 3, .icon = ui.native_menu.icon(.trash_bin_minimalistic), .disabled = !self.canMutate(path, true), .destructive = true },
+        };
+        if (ui.native_menu.popUpAt(window, cx, menu.position, &items, cx.listener(onNativeMenu))) self.menu.?.native = true;
+    }
+
+    fn onNativeMenu(self: *FilesPanel, sel: *const ui.native_menu.Selection, window: *Window, cx: *Context(FilesPanel)) void {
+        const m = self.menu orelse return;
+        if (!m.native) return;
+        if (sel.tag) |tag| self.onMenuRow(tag, &.{ .keyboard = .{} }, window, cx);
+        // The native menu is gone: no exit to play.
+        if (self.menu != null and self.menu.?.native) self.closeMenu();
+        cx.notify();
+    }
+
     fn onMenuOutside(self: *FilesPanel, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(FilesPanel)) void {
         self.beginMenuClose(cx);
         cx.notify();
@@ -1275,7 +1303,9 @@ pub const FilesPanel = struct {
         }
         if (self.opts.show_sections) root = root.child(self.renderSections(theme, cx));
         if (self.menu_exit.done(cx.app.executor.now())) self.closeMenu();
-        if (self.menu) |m| root = root.child(self.renderMenu(m, theme, cx));
+        if (self.menu) |m| if (!m.native) {
+            root = root.child(self.renderMenu(m, theme, cx));
+        };
         if (self.delete_flow) |d| root = root.child(self.renderDeleteDialog(d, theme, window, cx));
         return zpui.intoAnyElement(root);
     }

@@ -3,6 +3,9 @@ name: Build app
 # Just the Zeron.app (universal, ReleaseSafe) as the Zeron-macos-app artifact: no tests.
 # Plus `sf-symbols`: the shell and Settings captured with SF Symbols on (the macOS default)
 # and off, as the zeron-macos-sf-symbols artifact.
+# Plus `native-menus`: a native context menu (sidebar chat row) and a converted "⋯" menu
+# (sidebar view options) captured with `screencapture` while they are open, as the
+# zeron-macos-native-menus artifact.
 # Run from the Actions tab (or `workflow_dispatch` via the API).
 on:
   workflow_dispatch:
@@ -200,4 +203,43 @@ jobs:
           path: |
             zig-out/native-popovers/*.png
             zig-out/native-popovers/*.log
+          if-no-files-found: warn
+
+  # Settings → Appearance → Native menus (on by default): plain menus are NSMenus. Opens
+  # the sidebar chat row's context menu and the "⋯" view options through real AppKit
+  # events (ZERON_SMOKE_NATIVE_MENU, apps/zeron/src/smoke_native_menu.zig) and captures
+  # the whole screen while each is up (NSMenus are separate windows, so `screencapture`,
+  # as the glass job does). Fails when the drawn fallback opened instead. macOS 26 for
+  # the current menu design; Intel runner: Apple Silicon runners expose no Metal device.
+  native-menus:
+    runs-on: macos-26-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: macOS version
+        run: sw_vers
+      - name: Native menu unit tests (zpui)
+        run: zig build zpui-test -Dtest-filter="context menu" -Dtest-filter="native menu" -Dtest-filter="clicked element" --summary all
+      - name: Build zeron (ReleaseSafe)
+        run: zig build zeron -Doptimize=ReleaseSafe --summary all
+      - name: Capture a native context menu and the "⋯" menu
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          mkdir -p zig-out/native-menus
+          for which in context more; do
+            for mode in dark light; do
+              ZERON_SMOKE_NATIVE_MENU=$which ZERON_SMOKE_OUT=zig-out/native-menus/native-menu-$which-$mode.png \
+                ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --$mode 2>&1 | tee -a "$RUNNER_TEMP/native-menus.log"
+              test -s zig-out/native-menus/native-menu-$which-$mode.png || { echo "FAIL: no capture for $which ($mode)"; exit 1; }
+            done
+          done
+          grep "zeron smoke: native menu" "$RUNNER_TEMP/native-menus.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zeron-macos-native-menus
+          path: zig-out/native-menus/*.png
           if-no-files-found: warn

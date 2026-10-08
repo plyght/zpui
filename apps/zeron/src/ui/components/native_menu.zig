@@ -41,6 +41,9 @@ pub const below_gap: f32 = 4;
 /// `native_menus` set).
 pub var force_for_testing: bool = false;
 
+/// Native menus popped up so far (the CI smoke checks a menu really was native).
+pub var shown_count: std.atomic.Value(u32) = .init(0);
+
 fn appOf(cx: anytype) *zpui.App {
     const T = @TypeOf(cx);
     if (T == *zpui.App) return cx;
@@ -58,8 +61,21 @@ pub fn enabled(cx: anytype) bool {
 /// native menus are off or unavailable here: draw the menu instead.
 pub fn popUpAt(window: *Window, cx: anytype, position: zpui.Point(f32), items: []const Item, listener: Listener) bool {
     if (!enabled(cx)) return false;
+    return popUpWith(window, cx, position, .top_left, items, listener);
+}
+
+fn popUpWith(window: *Window, cx: anytype, position: zpui.Point(f32), anchor: zpui.context_menu.Anchor, items: []const Item, listener: Listener) bool {
+    if (!enabled(cx)) return false;
     const dark = theme_mod.get(cx).appearance.isDark();
-    return zpui.context_menu.showWith(window, position, items, dark, listener);
+    if (!zpui.context_menu.showWith(window, position, items, .{ .dark = dark, .anchor = anchor }, listener)) return false;
+    _ = shown_count.fetchAdd(1, .release);
+    return true;
+}
+
+/// Pop `items` up above `trigger` (left-aligned, opening upward): footer menus.
+pub fn popUpAbove(window: *Window, cx: anytype, trigger: zpui.Bounds(f32), items: []const Item, listener: Listener) bool {
+    if (trigger.size.width <= 0 and trigger.size.height <= 0) return popUpAt(window, cx, window.mousePosition(), items, listener);
+    return popUpWith(window, cx, .{ .x = trigger.origin.x, .y = trigger.origin.y - below_gap }, .bottom_left, items, listener);
 }
 
 /// Pop `items` up under `trigger` (left-aligned, `below_gap` below its bottom edge).

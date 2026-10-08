@@ -81,6 +81,9 @@ pub const Options = struct {
     shortcuts: bool = false,
     /// ZERON_SMOKE_NEW_CHAT=1 (macOS): real cmd-n from each context (smoke_new_chat.zig).
     new_chat: bool = false,
+    /// ZERON_SMOKE_NATIVE_MENU=context|more (macOS): open a native menu and capture the
+    /// screen while it is up (smoke_native_menu.zig).
+    native_menu: ?[]const u8 = null,
 };
 
 const shell_mod = @import("ui/shell/shell.zig");
@@ -137,6 +140,7 @@ const Tick = struct {
             return smoke_popover.begin(s.gpa, s.io, s.gpa.dupe(u8, out) catch out, win, app, std.mem.span(k), popoverDone);
         };
         if (s.opts.new_chat and self.waited == 0) return smoke_new_chat.begin(s.io, win, app, s.opts.browser_url, newChatDone);
+        if (s.opts.native_menu) |which| if (self.waited == 0) return @import("smoke_native_menu.zig").begin(s.io, win, which, s.opts.out orelse "zig-out/zeron-native-menu.png");
         if (s.opts.browser_url) |url| return openBrowser(s, win, app, url);
         if (s.opts.menu and self.waited == 0) return MenuProbe.begin(s, win, app);
         if (builtin.os.tag == .macos and s.opts.diag) {
