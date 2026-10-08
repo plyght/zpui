@@ -13,10 +13,9 @@ on:
       zeron_ref:
         description: "zeron commit, full sha (default: the tools/upstream/map.json pin)"
         default: ""
-      macos26_intel:
-        description: "Also run macos-26-intel (Liquid Glass with a Metal device): one more macOS job"
-        type: boolean
-        default: false
+      platforms:
+        description: "Comma-separated runners (available: macos-15-intel, macos-26, macos-26-intel, ubuntu-24.04)"
+        default: "macos-15-intel,macos-26,ubuntu-24.04"
 
 env:
   LINUX_DEPS: >-
@@ -31,16 +30,31 @@ env:
   CARGO_TERM_COLOR: never
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          want = [p.strip() for p in "${{ inputs.platforms }}".split(",") if p.strip()]
+          # Linux has no Liquid Glass / AppKit controls, so no "plain" configuration there.
+          print("matrix=" + json.dumps([{"os": p, "plain": 0 if p.startswith("ubuntu") else 1} for p in want]))
+          PY
+
   bench:
+    needs: plan
     strategy:
       fail-fast: false
       # macOS runners are shared and scarce: one job per platform, one at a time.
       max-parallel: 1
       # Apple Silicon (macos-26): hosted arm64 VMs have historically exposed no usable
       # Metal device; if neither client can draw there the job says so and moves on.
-      # macos26_intel adds macOS 26 with a Metal device (Liquid Glass default vs off).
+      # macos-26-intel: macOS 26 with a Metal device (Liquid Glass default vs off).
       matrix:
-        include: ${{ fromJSON(inputs.macos26_intel && '[{"os":"macos-15-intel","plain":1},{"os":"macos-26","plain":1},{"os":"macos-26-intel","plain":1},{"os":"ubuntu-24.04","plain":0}]' || '[{"os":"macos-15-intel","plain":1},{"os":"macos-26","plain":1},{"os":"ubuntu-24.04","plain":0}]') }}
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.os == 'macos-26' }}
     timeout-minutes: 330
@@ -91,6 +105,13 @@ jobs:
           rustup update stable --no-self-update || true
           rustup show active-toolchain || rustup toolchain install
           rustc --version; cargo --version
+      - name: ONNX Runtime for the Rust client on Intel macOS (ort-sys ships no x86_64-apple-darwin binaries)
+        if: runner.os == 'macOS' && runner.arch == 'X64'
+        run: |
+          brew install onnxruntime
+          echo "ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib" >> "$GITHUB_ENV"
+          echo "ORT_PREFER_DYNAMIC_LINK=1" >> "$GITHUB_ENV"
+          brew info onnxruntime | head -3
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: zeron-src -> target
@@ -234,7 +255,7 @@ jobs:
           if-no-files-found: warn
 
   summary:
-    needs: bench
+    needs: [plan, bench]
     if: always()
     runs-on: ubuntu-24.04
     steps:
