@@ -75,6 +75,7 @@ const KeyStateFn = *const fn (state: i32, key: u16) callconv(.c) bool;
 /// ANSI keycodes sampled with `CGEventSourceKeyState` (letters, digits, space, return,
 /// delete, tab, arrows).
 const sampled_keys = blk: {
+    @setEvalBranchQuota(100_000);
     var out: [64]u16 = undefined;
     var n: usize = 0;
     for (0..127) |vk| {
@@ -92,6 +93,10 @@ const sampled_keys = blk: {
 // Global input monitor
 // ---------------------------------------------------------------------------------------
 
+/// Set by the platform: true while the permissionless poller should run (no overlay
+/// windows exist, or at least one is visible).
+pub var overlay_activity_hook: ?*const fn () bool = null;
+
 pub const InputMonitor = struct {
     cb: pf.Callback(pf.GlobalInputEvent, void) = .{},
     running: bool = false,
@@ -99,17 +104,17 @@ pub const InputMonitor = struct {
     queue: desktop.InputQueue = .{},
     drain_pending: bool = false,
 
-    // counter backend
+    // permissionless backend: key counter poll + NSEvent global mouse monitor
     timer: ?ak.dispatch_source_t = null,
     suspended: bool = false,
     interval_ns: u64 = 0,
     last_activity_ns: u64 = 0,
-    counts: [5]u32 = @splat(0),
-    key_state_works: bool = false,
-    down: [128]bool = @splat(false),
-    paw: bool = false,
-    pending_up_keys: u32 = 0,
-    pending_up_mouse: u32 = 0,
+    decoder: desktop.CounterDecoder = .{},
+    sampler: desktop.KeySampler = .{},
+    counter_fn: ?CounterFn = null,
+    since_fn: ?SecondsSinceFn = null,
+    key_state_fn: ?KeyStateFn = null,
+    mouse_monitor: ?id = null,
 
     // tap backend
     tap: ?*anyopaque = null,
@@ -130,13 +135,15 @@ pub const InputMonitor = struct {
     }
 
     /// Overlay visibility changed: the permissionless poller sleeps while every
-    /// overlay is hidden.
+    /// overlay is hidden (a hidden pet has nothing to animate).
     pub fn setActive(self: *InputMonitor, active: bool) void {
         const t = self.timer orelse return;
         if (active and self.suspended) {
             self.suspended = false;
             self.interval_ns = 0;
             self.last_activity_ns = nowNs();
+            // Typing while hidden is not replayed.
+            if (self.counter_fn) |counter| self.decoder.reset(counter(kCGEventSourceStateHIDSystemState, ev_key_down));
             ak.dispatch_resume(@ptrCast(t));
             self.retime();
         } else if (!active and !self.suspended) {
@@ -157,9 +164,16 @@ pub const InputMonitor = struct {
         return if (pre()) .granted else .not_determined;
     }
 
-    pub fn requestPermission(_: *InputMonitor) void {
+    /// Precise mode only: the Input Monitoring prompt (or System Settings when already
+    /// denied). Permissionless mode needs nothing, so this is a no-op there.
+    pub fn requestPermission(self: *InputMonitor) void {
+        if (!self.precise) return;
         const f = sym(*const fn () callconv(.c) bool, "CGRequestListenEventAccess") orelse return;
-        _ = f();
+        if (!f() and self.permission() == .denied) {
+            ak.class("NSWorkspace").msg(id, "sharedWorkspace", .{}).msg(void, "openURL:", .{
+                ak.class("NSURL").msg(id, "URLWithString:", .{ak.nsString("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")}),
+            });
+        }
     }
 
     fn scheduleDrain(self: *InputMonitor) void {
@@ -174,15 +188,17 @@ pub const InputMonitor = struct {
         self.queue.drainTo(self.cb);
     }
 
-    // -- permissionless counters --------------------------------------------------------
+    // -- permissionless: HID key counter + NSEvent global mouse monitor ----------------
 
     fn startCounters(self: *InputMonitor) pf.InputMonitorStatus {
         const counter = sym(CounterFn, "CGEventSourceCounterForEventType") orelse return .unsupported;
         const src = ak.dispatch_source_create(@ptrCast(&_dispatch_source_type_timer), 0, 0, ak.mainQueue()) orelse return .unsupported;
-        const types = [_]u32{ ev_key_down, ev_left_down, ev_right_down, ev_other_down, ev_scroll };
-        for (types, &self.counts) |t, *cnt| cnt.* = counter(kCGEventSourceStateHIDSystemState, t);
-        self.down = @splat(false);
-        self.key_state_works = false;
+        self.counter_fn = counter;
+        self.since_fn = sym(SecondsSinceFn, "CGEventSourceSecondsSinceLastEventType");
+        self.key_state_fn = sym(KeyStateFn, "CGEventSourceKeyState");
+        self.decoder.reset(counter(kCGEventSourceStateHIDSystemState, ev_key_down));
+        // Keep a probe verdict across restarts (it only gets more certain).
+        self.sampler.down = @splat(false);
         self.timer = src;
         self.suspended = false;
         self.interval_ns = 0;
@@ -191,10 +207,13 @@ pub const InputMonitor = struct {
         ak.dispatch_source_set_event_handler_f(src, onTick);
         self.retime();
         ak.dispatch_resume(@ptrCast(src));
+        self.startMouseMonitor();
+        if (overlay_activity_hook) |f| self.setActive(f());
         return .ok;
     }
 
     fn stopCounters(self: *InputMonitor) void {
+        self.stopMouseMonitor();
         const t = self.timer orelse return;
         if (self.suspended) ak.dispatch_resume(@ptrCast(t)); // a suspended source cannot be released
         ak.dispatch_source_cancel(t);
@@ -208,7 +227,7 @@ pub const InputMonitor = struct {
         const want = desktop.counterPollInterval(nowNs() -| self.last_activity_ns);
         if (want == self.interval_ns) return;
         self.interval_ns = want;
-        // Leeway: half the interval (lets the OS coalesce timer wakeups with others).
+        // Generous leeway (half the interval) lets the OS coalesce wakeups.
         dispatch_source_set_timer(t, ak.dispatch_time(ak.DISPATCH_TIME_NOW, @intCast(want)), want, want / 2);
     }
 
@@ -221,73 +240,74 @@ pub const InputMonitor = struct {
 
     fn poll(self: *InputMonitor) void {
         const now = nowNs();
-        // Releases owed from the previous tick (no key state available).
-        while (self.pending_up_keys > 0) : (self.pending_up_keys -= 1) self.queue.push(.{ .kind = .key_up, .timestamp_ns = now });
-        while (self.pending_up_mouse > 0) : (self.pending_up_mouse -= 1) self.queue.push(.{ .kind = .mouse_up, .timestamp_ns = now });
-
-        // Idle gate: nothing happened since the previous tick.
-        if (sym(SecondsSinceFn, "CGEventSourceSecondsSinceLastEventType")) |since| {
-            const idle_s = since(kCGEventSourceStateHIDSystemState, kCGAnyInputEventType);
-            if (idle_s * std.time.ns_per_s > @as(f64, @floatFromInt(self.interval_ns)) * 1.5 and !self.anyDown()) return;
-        }
-        const counter = sym(CounterFn, "CGEventSourceCounterForEventType") orelse return;
-        const types = [_]u32{ ev_key_down, ev_left_down, ev_right_down, ev_other_down, ev_scroll };
-        var delta: [5]u32 = undefined;
-        for (types, &self.counts, &delta) |t, *cnt, *d| {
-            const v = counter(kCGEventSourceStateHIDSystemState, t);
-            d.* = v -% cnt.*;
-            cnt.* = v;
-        }
-        const keys = @min(delta[0], 32);
-        const clicks = @min(delta[1] + delta[2] + delta[3], 16);
-        const scrolls = @min(delta[4], 8);
-        if (keys + clicks + scrolls > 0) self.last_activity_ns = now;
-
-        // Which keys went down / up since the last tick (when the HID key state is
-        // readable without permission).
-        var new_down: [8]u16 = undefined;
-        var n_new: usize = 0;
-        if (keys > 0 or self.anyDown()) if (sym(KeyStateFn, "CGEventSourceKeyState")) |key_state| {
-            for (sampled_keys) |vk| {
-                const pressed = key_state(kCGEventSourceStateHIDSystemState, vk);
-                if (pressed) self.key_state_works = true;
-                if (pressed and !self.down[vk]) {
-                    if (n_new < new_down.len) {
-                        new_down[n_new] = vk;
-                        n_new += 1;
-                    }
-                } else if (!pressed and self.down[vk]) {
-                    const info = desktop.macKey(vk);
-                    self.queue.push(.{ .kind = .key_up, .key = info.class, .key_x = info.x, .timestamp_ns = now });
-                }
-                self.down[vk] = pressed;
-            }
+        const counter = self.counter_fn orelse return;
+        // Idle gate: no key-down since well before the previous tick and no key held
+        // (one cheap call instead of the counter + key sampling).
+        if (self.decoder.owed_ups == 0 and !self.sampler.any_down) if (self.since_fn) |since| {
+            const idle_s = since(kCGEventSourceStateHIDSystemState, ev_key_down);
+            if (idle_s * std.time.ns_per_s > @as(f64, @floatFromInt(self.interval_ns)) * 1.5) return;
         };
-        var i: u32 = 0;
-        while (i < keys) : (i += 1) {
-            if (i < n_new) {
-                const info = desktop.macKey(new_down[i]);
-                self.queue.push(.{ .kind = .key_down, .key = info.class, .key_x = info.x, .timestamp_ns = now });
-            } else {
-                // Unknown key: alternate paws, with a little jitter.
-                self.paw = !self.paw;
-                const jitter: f32 = @as(f32, @floatFromInt((now >> 10) % 16)) / 100.0;
-                self.queue.push(.{ .kind = .key_down, .key = .other, .key_x = if (self.paw) 0.3 - jitter else 0.7 + jitter, .timestamp_ns = now });
-                self.pending_up_keys += 1;
-            }
-        }
-        i = 0;
-        while (i < clicks) : (i += 1) {
-            self.queue.push(.{ .kind = .mouse_down, .timestamp_ns = now });
-            self.pending_up_mouse += 1;
-        }
-        i = 0;
-        while (i < scrolls) : (i += 1) self.queue.push(.{ .kind = .scroll, .timestamp_ns = now });
+        const value = counter(kCGEventSourceStateHIDSystemState, ev_key_down);
+        const counted = value -% self.decoder.count;
+        var known: []const desktop.KeyInfo = &.{};
+        if (self.key_state_fn) |key_state| if (self.sampler.shouldSample(counted != 0)) {
+            self.sampler.begin();
+            for (sampled_keys) |vk| self.sampler.observe(&self.queue, vk, key_state(kCGEventSourceStateHIDSystemState, vk), now);
+            known = self.sampler.end(counted);
+        };
+        if (self.decoder.poll(&self.queue, value, known, now) > 0) self.last_activity_ns = now;
     }
 
-    fn anyDown(self: *const InputMonitor) bool {
-        for (self.down) |d| if (d) return true;
-        return false;
+    // NSEvent global monitor (mouse events need no permission). The handler is a global
+    // block: it only classifies into the ring.
+    var active_monitor: ?*InputMonitor = null;
+
+    const MouseBlock = extern struct {
+        isa: *const anyopaque,
+        flags: c_int,
+        reserved: c_int = 0,
+        invoke: *const fn (block: *const MouseBlock, event: id) callconv(.c) void,
+        descriptor: *const BlockDescriptor,
+    };
+    const BlockDescriptor = extern struct { reserved: c_ulong = 0, size: c_ulong };
+    extern "c" const _NSConcreteGlobalBlock: anyopaque;
+    const block_descriptor: BlockDescriptor = .{ .size = @sizeOf(MouseBlock) };
+    const mouse_block: MouseBlock = .{
+        .isa = &_NSConcreteGlobalBlock,
+        .flags = 1 << 28, // BLOCK_IS_GLOBAL
+        .invoke = onMouseEvent,
+        .descriptor = &block_descriptor,
+    };
+
+    fn startMouseMonitor(self: *InputMonitor) void {
+        active_monitor = self;
+        const mask: u64 = (1 << ev_left_down) | (1 << ev_left_up) | (1 << ev_right_down) | (1 << ev_right_up) |
+            (1 << ev_other_down) | (1 << ev_other_up) | (1 << ev_scroll);
+        const m = ak.class("NSEvent").msg(?id, "addGlobalMonitorForEventsMatchingMask:handler:", .{ mask, @as(*const anyopaque, @ptrCast(&mouse_block)) }) orelse return;
+        self.mouse_monitor = m.retain();
+    }
+
+    fn stopMouseMonitor(self: *InputMonitor) void {
+        if (self.mouse_monitor) |m| {
+            ak.class("NSEvent").msg(void, "removeMonitor:", .{m});
+            m.release();
+        }
+        self.mouse_monitor = null;
+        if (active_monitor == self) active_monitor = null;
+    }
+
+    fn onMouseEvent(_: *const MouseBlock, event: id) callconv(.c) void {
+        const self = active_monitor orelse return;
+        if (self.suspended) return;
+        const now = nowNs();
+        const kind: pf.GlobalInputKind = switch (@as(u32, @intCast(event.msg(NSUInteger, "type", .{})))) {
+            ev_left_down, ev_right_down, ev_other_down => .mouse_down,
+            ev_left_up, ev_right_up, ev_other_up => .mouse_up,
+            ev_scroll => .scroll,
+            else => return,
+        };
+        self.queue.push(.{ .kind = kind, .timestamp_ns = now });
+        self.scheduleDrain();
     }
 
     // -- precise: listen-only event tap ------------------------------------------------

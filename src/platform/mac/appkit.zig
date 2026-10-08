@@ -58,6 +58,7 @@ pub const NSWindowTitleHidden: NSInteger = 1;
 pub const NSNormalWindowLevel: NSInteger = 0;
 pub const NSFloatingWindowLevel: NSInteger = 3;
 pub const NSPopUpMenuWindowLevel: NSInteger = 101;
+pub const NSStatusWindowLevel: NSInteger = 25;
 pub const NSWindowOcclusionStateVisible: NSUInteger = 1 << 1;
 pub const NSWindowAbove: NSInteger = 1;
 pub const NSWindowBelow: NSInteger = -1;
@@ -67,6 +68,8 @@ pub const NSWindowZoomButton: NSUInteger = 2;
 pub const NSWindowAnimationBehaviorUtilityWindow: NSInteger = 4;
 pub const NSWindowCollectionBehaviorCanJoinAllSpaces: NSUInteger = 1 << 0;
 pub const NSWindowCollectionBehaviorFullScreenAuxiliary: NSUInteger = 1 << 8;
+pub const NSWindowCollectionBehaviorStationary: NSUInteger = 1 << 4;
+pub const NSWindowCollectionBehaviorIgnoresCycle: NSUInteger = 1 << 6;
 
 pub const NSViewWidthSizable: NSUInteger = 2;
 pub const NSViewHeightSizable: NSUInteger = 16;

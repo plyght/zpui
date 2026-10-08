@@ -55,6 +55,12 @@ const Size = platform.Size;
 const Bounds = platform.Bounds;
 
 const state_ivar = "zpuiWindow";
+
+/// Overlay windows alive / visible (the permissionless input poller sleeps while
+/// every overlay is hidden), and the platform's hook for visibility changes.
+pub var overlay_count: u32 = 0;
+pub var visible_overlay_count: u32 = 0;
+pub var overlay_visibility_changed: ?*const fn () void = null;
 /// Vsync ticks without a frame request before the display link is parked (fork: pause when idle).
 const idle_ticks_before_park = 30;
 /// Interval of the synthetic mouse-move events sent while dragging (autoscroll), as in zui.
@@ -174,6 +180,7 @@ pub fn stateOf(obj: id) ?*MacWindow {
 
 fn canBecomeKeyWindow(this: id, _: SEL) callconv(.c) BOOL {
     const w = state(this) orelse return YES;
+    if (w.overlay != null) return NO; // overlays never take keyboard focus
     const p = w.popover orelse return YES;
     return objc.toBOOL(p.key);
 }
@@ -184,6 +191,7 @@ fn canBecomeMainWindow(this: id, _: SEL) callconv(.c) BOOL {
     // style mask too, so it holds before the ivar is set.
     if (this.msg(NSUInteger, "styleMask", .{}) & ak.WindowStyleMask.nonactivating_panel != 0) return NO;
     const w = state(this) orelse return YES;
+    if (w.overlay != null) return NO;
     return objc.toBOOL(w.popover == null);
 }
 
@@ -232,6 +240,8 @@ pub const MacWindow = struct {
     popover: ?popover_mod.State = null,
     /// [native-popover] Shown key popovers of this window (it then still looks active).
     key_popovers: u32 = 0,
+    /// `WindowKind.overlay` state (null for every other kind).
+    overlay: ?Overlay = null,
 
     // -- construction ---------------------------------------------------------
 
@@ -258,6 +268,10 @@ pub const MacWindow = struct {
                 break :blk panel_class.?;
             },
             .floating => panel_class.?,
+            .overlay => blk: {
+                style = S.nonactivating_panel; // borderless, never activates the app
+                break :blk panel_class.?;
+            },
         };
 
         // Position relative to the main screen, top-left origin (zui `MacWindow::open`).
@@ -324,7 +338,7 @@ pub const MacWindow = struct {
 
         // Entered/exited for hover + mouseExited; popups also need moves while inactive.
         var tracking_options = ak.NSTrackingMouseEnteredAndExited | ak.NSTrackingActiveAlways | ak.NSTrackingInVisibleRect;
-        if (params.kind == .popup) tracking_options |= ak.NSTrackingMouseMoved;
+        if (params.kind == .popup or params.kind == .overlay) tracking_options |= ak.NSTrackingMouseMoved;
         const tracking_area = ak.class("NSTrackingArea").msg(id, "alloc", .{}).msg(id, "initWithRect:options:owner:userInfo:", .{
             NSRect{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 0, .height = 0 } }, tracking_options, native_view, @as(?id, null),
         });
@@ -346,18 +360,45 @@ pub const MacWindow = struct {
                 native_window.msg(void, "setAnimationBehavior:", .{ak.NSWindowAnimationBehaviorUtilityWindow});
                 native_window.msg(void, "setCollectionBehavior:", .{ak.NSWindowCollectionBehaviorCanJoinAllSpaces | ak.NSWindowCollectionBehaviorFullScreenAuxiliary});
             },
+            .overlay => {
+                // Above normal and floating windows (and over fullscreen apps), on
+                // every Space, not part of Exposé / cmd-` cycling, no shadow.
+                native_window.msg(void, "setLevel:", .{ak.NSStatusWindowLevel});
+                native_window.msg(void, "setCollectionBehavior:", .{ak.NSWindowCollectionBehaviorCanJoinAllSpaces | ak.NSWindowCollectionBehaviorFullScreenAuxiliary |
+                    ak.NSWindowCollectionBehaviorStationary | ak.NSWindowCollectionBehaviorIgnoresCycle});
+                native_window.msg(void, "setFloatingPanel:", .{YES});
+                native_window.msg(void, "setHidesOnDeactivate:", .{NO});
+                native_window.msg(void, "setBecomesKeyOnlyIfNeeded:", .{YES});
+                native_window.msg(void, "setHasShadow:", .{NO});
+                native_window.msg(void, "setAcceptsMouseMovedEvents:", .{YES});
+                native_window.msg(void, "setAnimationBehavior:", .{@as(NSInteger, 2)}); // NSWindowAnimationBehaviorNone
+                self.overlay = .{ .anchor = params.anchor, .anchor_display = params.display_id, .hidden = !params.show };
+                overlay_count += 1;
+                if (params.show) visible_overlay_count += 1;
+                if (params.mouse_passthrough) self.overlay.?.passthrough = true;
+                self.overlay.?.applyIgnore(self);
+            },
         }
 
         self.setBackgroundAppearance(params.background);
         if (params.popover) |pp| popover_mod.setUp(self, pp);
 
-        if (params.focus and params.show) {
-            native_window.msg(void, "makeKeyAndOrderFront:", .{@as(?id, null)});
-        } else if (params.show) {
-            native_window.msg(void, "orderFront:", .{@as(?id, null)});
+        if (params.kind == .overlay) {
+            // Placed before it is shown; `orderFrontRegardless`: the app is (and stays)
+            // inactive.
+            native_window.msg(void, "setFrameTopLeftPoint:", .{top_left});
+            if (params.anchor) |a| self.applyAnchor(a, params.display_id);
+            if (params.show) native_window.msg(void, "orderFrontRegardless", .{});
+            if (overlay_visibility_changed) |f| f();
+        } else {
+            if (params.focus and params.show) {
+                native_window.msg(void, "makeKeyAndOrderFront:", .{@as(?id, null)});
+            } else if (params.show) {
+                native_window.msg(void, "orderFront:", .{@as(?id, null)});
+            }
+            // The init origin can be off when the key screen differs from the main screen.
+            if (popover_parent == null) native_window.msg(void, "setFrameTopLeftPoint:", .{top_left});
         }
-        // The init origin can be off when the key screen differs from the main screen.
-        if (popover_parent == null) native_window.msg(void, "setFrameTopLeftPoint:", .{top_left});
         self.moveTrafficLight();
         self.startDisplayLink();
         return self;
@@ -418,6 +459,7 @@ pub const MacWindow = struct {
     fn startDisplayLink(self: *MacWindow) void {
         self.stopDisplayLink();
         if (self.closed) return;
+        if (self.overlay) |o| if (o.hidden) return; // hidden overlays cost nothing
         if (self.native_window.msg(NSUInteger, "occlusionState", .{}) & ak.NSWindowOcclusionStateVisible == 0) return;
         // AppKit can briefly report no screen during display reconfiguration.
         const display_id = ak.displayIdForScreen(self.native_window.msg(?id, "screen", .{})) orelse return;
@@ -593,6 +635,13 @@ pub const MacWindow = struct {
 
     /// Second half of closing, on a fresh main-queue turn.
     fn destroy(self: *MacWindow) void {
+        if (self.overlay) |*o| {
+            o.deinit(self);
+            overlay_count -|= 1;
+            if (!o.hidden) visible_overlay_count -|= 1;
+            self.overlay = null;
+            if (overlay_visibility_changed) |f| f();
+        }
         if (self.frame_source) |*fs| fs.deinit();
         self.frame_source = null;
         popover_mod.deinit(self); // [native-popover]
@@ -657,7 +706,76 @@ pub const MacWindow = struct {
         .showContextMenu = vShowContextMenu,
         .placePopover = vPlacePopover,
         .screenBoundsInContent = vScreenBoundsInContent,
+        .setMousePassthrough = vSetMousePassthrough,
+        .setAnchor = vSetAnchor,
+        .setVisible = vSetVisible,
+        .setInputRegion = vSetInputRegion,
+        .screenMousePosition = vScreenMousePosition,
     };
+
+    // -- overlay windows (docs/DESKTOP_OVERLAY.md) -------------------------------------
+
+    /// Pin to a corner of `display_id`'s (else the current / main screen's) visible
+    /// frame (menu bar and Dock excluded). One `setFrameOrigin:`.
+    fn applyAnchor(self: *MacWindow, anchor: platform.OverlayAnchor, display_id: ?u32) void {
+        const screen = (if (display_id) |d| ak.screenForDisplayId(d) else null) orelse
+            self.native_window.msg(?id, "screen", .{}) orelse ak.class("NSScreen").msg(?id, "mainScreen", .{}) orelse return;
+        const f = ak.frame(self.native_window);
+        const origin = anchoredFrameOrigin(anchor, screen, sizeFromNS(f.size));
+        self.native_window.msg(void, "setFrameOrigin:", .{origin});
+    }
+
+    fn vSetMousePassthrough(ptr: *anyopaque, on: bool) void {
+        const self = cast(ptr);
+        if (self.closed) return;
+        if (self.overlay) |*o| {
+            o.passthrough = on;
+            o.applyIgnore(self);
+        } else self.native_window.msg(void, "setIgnoresMouseEvents:", .{objc.toBOOL(on)});
+    }
+    fn vSetAnchor(ptr: *anyopaque, anchor: platform.OverlayAnchor, display_id: ?u32) void {
+        const self = cast(ptr);
+        if (self.closed) return;
+        if (self.overlay) |*o| {
+            o.anchor = anchor;
+            if (display_id) |d| o.anchor_display = d;
+        }
+        self.applyAnchor(anchor, display_id);
+    }
+    fn vSetVisible(ptr: *anyopaque, visible: bool) void {
+        const self = cast(ptr);
+        if (self.closed) return;
+        const o = if (self.overlay) |*o| o else {
+            if (visible) self.native_window.msg(void, "orderFront:", .{@as(?id, null)}) else self.native_window.msg(void, "orderOut:", .{@as(?id, null)});
+            return;
+        };
+        if (o.hidden == !visible) return;
+        o.hidden = !visible;
+        if (visible) {
+            visible_overlay_count += 1;
+            if (o.anchor) |a| self.applyAnchor(a, o.anchor_display);
+            self.native_window.msg(void, "orderFrontRegardless", .{});
+            self.frame_requested = true;
+            self.startDisplayLink();
+        } else {
+            visible_overlay_count -|= 1;
+            // Park: no display link, no drawables kept beyond the layer's own pool.
+            self.stopDisplayLink();
+            self.frame_requested = false;
+            self.native_window.msg(void, "orderOut:", .{@as(?id, null)});
+            self.renderer.trimIdleResources();
+        }
+        if (overlay_visibility_changed) |f| f();
+    }
+    fn vSetInputRegion(ptr: *anyopaque, rects: ?[]const Bounds) void {
+        const self = cast(ptr);
+        if (self.closed) return;
+        const o = if (self.overlay) |*o| o else return;
+        o.setRegion(self, rects);
+    }
+    fn vScreenMousePosition(_: *anyopaque) ?Point {
+        return globalMouse();
+    }
 
     // Native context menus (context_menu.zig).
     fn vShowContextMenu(ptr: *anyopaque, request: platform.ContextMenuRequest, done: platform.ContextMenuDone) bool {
@@ -754,6 +872,7 @@ pub const MacWindow = struct {
         return cast(ptr).contentSize();
     }
     fn vResize(ptr: *anyopaque, size: Size) void {
+        if (cast(ptr).overlay) |*o| return o.scheduleResize(cast(ptr), size);
         // Deferred (zui): resizing synchronously re-enters setFrameSize: → resize callback.
         const Ctx = struct {
             fn run(ctx: ?*anyopaque) callconv(.c) void {
@@ -810,6 +929,7 @@ pub const MacWindow = struct {
         cast(ptr).setBackgroundAppearance(bg);
     }
     fn vActivate(ptr: *anyopaque) void {
+        if (cast(ptr).overlay != null) return; // overlays never take focus
         sendDeferred(cast(ptr), "makeKeyAndOrderFront:");
     }
     fn vMinimize(ptr: *anyopaque) void {
@@ -831,6 +951,7 @@ pub const MacWindow = struct {
     fn vSetClientInset(_: *anyopaque, _: geometry.Pixels) void {}
     fn vRequestFrame(ptr: *anyopaque) void {
         const self = cast(ptr);
+        if (self.overlay) |o| if (o.hidden) return;
         self.frame_requested = true;
         if (self.frame_source == null or !self.frame_source.?.isRunning()) self.startDisplayLink();
     }
@@ -857,6 +978,156 @@ pub const MacWindow = struct {
 };
 
 const ResizeRequest = struct { view: id, size: Size };
+
+// ---------------------------------------------------------------------------
+// Overlay windows (docs/DESKTOP_OVERLAY.md)
+// ---------------------------------------------------------------------------
+
+/// Bottom-left frame origin (AppKit screen coordinates) of a `size` window pinned to
+/// `anchor` in `screen`'s visible frame.
+fn anchoredFrameOrigin(anchor: platform.OverlayAnchor, screen: id, size: Size) NSPoint {
+    const vf = ak.msgStruct(NSRect, screen, "visibleFrame", .{});
+    const vis: Bounds = .{
+        .origin = .{ .x = @floatCast(vf.origin.x), .y = @floatCast(vf.origin.y) },
+        .size = .{ .width = @floatCast(vf.size.width), .height = @floatCast(vf.size.height) },
+    };
+    const o = platform.desktop.anchoredOriginYUp(anchor, vis, size);
+    return .{ .x = @round(o.x), .y = @round(o.y) };
+}
+
+/// The pointer in global coordinates: top-left origin at the primary screen's top-left
+/// (logical points, y down). Deltas between two readings are what drags use.
+fn globalMouse() ?Point {
+    const p = ak.class("NSEvent").msg(NSPoint, "mouseLocation", .{});
+    const screens = ak.class("NSScreen").msg(id, "screens", .{});
+    if (ak.arrayCount(screens) == 0) return null;
+    const primary = ak.frame(ak.arrayAt(screens, 0));
+    return .{ .x = @floatCast(p.x), .y = @floatCast(primary.size.height - p.y) };
+}
+
+extern "c" const _NSConcreteStackBlock: anyopaque;
+
+/// `void (^)(NSEvent *)` capturing the window (copied by AppKit; plain bytes).
+const RegionBlock = extern struct {
+    isa: *const anyopaque,
+    flags: c_int,
+    reserved: c_int = 0,
+    invoke: *const fn (block: *const RegionBlock, event: id) callconv(.c) void,
+    descriptor: *const BlockDescriptor,
+    window: *MacWindow,
+
+    const BlockDescriptor = extern struct { reserved: c_ulong = 0, size: c_ulong };
+    const block_descriptor: BlockDescriptor = .{ .size = @sizeOf(RegionBlock) };
+
+    fn invokeFn(block: *const RegionBlock, _: id) callconv(.c) void {
+        const w = block.window;
+        if (w.closed) return;
+        if (w.overlay) |*o| o.applyIgnore(w);
+    }
+};
+
+const Overlay = struct {
+    anchor: ?platform.OverlayAnchor = null,
+    anchor_display: ?u32 = null,
+    hidden: bool = false,
+    passthrough: bool = false,
+    /// `setInputRegion` rects (content coordinates, y down); null = whole window.
+    region: ?[]Bounds = null,
+    /// Whether the window currently ignores mouse events.
+    ignoring: bool = false,
+    /// A button went down inside: the window keeps the pointer (drags) until it is up.
+    pressed: bool = false,
+    /// Global mouse-moved monitor while a region is set (the window ignores the mouse
+    /// outside its rects, so it learns about re-entry from the global stream).
+    move_monitor: ?id = null,
+    /// Coalesced `resize` (one setFrame per main-queue turn).
+    pending_size: ?Size = null,
+
+    fn deinit(o: *Overlay, w: *MacWindow) void {
+        o.stopMonitor();
+        if (o.region) |r| w.gpa.free(r);
+        o.region = null;
+    }
+
+    fn stopMonitor(o: *Overlay) void {
+        if (o.move_monitor) |m| {
+            ak.class("NSEvent").msg(void, "removeMonitor:", .{m});
+            m.release();
+        }
+        o.move_monitor = null;
+    }
+
+    fn setRegion(o: *Overlay, w: *MacWindow, rects: ?[]const Bounds) void {
+        if (o.region) |r| w.gpa.free(r);
+        o.region = if (rects) |r| (w.gpa.dupe(Bounds, r) catch null) else null;
+        if (o.region != null and o.move_monitor == null) {
+            const block: RegionBlock = .{
+                .isa = &_NSConcreteStackBlock,
+                .flags = 0,
+                .invoke = RegionBlock.invokeFn,
+                .descriptor = &RegionBlock.block_descriptor,
+                .window = w,
+            };
+            // mouseMoved, left/right/other dragged
+            const mask: u64 = (1 << 5) | (1 << 6) | (1 << 7) | (1 << 27);
+            if (ak.class("NSEvent").msg(?id, "addGlobalMonitorForEventsMatchingMask:handler:", .{ mask, @as(*const anyopaque, @ptrCast(&block)) })) |m|
+                o.move_monitor = m.retain();
+        } else if (o.region == null) o.stopMonitor();
+        o.applyIgnore(w);
+    }
+
+    /// `ignoresMouseEvents` from passthrough, the input region and the pointer.
+    fn applyIgnore(o: *Overlay, w: *MacWindow) void {
+        const ignore = blk: {
+            if (o.passthrough) break :blk true;
+            const rects = o.region orelse break :blk false;
+            if (o.pressed) break :blk false; // pointer capture during a drag
+            const p = w.native_window.msg(NSPoint, "mouseLocationOutsideOfEventStream", .{});
+            const q: Point = .{ .x = @floatCast(p.x), .y = w.contentSize().height - @as(f32, @floatCast(p.y)) };
+            for (rects) |r| {
+                if (q.x >= r.origin.x and q.y >= r.origin.y and q.x < r.origin.x + r.size.width and q.y < r.origin.y + r.size.height) break :blk false;
+            }
+            break :blk true;
+        };
+        if (ignore == o.ignoring) return;
+        o.ignoring = ignore;
+        w.native_window.msg(void, "setIgnoresMouseEvents:", .{objc.toBOOL(ignore)});
+    }
+
+    /// `Window.resize` of an overlay: on the next main-queue turn (resizing re-enters
+    /// the resize callback), one `setFrame:` with the anchored corner fixed (else the
+    /// top-left), the drawable resized synchronously by `setFrameSize:`, and the new
+    /// frame drawn inside the same Core Animation transaction: no stretch, no jump.
+    /// Several resizes in one turn coalesce; no allocation.
+    fn scheduleResize(o: *Overlay, w: *MacWindow, size: Size) void {
+        const first = o.pending_size == null;
+        o.pending_size = size;
+        if (first) dispatcher.onMain(@ptrCast(w.native_view.retain()), &applyResize);
+    }
+
+    fn applyResize(ctx: ?*anyopaque) callconv(.c) void {
+        const view: id = @ptrCast(ctx.?);
+        defer view.release();
+        const w = state(view) orelse return;
+        if (w.closed) return;
+        if (w.overlay == null) return;
+        const ov = &w.overlay.?;
+        const size = ov.pending_size orelse return;
+        ov.pending_size = null;
+        const old = ak.frame(w.native_window);
+        const origin: NSPoint = if (ov.anchor) |a| blk: {
+            const screen = (if (ov.anchor_display) |d| ak.screenForDisplayId(d) else null) orelse
+                w.native_window.msg(?id, "screen", .{}) orelse break :blk .{ .x = old.origin.x, .y = old.origin.y + old.size.height - size.height };
+            break :blk anchoredFrameOrigin(a, screen, size);
+        } else .{ .x = old.origin.x, .y = old.origin.y + old.size.height - size.height };
+        const frame_rect: NSRect = .{ .origin = origin, .size = .{ .width = size.width, .height = size.height } };
+        w.renderer.setPresentsWithTransaction(true);
+        w.native_window.msg(void, "setFrame:display:", .{ frame_rect, NO });
+        if (!ov.hidden) w.requestFrameCallback(true);
+        w.renderer.setPresentsWithTransaction(w.natives.enabled());
+        ov.applyIgnore(w);
+    }
+};
 
 /// Send a no-argument-or-nil-argument action to the window on the next main-queue
 /// turn, if the window still exists (zui `if_window_not_closed`).
@@ -928,6 +1199,7 @@ fn windowDidResize(this: id, _: SEL, _: id) callconv(.c) void {
 
 fn windowDidChangeOcclusionState(this: id, _: SEL, _: id) callconv(.c) void {
     const w = state(this) orelse return;
+    if (w.overlay) |o| if (o.hidden) return w.stopDisplayLink();
     if (w.native_window.msg(NSUInteger, "occlusionState", .{}) & ak.NSWindowOcclusionStateVisible != 0) {
         w.moveTrafficLight();
         w.frame_requested = true;
@@ -1317,13 +1589,20 @@ pub fn handleViewEvent(this: id, _: SEL, native_event: id) callconv(.c) void {
         .mouse_down => {
             // Let the IME commit/cancel composition on click.
             _ = inputContextHandle(this, native_event);
+            if (w.overlay) |*o| o.pressed = true;
         },
         .mouse_move => |e| if (e.pressed_button != null and !w.external_files_dragged) {
             // Synthetic drags keep selections extending while content autoscrolls.
             w.synthetic_drag_counter += 1;
             scheduleSyntheticDrag(w, w.synthetic_drag_counter, e);
         },
-        .mouse_up => w.synthetic_drag_counter += 1,
+        .mouse_up => {
+            w.synthetic_drag_counter += 1;
+            if (w.overlay) |*o| {
+                o.pressed = false;
+                o.applyIgnore(w);
+            }
+        },
         .modifiers_changed => |e| {
             // Only report actual changes.
             if (w.previous_modifiers) |prev| if (prev.modifiers.eql(e.modifiers) and prev.capslock == e.capslock) return;
@@ -1334,6 +1613,8 @@ pub fn handleViewEvent(this: id, _: SEL, native_event: id) callconv(.c) void {
 
     const ww = state(this) orelse return;
     _ = ww.dispatchInput(event);
+    // Leaving an input region hands the pointer back to the windows below.
+    if (state(this)) |w3| if (w3.overlay) |*o| if (o.region != null and event == .mouse_move) o.applyIgnore(w3);
 }
 
 const SyntheticDrag = struct { view: id, drag_id: usize, event: input.MouseMoveEvent };

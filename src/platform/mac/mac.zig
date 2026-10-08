@@ -19,6 +19,7 @@ const window_mod = @import("window.zig");
 const file_dialog = @import("file_dialog.zig");
 const menu_mod = @import("menu.zig");
 const notify = @import("notify.zig");
+const mac_desktop = @import("desktop.zig");
 pub const window_capture = @import("window_capture.zig");
 const CoreTextSystem = @import("../../text/coretext.zig").CoreTextSystem;
 
@@ -54,6 +55,11 @@ pub const MacPlatform = struct {
     quit_notified: bool = false,
     /// `setMenus` installed the app's own menu bar (skip the minimal default).
     menus_set: bool = false,
+    /// Desktop companion features (desktop.zig, docs/DESKTOP_OVERLAY.md).
+    input_monitor: mac_desktop.InputMonitor = .{},
+    status_item: mac_desktop.StatusItem = .{},
+    foreground_cb: pf.Callback(void, void) = .{},
+    foreground_observing: bool = false,
 
     /// Create the platform (main thread). Instantiates `NSApplication`.
     pub fn create(gpa: std.mem.Allocator) !*MacPlatform {
@@ -63,6 +69,9 @@ pub const MacPlatform = struct {
         const text_system = try CoreTextSystem.create(gpa);
         self.* = .{ .gpa = gpa, .text_system = text_system, .app = ak.sharedApp() };
         window_mod.registerClasses();
+        current = self;
+        window_mod.overlay_visibility_changed = onOverlayVisibility;
+        mac_desktop.overlay_activity_hook = overlaysWantInput;
         return self;
     }
 
@@ -107,7 +116,66 @@ pub const MacPlatform = struct {
         .foregroundAfterCapture = vForegroundAfterCapture,
         .renderSystemSymbol = vRenderSystemSymbol,
         .supportsNativePopovers = vSupportsNativePopovers,
+        .startGlobalInputMonitor = vStartGlobalInputMonitor,
+        .stopGlobalInputMonitor = vStopGlobalInputMonitor,
+        .setPreciseInput = vSetPreciseInput,
+        .inputPermission = vInputPermission,
+        .requestInputPermission = vRequestInputPermission,
+        .setTrayItem = vSetTrayItem,
+        .foregroundApp = vForegroundApp,
+        .setForegroundAppCallback = vSetForegroundAppCallback,
+        .setLaunchAtLogin = vSetLaunchAtLogin,
     };
+
+    // -- desktop companion features (desktop.zig, docs/DESKTOP_OVERLAY.md) ---------------
+
+    /// The one platform instance (overlay visibility notifications).
+    var current: ?*MacPlatform = null;
+
+    fn overlaysWantInput() bool {
+        return window_mod.overlay_count == 0 or window_mod.visible_overlay_count > 0;
+    }
+    fn onOverlayVisibility() void {
+        const self = current orelse return;
+        self.input_monitor.setActive(overlaysWantInput());
+    }
+
+    fn vStartGlobalInputMonitor(ptr: *anyopaque, cb: pf.Callback(pf.GlobalInputEvent, void)) pf.InputMonitorStatus {
+        return cast(ptr).input_monitor.start(cb);
+    }
+    fn vStopGlobalInputMonitor(ptr: *anyopaque) void {
+        cast(ptr).input_monitor.stop();
+    }
+    fn vSetPreciseInput(ptr: *anyopaque, on: bool) void {
+        const m = &cast(ptr).input_monitor;
+        if (m.precise == on) return;
+        m.precise = on;
+        if (m.running) _ = m.start(m.cb);
+    }
+    fn vInputPermission(ptr: *anyopaque) pf.InputPermission {
+        return cast(ptr).input_monitor.permission();
+    }
+    fn vRequestInputPermission(ptr: *anyopaque) void {
+        cast(ptr).input_monitor.requestPermission();
+    }
+    fn vSetTrayItem(ptr: *anyopaque, item: ?pf.TrayItem) anyerror!void {
+        const self = cast(ptr);
+        try self.status_item.set(item, self.delegate orelse ensureDelegate(self));
+    }
+    fn vForegroundApp(_: *anyopaque, buf: []u8) ?pf.ForegroundApp {
+        return mac_desktop.foregroundApp(buf);
+    }
+    fn vSetForegroundAppCallback(ptr: *anyopaque, cb: pf.Callback(void, void)) void {
+        const self = cast(ptr);
+        self.foreground_cb = cb;
+        if (!self.foreground_observing) {
+            self.foreground_observing = true;
+            mac_desktop.observeActivation(self.delegate orelse ensureDelegate(self), "onAppActivated:");
+        }
+    }
+    fn vSetLaunchAtLogin(_: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void {
+        return mac_desktop.setLaunchAtLogin(app_id, exe_path, on);
+    }
 
     fn vRenderSystemSymbol(_: *anyopaque, gpa: std.mem.Allocator, request: pf.SystemSymbolRequest) ?pf.SystemSymbolMask {
         return @import("system_symbol.zig").render(gpa, request);
@@ -320,6 +388,12 @@ pub const MacPlatform = struct {
 
     fn vDeinit(ptr: *anyopaque) void {
         const self = cast(ptr);
+        self.input_monitor.stop();
+        self.status_item.remove();
+        if (self.foreground_observing) if (self.delegate) |d| {
+            ak.class("NSWorkspace").msg(id, "sharedWorkspace", .{}).msg(id, "notificationCenter", .{}).msg(void, "removeObserver:", .{d});
+        };
+        if (current == self) current = null;
         self.text_system.destroy();
         self.gpa.destroy(self);
     }
@@ -398,6 +472,7 @@ fn delegateClass() *objc.Class {
     _ = b.addMethod("application:openURLs:", &openUrls, "v@:@@");
     _ = b.addMethod("onKeyboardLayoutChange:", &onKeyboardLayoutChange, "v@:@");
     _ = b.addMethod("onSystemWake:", &onSystemWake, "v@:@");
+    _ = b.addMethod("onAppActivated:", &onAppActivated, "v@:@");
     // Menu items target the responder chain, which ends at this delegate (menu.zig).
     inline for (.{ menu_mod.handle_selector, "cut:", "copy:", "paste:", "selectAll:", "undo:", "redo:" }) |sel_name| {
         _ = b.addMethod(sel_name, &handleMenuItem, "v@:@");
@@ -422,9 +497,20 @@ fn willFinishLaunching(_: id, _: SEL, _: id) callconv(.c) void {
     }
 }
 
+/// Regular, unless the bundle is an agent (`LSUIElement`) or `ZPUI_ACCESSORY_APP=1`
+/// (menu bar / overlay apps without a Dock icon, e.g. unbundled dev runs).
+fn activationPolicy() NSInteger {
+    if (std.c.getenv("ZPUI_ACCESSORY_APP")) |v| if (v[0] == '1') return 1;
+    const bundle = ak.class("NSBundle").msg(id, "mainBundle", .{});
+    if (bundle.msg(?id, "objectForInfoDictionaryKey:", .{objc.nsString("LSUIElement")})) |v| {
+        if (v.msg(BOOL, "respondsToSelector:", .{objc.sel("boolValue")}) == YES and v.msg(BOOL, "boolValue", .{}) == YES) return 1; // NSApplicationActivationPolicyAccessory
+    }
+    return ak.NSApplicationActivationPolicyRegular;
+}
+
 fn didFinishLaunching(this: id, _: SEL, _: id) callconv(.c) void {
     const app = ak.sharedApp();
-    _ = app.msg(BOOL, "setActivationPolicy:", .{ak.NSApplicationActivationPolicyRegular});
+    _ = app.msg(BOOL, "setActivationPolicy:", .{activationPolicy()});
 
     const center = ak.class("NSNotificationCenter").msg(id, "defaultCenter", .{});
     center.msg(void, "addObserver:selector:name:object:", .{
@@ -495,6 +581,11 @@ fn menuWillOpen(this: id, _: SEL, _: id) callconv(.c) void {
 fn onKeyboardLayoutChange(this: id, _: SEL, _: id) callconv(.c) void {
     const self = getPlatform(this) orelse return;
     if (self.callbacks.keyboard_layout_change) |f| f(self.callbacks.ctx);
+}
+
+fn onAppActivated(this: id, _: SEL, _: id) callconv(.c) void {
+    const self = getPlatform(this) orelse return;
+    _ = self.foreground_cb.call({});
 }
 
 fn onSystemWake(this: id, _: SEL, _: id) callconv(.c) void {
