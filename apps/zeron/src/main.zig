@@ -253,7 +253,7 @@ fn onLaunch(l: *Launch, app: *App) void {
     if (l.open_url) |url| zpui.lifecycle.openUrls(app, &.{url});
     // --- smoke test (CI): render N frames, capture, exit (smoke.zig) ---
     if (l.smoke_frames) |n|
-        smoke.start(l.gpa, l.io, window, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT"), .browser_url = l.environ.get("ZERON_SMOKE_BROWSER_URL"), .diag = l.environ.get("ZERON_SMOKE_DIAG") != null, .menu = l.environ.get("ZERON_SMOKE_MENU") != null, .settings = l.environ.get("ZERON_SMOKE_SETTINGS"), .settings_stress = l.environ.get("ZERON_SMOKE_SETTINGS_STRESS") });
+        smoke.start(l.gpa, l.io, window, .{ .frames = n, .light = appearance == .light, .out = l.environ.get("ZERON_SMOKE_OUT"), .browser_url = l.environ.get("ZERON_SMOKE_BROWSER_URL"), .diag = l.environ.get("ZERON_SMOKE_DIAG") != null, .menu = l.environ.get("ZERON_SMOKE_MENU") != null, .settings = l.environ.get("ZERON_SMOKE_SETTINGS"), .settings_stress = l.environ.get("ZERON_SMOKE_SETTINGS_STRESS"), .shortcuts = l.environ.get("ZERON_SMOKE_SHORTCUTS") != null });
     if (l.max_frames) |n| {
         const Quit = struct {
             left: u64,
@@ -445,6 +445,8 @@ test {
     _ = @import("appshots/tests.zig"); // [appshots]
     _ = @import("lifecycle/root.zig");
     _ = @import("smoke.zig");
+    _ = @import("smoke_shortcuts.zig");
+    _ = @import("shortcut_table.zig");
     _ = @import("glass_lab.zig");
     _ = @import("engine_bin.zig");
     _ = @import("ui/shell/shell_test.zig");

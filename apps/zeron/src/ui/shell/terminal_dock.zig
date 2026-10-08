@@ -16,6 +16,7 @@ const term = @import("zeron_terminal");
 const ui = @import("../components/root.zig");
 const model = @import("zeron_model");
 const engine = @import("zeron_engine");
+const zeron_actions = @import("zeron_actions");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -261,7 +262,35 @@ pub const TerminalDock = struct {
         self.poll_task = cx.timer(16 * std.time.ns_per_ms, onPoll) catch .none;
     }
 
+    /// Rust `paste_clipboard`: the clipboard text as typed input (bracketed when the
+    /// program asked for it).
+    fn pasteClipboard(self: *TerminalDock, cx: *Context(TerminalDock)) void {
+        const text = cx.app.platform.vtable.readClipboard(cx.app.platform.ptr, self.gpa) orelse return;
+        defer self.gpa.free(text);
+        const bytes = term.input.pasteWith(self.gpa, text, self.emu.bracketedPasteMode()) catch return;
+        defer self.gpa.free(bytes);
+        self.emu.scrollToBottom();
+        if (self.remote != null) {
+            self.sendRemote(cx, bytes);
+        } else if (has_pty) {
+            if (self.pty) |*p| p.write(bytes) catch {};
+        }
+        cx.notify();
+    }
+
+    /// Edit > Paste (the menu's composer::Paste reaches the focused terminal too).
+    fn aPaste(self: *TerminalDock, _: *const zeron_actions.composer.Paste, _: *Window, cx: *Context(TerminalDock)) void {
+        self.pasteClipboard(cx);
+    }
+
     fn onKey(self: *TerminalDock, ev: *const zpui.input.KeyDownEvent, _: *Window, cx: *Context(TerminalDock)) void {
+        // Paste: Cmd+V (macOS) / Ctrl+Shift+V (Rust `on_key_down`).
+        const km = ev.keystroke.modifiers;
+        if (std.mem.eql(u8, ev.keystroke.key, "v") and (km.platform or (km.control and km.shift))) {
+            self.pasteClipboard(cx);
+            cx.stopPropagation();
+            return;
+        }
         if (self.remote != null) {
             var rbuf: [64]u8 = undefined;
             const bytes = term.keys.encode(self.emu, term.keys.fromKeystroke(ev.keystroke), &rbuf) orelse return;
@@ -402,6 +431,7 @@ pub const TerminalDock = struct {
                 .child(ui.icon.of(.alt_arrow_down, 13, theme.text_muted.opacity(0.55))));
         var root = div().id("terminal-dock").trackFocus(self.focus).keyContext("Terminal")
             .onKeyDown(cx.listener(TerminalDock.onKey))
+            .onAction(zeron_actions.composer.Paste, cx.listener(TerminalDock.aPaste))
             .sizeFull().flex().flexCol().bg(theme.terminal.background)
             .fontFamily(theme.font_sans);
         if (self.chrome) root = root.borderT1().borderColor(theme.border).child(bar);

@@ -367,8 +367,17 @@ fn dispatchKeyDownUp(w: *Window, kev: KeyEvent, path: []const DispatchNodeId) vo
     }
 }
 
+/// Diagnostics hook (tests, the CI shortcut smoke): called after every action dispatch
+/// (keymap, menu, `dispatchAction`) with the action and whether a listener handled it.
+pub var action_trace: ?*const fn (action: *const AnyAction, handled: bool) void = null;
+
+pub fn traceAction(app: *App, action: *const AnyAction) void {
+    if (action_trace) |f| f(action, !app.propagate_event);
+}
+
 /// gpui `dispatch_action_on_node`.
 pub fn dispatchActionOnNode(w: *Window, node_id: DispatchNodeId, action: *const AnyAction) void {
+    defer traceAction(w.app, action);
     const app = w.app;
     var path = w.rendered_frame.dispatch_tree.dispatchPath(w.gpa, node_id) catch @panic("OOM");
     defer path.deinit(w.gpa);
@@ -420,6 +429,7 @@ pub fn dispatchAnyAction(w: *Window, action: *const AnyAction) void {
         app.propagate_event = true;
         app.dispatchGlobalAction(action, .capture);
         if (app.propagate_event) app.dispatchGlobalAction(action, .bubble);
+        traceAction(app, action);
         return;
     };
     dispatchActionOnNode(w, node_id, action);

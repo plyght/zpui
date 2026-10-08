@@ -565,6 +565,7 @@ pub fn dispatchAction(app: *App, action: *const AnyAction) void {
     app.propagate_event = true;
     app.dispatchGlobalAction(action, .capture);
     if (app.propagate_event) app.dispatchGlobalAction(action, .bubble);
+    @import("../window/dispatch.zig").traceAction(app, action);
 }
 
 /// gpui `is_action_available` for the menu: a global listener, or a listener on the

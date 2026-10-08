@@ -112,6 +112,12 @@ pub const Shell = struct {
     sidebar: Entity(sidebar_mod.Sidebar),
     main: Entity(main_panel.MainPanel),
     focus: zpui.FocusHandle,
+    /// Rust `Shell::unfocused`: a non-input child of the root that holds focus after an
+    /// explicit blur, so app shortcuts keep their dispatch path without a caret.
+    unfocused: zpui.FocusHandle,
+    /// The window `scheduleFocusRestore` recovers focus in (set each render).
+    focus_window: ?zpui.WindowId = null,
+    focus_generation: u64 = 0,
     fixtures: ?*fixtures_mod.Fixtures,
     subs: zpui.Subscriptions = .{},
 
@@ -167,6 +173,7 @@ pub const Shell = struct {
             .main = try cx.newWith(main_panel.MainPanel, main_panel.MainPanel.init, .{ state, fixtures }),
             .right_pane = try cx.newWith(right_pane_mod.RightPane, right_pane_mod.RightPane.init, .{ state, fixtures, prefs_mod.get(cx).right_pane_open }),
             .focus = focus,
+            .unfocused = cx.focusHandle(),
             .fixtures = fixtures,
             .server_decorations = server_decorations,
         };
@@ -204,9 +211,43 @@ pub const Shell = struct {
         self.nav.deinit(self.gpa);
         if (self.last_appshot_chat) |s| self.gpa.free(s); // [appshots]
         self.focus.release(app);
+        self.unfocused.release(app);
         self.main.release(app);
         self.sidebar.release(app);
         self.state.release(app);
+    }
+
+    /// Rust `restore_mounted_focus` (scheduled from every render, like `window.defer`): a
+    /// blur or a focused element that unmounted (a closed palette, picker, dialog or
+    /// pane) leaves no focus inside the shell root, so the shell's actions (every app
+    /// shortcut, the menu's Settings / Edit items) would lose their dispatch path until
+    /// the next click. Recover against the completed frame: an explicit blur parks focus
+    /// on `unfocused`; a stale handle moves to the preferred target (Settings, else the
+    /// composer) when mounted, else to the root.
+    fn scheduleFocusRestore(self: *Shell, window: *Window, cx: *Context(Shell)) void {
+        self.focus_window = window.id;
+        self.focus_generation = window.focus_generation;
+        cx.deferUpdate(struct {
+            fn f(sh: *Shell, c: *Context(Shell)) void {
+                const w = c.app.windowById(sh.focus_window orelse return) orelse return;
+                // Focus moved after this frame was built (an action focused a view that
+                // the next frame mounts): that frame's render checks again.
+                if (w.focus_generation != sh.focus_generation) return;
+                const preferred: zpui.FocusHandle = if (sh.settings_view) |v|
+                    v.read(c).focus
+                else
+                    sh.main.read(c).slots.composer_view.read(c).input.read(c).focus;
+                restoreMountedFocus(w, sh.focus, preferred, sh.unfocused);
+            }
+        }.f);
+    }
+
+    pub fn restoreMountedFocus(w: *Window, root: zpui.FocusHandle, preferred: zpui.FocusHandle, unfocused: zpui.FocusHandle) void {
+        if (w.rendered_frame.dispatch_tree.focusableNodeId(root.id) == null) return; // root not drawn yet
+        if (root.containsFocused(w)) return;
+        const preferred_mounted = w.rendered_frame.dispatch_tree.focusContains(root.id, preferred.id);
+        const target = if (w.focusedId() == null) unfocused else if (preferred_mounted) preferred else root;
+        w.focus(target);
     }
 
     fn onModelChanged(_: *Shell, _: anytype, cx: *Context(Shell)) void {
@@ -751,6 +792,7 @@ pub const Shell = struct {
         // Reduced motion: SPLASH_OUT snaps to its end state (gpui's oneshot rule).
         if (self.splash == .fading and (self.reduced_motion or now(cx) -| self.splash_fade_start > motion.splash_out.totalNs(1.0))) self.splash = .gone;
 
+        self.scheduleFocusRestore(window, cx);
         var root = div()
             .trackFocus(self.focus)
             .keyContext("Shell")
@@ -775,6 +817,7 @@ pub const Shell = struct {
         // the sidebar glass instead, leaving alpha 0 under it (the desktop shows through).
         if (!(theme.isLiquid() and g == .ready)) root = root.bg(theme.glass());
         root = wiring_mod.actionsOn(root, cx); // [wiring] SaveFile / ArchiveSession / OpenModelPicker
+        root = root.child(div().absolute().size(px(0)).trackFocus(self.unfocused));
         if (radius > 0) root = root.rounded(px(radius)).overflowHidden();
 
         root = switch (g) {

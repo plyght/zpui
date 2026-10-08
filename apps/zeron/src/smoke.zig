@@ -35,6 +35,9 @@
 //! open Settings on that page, render 30 more frames and capture it (on macOS the
 //! page's switches, pop-ups and sliders are native AppKit controls).
 //!
+//! `ZERON_SMOKE_SHORTCUTS=1`: the menu bar and every app shortcut through real AppKit
+//! key events and menu picks, ending with ⌘Q (smoke_shortcuts.zig).
+//!
 //! `ZERON_SMOKE_SETTINGS_STRESS=<cycles>`: after the frames, open Settings, visit every
 //! section and poke every visible native control (macOS: real `NSEvent` clicks through
 //! AppKit's tracking loop for switches / checkboxes / sliders / steppers, pop-up menus
@@ -71,6 +74,8 @@ pub const Options = struct {
     settings: ?[]const u8 = null,
     /// ZERON_SMOKE_SETTINGS_STRESS=<cycles>: the Settings open/poke/close stress.
     settings_stress: ?[]const u8 = null,
+    /// ZERON_SMOKE_SHORTCUTS=1: real key events and menu picks (smoke_shortcuts.zig).
+    shortcuts: bool = false,
 };
 
 const shell_mod = @import("ui/shell/shell.zig");
@@ -118,6 +123,7 @@ const Tick = struct {
         if (self.left > 0) return win.onNextFrame(Tick{ .left = self.left - 1 }, tick);
         const s = &state.?;
         if (s.opts.settings_stress) |n| if (self.waited == 0) return SettingsStress.begin(s, win, app, n);
+        if (s.opts.shortcuts and self.waited == 0) return smoke_shortcuts.begin(win, app, shortcutsDone);
         if (s.opts.settings) |section| if (self.waited == 0) return openSettings(s, win, app, section);
         if (s.opts.browser_url) |url| return openBrowser(s, win, app, url);
         if (s.opts.menu and self.waited == 0) return MenuProbe.begin(s, win, app);
@@ -145,6 +151,19 @@ const Tick = struct {
 };
 
 const settings_ui = @import("ui/settings/root.zig");
+const smoke_shortcuts = @import("smoke_shortcuts.zig");
+
+fn shortcutsDone(_: *Window, _: *App, r: smoke_shortcuts.Result) void {
+    const s = &state.?;
+    if (r.failures == 0) {
+        std.debug.print("PASS: zeron smoke: shortcuts ({d} checks)\n", .{r.passes});
+        s.exit_code = 0;
+    } else {
+        std.debug.print("FAIL: zeron smoke: shortcuts: {d} of {d} checks failed\n", .{ r.failures, r.failures + r.passes });
+        s.exit_code = 1;
+    }
+    s.done.store(true, .release);
+}
 
 /// ZERON_SMOKE_SETTINGS: open Settings on `section`, let it settle, then capture.
 fn openSettings(s: *State, win: *Window, app: *App, section: []const u8) void {

@@ -1079,6 +1079,15 @@ pub const FileEditor = struct {
         self.core.docEnd(true);
         self.motion(cx);
     }
+    /// An Edit menu verb (`From`, a composer action) run as the editor's own `To`.
+    fn editMenuVerb(comptime From: type, comptime To: type, comptime f: fn (*FileEditor, *const To, *Window, *Context(FileEditor)) void) fn (*FileEditor, *const From, *Window, *Context(FileEditor)) void {
+        return struct {
+            fn g(self: *FileEditor, _: *const From, w: *Window, cx: *Context(FileEditor)) void {
+                f(self, &To{}, w, cx);
+            }
+        }.g;
+    }
+
     fn aSelectAll(self: *FileEditor, _: *const A.SelectAll, _: *Window, cx: *Context(FileEditor)) void {
         self.core.selectAll();
         self.afterMove(cx);
@@ -1914,6 +1923,14 @@ pub const FileEditor = struct {
             .onAction(A.Copy, cx.listener(aCopy))
             .onAction(A.Cut, cx.listener(aCut))
             .onAction(A.Paste, cx.listener(aPaste))
+            // The Edit menu items (app_menus: composer::* with the native selectors) work
+            // in the editor too.
+            .onAction(zeron_actions.composer.Undo, cx.listener(editMenuVerb(zeron_actions.composer.Undo, A.Undo, aUndo)))
+            .onAction(zeron_actions.composer.Redo, cx.listener(editMenuVerb(zeron_actions.composer.Redo, A.Redo, aRedo)))
+            .onAction(zeron_actions.composer.Cut, cx.listener(editMenuVerb(zeron_actions.composer.Cut, A.Cut, aCut)))
+            .onAction(zeron_actions.composer.Copy, cx.listener(editMenuVerb(zeron_actions.composer.Copy, A.Copy, aCopy)))
+            .onAction(zeron_actions.composer.Paste, cx.listener(editMenuVerb(zeron_actions.composer.Paste, A.Paste, aPaste)))
+            .onAction(zeron_actions.composer.SelectAll, cx.listener(editMenuVerb(zeron_actions.composer.SelectAll, A.SelectAll, aSelectAll)))
             .onAction(A.Save, cx.listener(aSave))
             .onAction(A.Escape, cx.listener(aEscape))
             .onAction(A.FindNext, cx.listener(aFindNext))

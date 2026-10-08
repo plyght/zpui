@@ -228,4 +228,5 @@ test "faded label eases its right-edge fade in with the overflow (zeron label_fa
 // [wiring] event-routing tests (ui/shell/wiring.zig).
 test {
     _ = @import("wiring_test.zig");
+    _ = @import("shortcuts_test.zig");
 }

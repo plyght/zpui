@@ -214,6 +214,15 @@ jobs:
           ZERON_FIXTURE_SETTINGS_DIR="$RUNNER_TEMP/fade-busy-subtle" ZERON_SMOKE_SETTINGS=appearance \
             ZERON_SMOKE_OUT=zig-out/zeron-macos-fade-settings-appearance.png \
             ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --select none --smoke-frames 60 --dark
+      # Menu bar + keyboard shortcuts through AppKit: real key-down NSEvents queued with
+      # -[NSApp postEvent:atStart:] for every app shortcut (focus on the shell root, in the
+      # composer, after a blur), the main menu validated and compared with the Rust menu
+      # bar (titles, key equivalents, enabled state), items picked with
+      # performActionForItemAtIndex:, then ⌘Q must quit (apps/zeron/src/smoke_shortcuts.zig).
+      - name: Smoke test zeron menu bar and keyboard shortcuts
+        timeout-minutes: 5
+        run: |
+          ZERON_SMOKE_SHORTCUTS=1 ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
       # [liquid-glass] macOS 15 has no NSGlassEffectView: forcing the Liquid Glass setting
       # must take the frosted fallback (no native glass views) and still render.
       - name: Smoke test zeron, Liquid Glass forced → frosted fallback (macOS 15)
