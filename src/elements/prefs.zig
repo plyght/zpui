@@ -59,7 +59,9 @@ pub const Family = theme.Family;
 /// drawn controls imitate (libadwaita when the platform names none).
 pub fn lookFor(window: *Window) Look {
     const t = window.desktopTheme();
-    const family: Family = if (builtin.os.tag == .macos and t.style == .none) .macos else Family.fromStyle(t.style) orelse .adwaita;
+    // Platforms with real embedded controls (macOS AppKit, Windows common controls) use the
+    // grouped-form layout around them.
+    const family: Family = if ((builtin.os.tag == .macos or builtin.os.tag == .windows) and t.style == .none) .macos else Family.fromStyle(t.style) orelse .adwaita;
     return theme.look(family, dc.isDark(window, null), t.accent);
 }
 

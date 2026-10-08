@@ -40,6 +40,8 @@ pub const renderer = @import("renderer/renderer.zig");
 pub const linux_platform = if (@import("builtin").os.tag == .linux) @import("platform/linux/linux.zig") else struct {};
 /// macOS backend (AppKit + Metal + CoreText); an empty namespace on other targets.
 pub const mac_platform = if (@import("builtin").os.tag == .macos) @import("platform/mac/mac.zig") else struct {};
+/// The Windows backend (Win32 + D3D11/DirectComposition + DirectWrite); see src/platform/windows/windows.zig.
+pub const windows_platform = if (@import("builtin").os.tag == .windows) @import("platform/windows/windows.zig") else struct {};
 pub const text = @import("text/text.zig");
 /// Image decoding, SVG rendering, image cache and object-fit (src/image/).
 pub const image = @import("image/image.zig");

@@ -153,7 +153,19 @@ pub const watchdog = struct {
     var busy_since = std.atomic.Value(u64).init(0);
     var limit_ns: u64 = 120 * std.time.ns_per_s;
 
+    const k32 = struct {
+        extern "kernel32" fn QueryPerformanceCounter(*i64) callconv(.winapi) i32;
+        extern "kernel32" fn QueryPerformanceFrequency(*i64) callconv(.winapi) i32;
+    };
+
     fn monotonic() u64 {
+        if (@import("builtin").os.tag == .windows) {
+            var t: i64 = 0;
+            var f: i64 = 1;
+            _ = k32.QueryPerformanceCounter(&t);
+            _ = k32.QueryPerformanceFrequency(&f);
+            return @intCast(@divTrunc(@as(i128, t) * std.time.ns_per_s, @max(f, 1)));
+        }
         var ts: std.c.timespec = undefined;
         _ = std.c.clock_gettime(.MONOTONIC, &ts);
         return @as(u64, @intCast(ts.sec)) * std.time.ns_per_s + @as(u64, @intCast(ts.nsec));
@@ -161,6 +173,7 @@ pub const watchdog = struct {
 
     fn start() void {
         if (started.swap(true, .acq_rel)) return;
+        if (@import("builtin").os.tag == .windows) return; // no watchdog thread on Windows
         if (std.c.getenv("ZPUI_TEST_WATCHDOG_S")) |v| {
             const secs = std.fmt.parseInt(u64, std.mem.span(v), 10) catch 120;
             limit_ns = secs * std.time.ns_per_s;

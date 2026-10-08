@@ -25,6 +25,7 @@ pub fn build(b: *std.Build) void {
     addMetalRenderer(b, target, optimize, zpui);
     addMacPlatform(b, target, optimize, zpui);
     addOverlayDemo(b, target, optimize, zpui);
+    addWindowsPlatform(b, target, optimize, zpui);
     addZeronSyntax(b, target, optimize, test_step);
     addImageSupport(b, target, optimize, zpui);
     addZeronMarkdownDiff(b, target, optimize, test_step);
@@ -109,7 +110,8 @@ fn addVulkanRenderer(
     zpui: *std.Build.Module,
 ) void {
     const os = target.result.os.tag;
-    if (os.isDarwin()) return;
+    // Apple targets render with Metal, Windows with D3D11 (addWindowsPlatform).
+    if (os.isDarwin() or os == .windows) return;
 
     const vk_c = b.addTranslateC(.{
         .root_source_file = b.path("src/renderer/vulkan/vk.h"),
@@ -119,7 +121,7 @@ fn addVulkanRenderer(
     // Named module "vk_c" (raw Vulkan C API), reusable by the Linux platform layer.
     zpui.addImport("vk_c", vk_c.addModule("vk_c"));
     zpui.link_libc = true;
-    zpui.linkSystemLibrary(if (os == .windows) "vulkan-1" else "vulkan", .{});
+    zpui.linkSystemLibrary("vulkan", .{});
 
     const shader_dir = "src/renderer/vulkan/shaders/";
     const shaders = [_][]const u8{
@@ -470,6 +472,90 @@ fn addOverlayDemo(
     const step = b.step("overlay-demo", "Run the desktop overlay demo (ZPUI_SMOKE_FRAMES=N for the smoke test)");
     step.dependOn(&run.step);
     b.step("overlay-demo-build", "Build only the overlay demo to zig-out/bin/overlay-demo").dependOn(&b.addInstallArtifact(demo, .{}).step);
+}
+
+/// Windows platform backend (src/platform/windows/) + the D3D11 renderer
+/// (src/renderer/d3d11/, HLSL compiled at runtime with D3DCompile) + DirectWrite
+/// (src/text/directwrite.zig). Only system DLLs are linked (MinGW import libraries
+/// ship with Zig, so cross builds from Linux/macOS work). The `windows-window` demo
+/// (`zig build windows-window`; `ZPUI_SMOKE_FRAMES=30` renders 30 frames of a normal
+/// window, a transparent overlay and a native-controls panel, writes
+/// zig-out/windows-*.png and exits) embeds src/platform/windows/zpui.manifest
+/// (per-monitor-v2 DPI, comctl32 v6); apps should do the same (`windowsManifest`).
+fn addWindowsPlatform(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    if (target.result.os.tag != .windows) return;
+    zpui.link_libc = true;
+    for ([_][]const u8{
+        "user32", "gdi32",   "kernel32", "advapi32", "shell32",        "ole32",
+        "dwmapi", "uxtheme", "comctl32", "imm32",    "d3d11",          "dxgi",
+        "dcomp",  "dwrite",  "shcore",   "version",  "d3dcompiler_47",
+    }) |lib| zpui.linkSystemLibrary(lib, .{});
+
+    const demo = b.addExecutable(.{
+        .name = "windows-window",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/windows_window.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    demo.win32_manifest = windowsManifest(b);
+    b.installArtifact(demo);
+    const run = b.addRunArtifact(demo);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    const native = @import("builtin").os.tag == .windows;
+    const step = b.step("windows-window", "Run the Windows window/overlay/native-controls demo (ZPUI_SMOKE_FRAMES=N for the CI smoke test)");
+    // Cross builds can only compile: install the exe instead of running it.
+    if (native) step.dependOn(&run.step) else step.dependOn(&b.addInstallArtifact(demo, .{}).step);
+
+    // The cross-platform overlay demo (examples/overlay_demo.zig) on the Windows backend.
+    const overlay = b.addExecutable(.{
+        .name = "overlay-demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/overlay_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    overlay.win32_manifest = windowsManifest(b);
+    const overlay_install = b.addInstallArtifact(overlay, .{});
+    const overlay_run = b.addRunArtifact(overlay);
+    overlay_run.setCwd(b.path("."));
+    overlay_run.addPassthruArgs();
+    b.step("overlay-demo", "Run the desktop overlay demo (ZPUI_SMOKE_FRAMES=N for the smoke test)").dependOn(if (native) &overlay_run.step else &overlay_install.step);
+    b.step("overlay-demo-build", "Build only the overlay demo to zig-out/bin/overlay-demo.exe").dependOn(&overlay_install.step);
+
+    // The preferences demo (examples/prefs_demo.zig): real Win32 controls in the grouped form.
+    const prefs = b.addExecutable(.{
+        .name = "prefs-demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/prefs_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    prefs.win32_manifest = windowsManifest(b);
+    const prefs_install = b.addInstallArtifact(prefs, .{});
+    const prefs_run = b.addRunArtifact(prefs);
+    prefs_run.setCwd(b.path("."));
+    prefs_run.addPassthruArgs();
+    b.step("prefs-demo", "Run the preferences window demo (ZPUI_SMOKE_FRAMES=N captures zig-out/prefs-demo.png)").dependOn(if (native) &prefs_run.step else &prefs_install.step);
+}
+
+/// The application manifest Windows executables built on zpui should embed
+/// (`exe.win32_manifest = windowsManifest(b)`): per-monitor-v2 DPI awareness and
+/// comctl32 v6 (themed native controls).
+pub fn windowsManifest(b: *std.Build) std.Build.LazyPath {
+    return b.path("src/platform/windows/zpui.manifest");
 }
 
 /// zeron syntax highlighting (apps/zeron/src/syntax): the vendored tree-sitter

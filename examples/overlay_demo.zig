@@ -399,6 +399,12 @@ const Demo = struct {
 };
 
 fn cpuTimeNs() u64 {
+    if (builtin.os.tag == .windows) {
+        const w = zpui.windows_platform.win32;
+        var times: [4]u64 = .{ 0, 0, 0, 0 }; // creation, exit, kernel, user (100 ns units)
+        if (w.GetProcessTimes(w.GetCurrentProcess(), &times[0], &times[1], &times[2], &times[3]) == 0) return 0;
+        return (times[2] + times[3]) * 100;
+    }
     var ru: std.posix.rusage = undefined;
     ru = std.posix.getrusage(std.posix.rusage.SELF);
     const tv = struct {
@@ -422,6 +428,7 @@ fn createPlatform(gpa: std.mem.Allocator, io: std.Io) !platform.Platform {
     return switch (builtin.os.tag) {
         .macos => zpui.mac_platform.create(gpa),
         .linux => zpui.linux_platform.create(gpa, .{ .io = io }),
+        .windows => zpui.windows_platform.create(gpa, .{}),
         else => error.Unsupported,
     };
 }

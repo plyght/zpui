@@ -203,9 +203,12 @@ fn onLaunch(l: *Launch, app: *App) void {
             left: u64,
             fn tick(self: *const @This(), w: *Window, a: *App) void {
                 if (self.left > 0) {
+                    // Windows: also read back the last presented frame (zpui content only).
+                    if (builtin.os.tag == .windows and self.left == 1) if (zpui.windows_platform.Window.fromWindow(w.platform_window).renderer) |*r| r.requestCapture();
                     w.refresh();
                     return w.onNextFrame(@This(){ .left = self.left - 1 }, tick);
                 }
+                if (builtin.os.tag == .windows) saveSurfaceCapture(w);
                 capture(w) catch |err| {
                     std.debug.print("FAIL: prefs-demo capture: {t}\n", .{err});
                     launch_state.exit_code = 1;
@@ -237,11 +240,32 @@ fn openPopup(w: *Window) void {
     }.f);
 }
 
+/// Windows: the swapchain frame read back by the renderer, next to the screen capture.
+fn saveSurfaceCapture(w: *Window) void {
+    if (builtin.os.tag != .windows) return;
+    const l = &launch_state;
+    const r = &(zpui.windows_platform.Window.fromWindow(w.platform_window).renderer orelse return);
+    const cap = r.takeCapture() orelse return;
+    defer l.gpa.free(cap.rgba);
+    var i: usize = 0;
+    while (i + 4 <= cap.rgba.len) : (i += 4) {
+        const a: u32 = cap.rgba[i + 3];
+        if (a == 0 or a == 255) continue;
+        for (cap.rgba[i..][0..3]) |*c| c.* = @intCast(@min(255, (@as(u32, c.*) * 255 + a / 2) / a));
+    }
+    const encoded = png.encode(l.gpa, cap.width, cap.height, cap.rgba) catch return;
+    defer l.gpa.free(encoded);
+    std.Io.Dir.cwd().createDirPath(l.io, "zig-out") catch {};
+    std.Io.Dir.cwd().writeFile(l.io, .{ .sub_path = "zig-out/prefs-demo-surface.png", .data = encoded }) catch return;
+    std.debug.print("prefs-demo: wrote zig-out/prefs-demo-surface.png ({d}x{d})\n", .{ cap.width, cap.height });
+}
+
 fn capture(w: *Window) !void {
     const l = &launch_state;
     const img = switch (builtin.os.tag) {
         .linux => try captureX11(l.gpa, l.io, w.platform_window),
         .macos => try captureMac(l.gpa, w.platform_window),
+        .windows => try captureWindows(l.gpa, w.platform_window),
         else => return error.CaptureUnsupported,
     };
     defer l.gpa.free(img.pixels);
@@ -303,6 +327,39 @@ fn parsePpm(gpa: std.mem.Allocator, bytes: []const u8) !png.Image {
     return .{ .width = fields[0], .height = fields[1], .pixels = pixels };
 }
 
+/// The window's client area as composited on screen (zpui content + the native child
+/// controls), through a GDI blit of the screen.
+fn captureWindows(gpa: std.mem.Allocator, pw: zpui.platform.Window) !png.Image {
+    if (builtin.os.tag != .windows) unreachable;
+    const w = zpui.windows_platform.win32;
+    const hwnd = zpui.windows_platform.Window.fromWindow(pw).hwnd;
+    var rc: w.RECT = .{};
+    _ = w.GetClientRect(hwnd, &rc);
+    var origin: w.POINT = .{};
+    _ = w.ClientToScreen(hwnd, &origin);
+    const width = rc.width();
+    const height = rc.height();
+    if (width <= 0 or height <= 0) return error.EmptyWindowImage;
+    _ = w.DwmFlush();
+    const screen = w.GetDC(null) orelse return error.NoDC;
+    defer _ = w.ReleaseDC(null, screen);
+    const mem = w.CreateCompatibleDC(screen) orelse return error.NoDC;
+    defer _ = w.DeleteDC(mem);
+    var bits: ?*anyopaque = null;
+    const bmi: w.BITMAPINFO = .{ .bmiHeader = .{ .biWidth = width, .biHeight = -height } };
+    const bmp = w.CreateDIBSection(screen, &bmi, 0, &bits, null, 0) orelse return error.NoBitmap;
+    defer _ = w.DeleteObject(bmp);
+    const old = w.SelectObject(mem, bmp);
+    defer _ = w.SelectObject(mem, old.?);
+    if (w.BitBlt(mem, 0, 0, width, height, screen, origin.x, origin.y, w.SRCCOPY | w.CAPTUREBLT) == 0) return error.BitBltFailed;
+    const n: usize = @intCast(width * height * 4);
+    const src: [*]const u8 = @ptrCast(bits.?);
+    const pixels = try gpa.alloc(u8, n);
+    var i: usize = 0;
+    while (i < n) : (i += 4) pixels[i..][0..4].* = .{ src[i + 2], src[i + 1], src[i], 255 };
+    return .{ .width = @intCast(width), .height = @intCast(height), .pixels = pixels };
+}
+
 /// The window alone via `CGWindowListCreateImage` (straight RGBA8).
 fn captureMac(gpa: std.mem.Allocator, pw: zpui.platform.Window) !png.Image {
     if (builtin.os.tag != .macos) unreachable;
@@ -349,7 +406,8 @@ pub fn main(init: std.process.Init) !void {
     const plat = switch (builtin.os.tag) {
         .linux => try zpui.linux_platform.create(gpa, .{ .io = init.io }),
         .macos => try zpui.mac_platform.create(gpa),
-        else => @compileError("prefs-demo runs on Linux and macOS"),
+        .windows => try zpui.windows_platform.create(gpa, .{}),
+        else => @compileError("prefs-demo runs on Linux, macOS and Windows"),
     };
     const app = try App.init(gpa, plat);
     app.run(l, onLaunch);

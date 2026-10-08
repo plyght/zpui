@@ -543,11 +543,13 @@ test "parseKeystroke" {
 }
 
 test "shouldMatch with key_char" {
-    // Typed alt-s producing "ß" matches a binding for "ß" (non-Windows) and for alt-s.
+    // Typed alt-s producing "ß" matches a binding for "ß" and for alt-s. (On Windows the
+    // char binding must carry no modifiers at all: AltGr reports as ctrl+alt there.)
     const typed: Keystroke = .{ .modifiers = .{ .alt = true }, .key = "s", .key_char = "ß" };
     const target_char: Keystroke = .{ .key = "ß" };
     const target_key: Keystroke = .{ .modifiers = .{ .alt = true }, .key = "s" };
-    try testing.expectEqual(builtin.os.tag != .windows, shouldMatch(typed, target_char));
+    try testing.expect(shouldMatch(typed, target_char));
+    if (builtin.os.tag == .windows) try testing.expect(!shouldMatch(typed, .{ .modifiers = .{ .control = true }, .key = "ß" }));
     try testing.expect(shouldMatch(typed, target_key));
     try testing.expect(!shouldMatch(.{ .key = "a" }, .{ .key = "b" }));
     try testing.expect(!shouldMatch(.{ .key = "a" }, .{ .modifiers = .{ .control = true }, .key = "a" }));

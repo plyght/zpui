@@ -398,7 +398,18 @@ fn awaitTeardowns(app: *App, teardowns: []const QuitTeardown) void {
             std.log.scoped(.zpui).err("timed out waiting on app quit teardown", .{});
             return;
         }
-        const ts: std.c.timespec = .{ .sec = 0, .nsec = 1 * std.time.ns_per_ms };
+        sleepMs(1);
+    }
+}
+
+fn sleepMs(ms: u32) void {
+    if (@import("builtin").os.tag == .windows) {
+        const k32 = struct {
+            extern "kernel32" fn Sleep(ms: u32) callconv(.winapi) void;
+        };
+        k32.Sleep(ms);
+    } else {
+        const ts: std.c.timespec = .{ .sec = 0, .nsec = @as(isize, ms) * std.time.ns_per_ms };
         _ = std.c.nanosleep(&ts, null);
     }
 }
