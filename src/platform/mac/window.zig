@@ -87,12 +87,6 @@ fn buildWindowClass(comptime super: [:0]const u8, comptime name: [:0]const u8) *
     _ = b.addPointerIvar(state_ivar);
     _ = b.addMethod("canBecomeMainWindow", &canBecomeMainWindow, B ++ "@:");
     _ = b.addMethod("canBecomeKeyWindow", &canBecomeKeyWindow, B ++ "@:");
-    // [native-popover] While a key popover child holds focus the parent keeps its active
-    // (key) look. Private AppKit hooks: overridden only where NSWindow has them.
-    inline for (.{ "_hasActiveAppearance", "_hasActiveAppearanceIgnoringKeyFocus", "_hasKeyAppearance" }) |hook| {
-        if (ak.class("NSWindow").msg(BOOL, "instancesRespondToSelector:", .{objc.cachedSel(hook)}) == YES)
-            _ = b.addMethod(hook, &activeAppearance(super, hook).f, B ++ "@:");
-    }
     _ = b.addMethod("windowDidResize:", &windowDidResize, "v@:@");
     _ = b.addMethod("windowDidChangeOcclusionState:", &windowDidChangeOcclusionState, "v@:@");
     _ = b.addMethod("windowWillEnterFullScreen:", &windowWillEnterFullScreen, "v@:@");
@@ -185,18 +179,12 @@ fn canBecomeKeyWindow(this: id, _: SEL) callconv(.c) BOOL {
 }
 
 fn canBecomeMainWindow(this: id, _: SEL) callconv(.c) BOOL {
+    // [native-popover] A popover panel never takes main status: the parent keeps it (and
+    // with it the coloured traffic lights) while the panel is key. Decided from the
+    // style mask too, so it holds before the ivar is set.
+    if (this.msg(NSUInteger, "styleMask", .{}) & ak.WindowStyleMask.nonactivating_panel != 0) return NO;
     const w = state(this) orelse return YES;
     return objc.toBOOL(w.popover == null);
-}
-
-fn activeAppearance(comptime super: [:0]const u8, comptime name: [:0]const u8) type {
-    return struct {
-        fn f(this: id, _: SEL) callconv(.c) BOOL {
-            if (state(this)) |w| if (popover_mod.hasActiveChild(w)) return YES;
-            var sup = superOf(this, super);
-            return objc.msgSendSuper(BOOL, &sup, objc.cachedSel(name), .{});
-        }
-    };
 }
 
 // ---------------------------------------------------------------------------

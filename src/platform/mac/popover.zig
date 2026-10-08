@@ -15,10 +15,10 @@
 //!
 //! * The panel is a child window of the parent while shown (it moves with it) and may
 //!   extend past it. Frames come in the parent's content coordinates (top-left origin).
-//! * Keyboard focus: a `key` popover becomes the key window; its parent keeps reporting
-//!   itself active (`key_popovers`), so zpui draws it as focused, and the parent's
-//!   private active-appearance hooks (installed only when AppKit has them) keep the
-//!   traffic lights lit.
+//! * Keyboard focus: a `key` popover becomes the key window but never the main window
+//!   (`canBecomeMainWindow` is NO for non-activating panels), so the parent stays main
+//!   and AppKit keeps its traffic lights coloured, as for a utility panel. The parent
+//!   also keeps reporting itself active (`key_popovers`), so zpui draws it as focused.
 //! * Dismissal: losing key status (a click in another window or app, an app switch)
 //!   reports `popover_dismiss(.outside_click)`; presses inside the parent and Escape are
 //!   handled by the core.

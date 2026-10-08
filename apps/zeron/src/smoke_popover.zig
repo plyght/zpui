@@ -39,6 +39,10 @@ pub fn begin(gpa: std.mem.Allocator, io: std.Io, out: []const u8, win: *Window, 
     if (builtin.os.tag != .macos) return fail(app, done, "native popover captures are macOS only");
     ctx = .{ .gpa = gpa, .io = io, .out = out, .kind = kind, .done = done };
     std.debug.print("zeron smoke: native popover: {t} (native popovers {s})\n", .{ kind, if (win.nativePopoversAvailable()) "available" else "unavailable" });
+    // The captures should show the app frontmost (main window active, coloured traffic
+    // lights), as when someone clicks the picker.
+    activate(win);
+    logWindowState(win, "before");
     switch (kind) {
         // The project chip is on the new-session canvas.
         .project => win.dispatchAction(shell_actions.NewSession{}),
@@ -78,6 +82,7 @@ const Step = struct {
                 next.left -= 1;
             },
             .settle => if (next.left == 0) {
+                if (!logWindowState(win, "open")) return fail(app, c.done, "the main window lost main status to the popover");
                 const ok = if (capture(c, win)) true else |err| blk: {
                     std.debug.print("FAIL: zeron smoke: native popover capture: {t}\n", .{err});
                     break :blk false;
@@ -109,6 +114,44 @@ fn act(c: *const Ctx, win: *Window, app: *App) !void {
             _ = win.dispatchEvent(.{ .mouse_move = .{ .position = p } });
         },
     }
+}
+
+/// Bring the app and its main window to the front (macOS).
+fn activate(win: *Window) void {
+    if (builtin.os.tag != .macos) return;
+    const mac = zpui.mac_platform;
+    const ak = mac.appkit;
+    const nsapp = ak.sharedApp();
+    const objc = mac.objc_runtime;
+    if (nsapp.msg(objc.BOOL, "respondsToSelector:", .{objc.cachedSel("activate")}) == objc.YES) nsapp.msg(void, "activate", .{});
+    nsapp.msg(void, "activateIgnoringOtherApps:", .{objc.YES});
+    mac.MacWindow.fromWindow(win.platform_window).native_window.msg(void, "makeKeyAndOrderFront:", .{@as(?objc.id, null)});
+}
+
+/// Log `[NSApp mainWindow]` / `keyWindow` (main window, popover, other, none) and
+/// whether the app is active. False when a popover is main (the parent lost main).
+fn logWindowState(win: *Window, comptime when: []const u8) bool {
+    if (builtin.os.tag != .macos) return true;
+    const mac = zpui.mac_platform;
+    const objc = mac.objc_runtime;
+    const nsapp = mac.appkit.sharedApp();
+    const main_ns = mac.MacWindow.fromWindow(win.platform_window).native_window;
+    const pop_ns: ?objc.id = if (visiblePopover(win)) |pw| mac.MacWindow.fromWindow(pw.platform_window).native_window else null;
+    const Name = struct {
+        fn of(w: ?objc.id, m: objc.id, p: ?objc.id) []const u8 {
+            const x = w orelse return "none";
+            if (x == m) return "main window";
+            if (p != null and x == p.?) return "popover";
+            return "other";
+        }
+    };
+    const main_w = nsapp.msg(?objc.id, "mainWindow", .{});
+    const key_w = nsapp.msg(?objc.id, "keyWindow", .{});
+    const active = nsapp.msg(objc.BOOL, "isActive", .{}) == objc.YES;
+    std.debug.print("zeron smoke: window state ({s}): app active={} NSApp.mainWindow={s} NSApp.keyWindow={s} parent isMainWindow={}\n", .{
+        when, active, Name.of(main_w, main_ns, pop_ns), Name.of(key_w, main_ns, pop_ns), main_ns.msg(objc.BOOL, "isMainWindow", .{}) == objc.YES,
+    });
+    return !(pop_ns != null and main_w != null and main_w.? == pop_ns.?);
 }
 
 /// The parent's shown popover window, if any.
