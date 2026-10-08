@@ -66,6 +66,7 @@ const Demo = struct {
     smoke_frames: ?u64 = null,
     smoke_phase: enum { off, warmup, resizing, idle, done } = .off,
     resize_step: u32 = 0,
+    resize_start_ns: u64 = 0,
     idle_start_frames: u64 = 0,
     idle_start_cpu_ns: u64 = 0,
     input_wait_ns: u64 = 0,
@@ -306,13 +307,16 @@ const Demo = struct {
                 d.smoke_phase = .resizing;
             },
             .resizing => {
-                // 60 anchored resizes, one per tick (grow then shrink back), then hide / show.
+                // 60 anchored resizes, one per 8 ms tick (grow then shrink back), then hide / show.
+                if (d.resize_step == 0) d.resize_start_ns = d.now();
                 if (d.resize_step < 60) {
                     const t: f32 = @floatFromInt(d.resize_step);
                     const wdt: f32 = 160 + 60 * @sin(t / 60 * std.math.pi);
                     d.setSize(.{ .width = @round(wdt), .height = @round(wdt) });
                     d.resize_step += 1;
                 } else {
+                    const secs = @as(f64, @floatFromInt(d.now() - d.resize_start_ns)) / std.time.ns_per_s;
+                    std.debug.print("60 anchored resizes in {d:.2} s ({d:.0}/s)\n", .{ secs, 60 / secs });
                     d.setSize(.{ .width = 160, .height = 160 });
                     d.setVisible(false);
                     d.setVisible(true);
@@ -321,7 +325,7 @@ const Demo = struct {
                     disp.dispatchAfter(d.input_wait_ns + 500 * std.time.ns_per_ms, .{ .ctx = d, .run = onIdleStart });
                     return;
                 }
-                disp.dispatchAfter(16 * std.time.ns_per_ms, .{ .ctx = d, .run = onSmokeTick });
+                disp.dispatchAfter(8 * std.time.ns_per_ms, .{ .ctx = d, .run = onSmokeTick });
                 return;
             },
             else => return,
