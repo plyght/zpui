@@ -29,6 +29,9 @@
 //!   Linux    PipeWire pw_stream (node.latency 256/48000, RT data thread) →
 //!            PulseAudio (tlength 512 frames, minreq 256) → ALSA "default"
 //!            (5 ms period × 4); none available → `.none`, play() is a no-op.
+//!
+//! `ActivityMonitor` (activity.zig) reports whether other processes are
+//! playing audio or recording, so typing sounds can mute themselves.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -38,6 +41,10 @@ pub const sys = @import("sys.zig");
 pub const mixer = @import("mixer.zig");
 pub const wav = @import("wav.zig");
 pub const engine = @import("engine.zig");
+pub const activity = @import("activity.zig");
+pub const ActivityMonitor = activity.ActivityMonitor;
+pub const ActivityPolicy = activity.Policy;
+pub const Activity = activity.Activity;
 const Engine = engine.Engine;
 pub const DeviceInfo = engine.DeviceInfo;
 
@@ -415,8 +422,11 @@ test {
     _ = sys;
     _ = mixer;
     _ = wav;
+    _ = activity;
     _ = @import("tests.zig");
     if (os == .linux) {
         _ = @import("pipewire.zig");
+        _ = @import("activity_pulse.zig");
+        _ = @import("activity_pipewire.zig");
     }
 }

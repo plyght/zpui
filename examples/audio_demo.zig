@@ -76,6 +76,13 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
+    const monitor = za.ActivityMonitor.init(gpa, .{}) catch null;
+    defer if (monitor) |m| m.deinit();
+    if (monitor) |m| {
+        std.debug.print("activity monitor: {s}; other audio: {}, mic in use: {}\n", .{ m.backendName(), m.otherAudioPlaying(), m.microphoneInUse() });
+        m.setCallback(onActivity, null);
+    }
+
     if (st.backend == .none) {
         std.debug.print("no output device; nothing to play (play() is a no-op)\n", .{});
         return;
@@ -87,6 +94,8 @@ pub fn main(init: std.process.Init) !void {
     while (za.sys.nowNs() < t_end) {
         const k = pattern.next();
         za.sys.sleepNs(k.delay_ns);
+        if (monitor) |m| _ = m.dispatch();
+        if (monitor) |m| if (m.shouldMute()) continue;
         audio.play(clicks[k.variant], k.opts);
         played += 1;
     }
@@ -95,6 +104,7 @@ pub fn main(init: std.process.Init) !void {
     var waited: u32 = 0;
     while (audio.status().running and waited < 60) : (waited += 1) {
         za.sys.sleepNs(100 * std.time.ns_per_ms);
+        if (monitor) |m| _ = m.dispatch();
     }
     std.debug.print("suspended: {} (after ~{d} ms idle wait)\n", .{ !audio.status().running, waited * 100 });
 
@@ -107,6 +117,10 @@ pub fn main(init: std.process.Init) !void {
         while (audio.status().running and w < 40) : (w += 1) za.sys.sleepNs(100 * std.time.ns_per_ms);
     }
     printStats(audio.stats(), s0);
+}
+
+fn onActivity(_: ?*anyopaque, m: *za.ActivityMonitor) void {
+    std.debug.print("activity: other audio playing = {}, microphone in use = {} → mute: {}\n", .{ m.otherAudioPlaying(), m.microphoneInUse(), m.shouldMute() });
 }
 
 fn renderOffline(gpa: std.mem.Allocator, io: std.Io, audio: *za.Audio, clicks: []const za.SoundId, pattern: *Pattern, seconds: f64, path: []const u8) !void {
