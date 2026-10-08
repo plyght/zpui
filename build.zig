@@ -248,6 +248,7 @@ fn addMetalRenderer(
     const install_check = b.addInstallFile(check.getEmittedBin(), "metal-check.o");
     const check_step = b.step("metal-check", "Compile the Metal renderer to zig-out/metal-check.o (no SDK needed)");
     check_step.dependOn(&install_check.step);
+    const font_compare = addFontCompare(b, target, optimize, zpui, native);
     if (!native) {
         b.getInstallStep().dependOn(&install_check.step);
         return;
@@ -281,6 +282,28 @@ fn addMetalRenderer(
     run.addPassthruArgs();
     const step = b.step("render-test", "Render the showcase scene offscreen with Metal to zig-out/render-test.png");
     step.dependOn(&run.step);
+    if (font_compare) |fc| {
+        const fc_run = b.addRunArtifact(fc);
+        fc_run.setCwd(b.path("."));
+        fc_run.addPassthruArgs();
+        b.step("font-compare", "Render tools/font-compare/cases.json with zpui (Metal + CoreText) to zig-out/font-compare").dependOn(&fc_run.step);
+    }
+}
+
+/// tools/font-compare: zpui's half of the native-vs-zpui system font comparison
+/// (`font-compare-check` compiles it without an SDK; `font-compare` runs it on a Mac).
+fn addFontCompare(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, zpui: *std.Build.Module, native: bool) ?*std.Build.Step.Compile {
+    const png = b.createModule(.{ .root_source_file = b.path("examples/png.zig"), .target = target, .optimize = optimize });
+    const root = b.createModule(.{
+        .root_source_file = b.path("tools/font-compare/zpui_render.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "zpui", .module = zpui }, .{ .name = "png", .module = png } },
+    });
+    const check = b.addObject(.{ .name = "font-compare-check", .root_module = root });
+    b.step("font-compare-check", "Compile tools/font-compare/zpui_render.zig (no SDK needed)").dependOn(&b.addInstallFile(check.getEmittedBin(), "font-compare-check.o").step);
+    if (!native) return null;
+    return b.addExecutable(.{ .name = "font-compare", .root_module = root });
 }
 
 /// zeron design system: `zeron_theme` (apps/zeron/src/theme) and

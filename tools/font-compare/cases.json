@@ -1,0 +1,301 @@
+{
+ "width": 720,
+ "cases": [
+  {
+   "id": "grid-11-400",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 11,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-12-400",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 12,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-13-400",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 13,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-14-400",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 14,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-16-400",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 16,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-20-400",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 20,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-28-400",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 28,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-11-500",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 11,
+   "weight": 500,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-12-500",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 12,
+   "weight": 500,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-13-500",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 13,
+   "weight": 500,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-14-500",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 14,
+   "weight": 500,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-16-500",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 16,
+   "weight": 500,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-20-500",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 20,
+   "weight": 500,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-28-500",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 28,
+   "weight": 500,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-11-600",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 11,
+   "weight": 600,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-12-600",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 12,
+   "weight": 600,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-13-600",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 13,
+   "weight": 600,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-14-600",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 14,
+   "weight": 600,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-16-600",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 16,
+   "weight": 600,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-20-600",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 20,
+   "weight": 600,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "grid-28-600",
+   "text": "Hamburgefonstiv quick brown fox 0123456789",
+   "size": 28,
+   "weight": 600,
+   "fg": "#ffffffd9",
+   "bg": "#1e1e1e"
+  },
+  {
+   "id": "safari-address",
+   "text": "claude.ai",
+   "size": 13,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#2e302f"
+  },
+  {
+   "id": "sysset-row-wifi",
+   "text": "Wi-Fi",
+   "size": 13,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#232527"
+  },
+  {
+   "id": "sysset-row-bluetooth",
+   "text": "Bluetooth",
+   "size": 13,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#232527"
+  },
+  {
+   "id": "sysset-row-network",
+   "text": "Network",
+   "size": 13,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#232527"
+  },
+  {
+   "id": "sysset-row-accessibility",
+   "text": "Accessibility",
+   "size": 13,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#232527"
+  },
+  {
+   "id": "sysset-row-desktop",
+   "text": "Desktop & Dock",
+   "size": 13,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#232527"
+  },
+  {
+   "id": "sysset-row-applecare",
+   "text": "AppleCare & Warranty",
+   "size": 13,
+   "weight": 400,
+   "fg": "#ffffffd9",
+   "bg": "#232527"
+  },
+  {
+   "id": "sysset-desc",
+   "text": "Manage your overall setup and preferences for Mac, such as software updates,",
+   "size": 13,
+   "weight": 400,
+   "fg": "#ffffff8c",
+   "bg": "#2a2a2c"
+  },
+  {
+   "id": "sysset-title",
+   "text": "General",
+   "size": 26,
+   "weight": 700,
+   "fg": "#ffffffd9",
+   "bg": "#2a2a2c"
+  },
+  {
+   "id": "zeron-nav-general",
+   "text": "General",
+   "size": 13,
+   "weight": 400,
+   "fg": "#a9a9aeff",
+   "bg": "#0d0d0d"
+  },
+  {
+   "id": "zeron-nav-appearance",
+   "text": "Appearance",
+   "size": 13,
+   "weight": 400,
+   "fg": "#a9a9aeff",
+   "bg": "#0d0d0d"
+  },
+  {
+   "id": "zeron-nav-fonts",
+   "text": "Fonts",
+   "size": 13,
+   "weight": 400,
+   "fg": "#a9a9aeff",
+   "bg": "#0d0d0d"
+  },
+  {
+   "id": "zeron-nav-keyboard",
+   "text": "Keyboard Shortcuts",
+   "size": 13,
+   "weight": 400,
+   "fg": "#a9a9aeff",
+   "bg": "#0d0d0d"
+  },
+  {
+   "id": "zeron-nav-notifications",
+   "text": "Notifications",
+   "size": 13,
+   "weight": 400,
+   "fg": "#a9a9aeff",
+   "bg": "#0d0d0d"
+  },
+  {
+   "id": "zeron-nav-selected",
+   "text": "Appearance",
+   "size": 13,
+   "weight": 500,
+   "fg": "#e8e8eaff",
+   "bg": "#0d0d0d"
+  },
+  {
+   "id": "zeron-nav-14base",
+   "text": "Appearance",
+   "size": 11.375,
+   "weight": 400,
+   "fg": "#a9a9aeff",
+   "bg": "#0d0d0d"
+  }
+ ]
+}

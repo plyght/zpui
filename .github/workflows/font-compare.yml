@@ -1,0 +1,64 @@
+name: Font compare
+
+# Manual: native AppKit system font (NSFont.systemFont(ofSize:weight:) in NSTextField) vs
+# zpui's ".SystemUIFont" (CoreText shaping + rasterization + Metal sprites), side by side,
+# for 11-28 px at regular / medium / semibold plus reference cases from Safari and System
+# Settings on dark (tools/font-compare/cases.json). Uploads the renders, per-case advance and
+# line-width deltas (budget 0.5 px), CoreText diagnostics and side-by-side sheets.
+# `before_ref`: also render zpui with src/ from that commit (zig-out/font-compare/before).
+on:
+  workflow_dispatch:
+    inputs:
+      before_ref:
+        description: Also render zpui with src/ from this commit (empty = skip)
+        default: ""
+
+jobs:
+  compare:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-26]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: macOS version
+        run: |
+          sw_vers
+          defaults read -g AppleFontSmoothing 2>&1 || echo "AppleFontSmoothing unset"
+          system_profiler SPDisplaysDataType 2>/dev/null | grep -E "Resolution|Retina|UI Looks" || true
+      - name: Pillow
+        run: |
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install --quiet pillow
+      - name: Native (AppKit)
+        run: swift tools/font-compare/native.swift tools/font-compare/cases.json zig-out/font-compare 2>&1 | tee zig-out-native.log
+      - name: zpui
+        run: zig build font-compare --summary all -- tools/font-compare/cases.json zig-out/font-compare
+      - name: zpui before (src/ at ${{ inputs.before_ref }})
+        if: inputs.before_ref != ''
+        run: |
+          git worktree add "$RUNNER_TEMP/before" HEAD
+          git -C "$RUNNER_TEMP/before" checkout "${{ inputs.before_ref }}" -- src
+          (cd "$RUNNER_TEMP/before" && zig build font-compare --summary all -- tools/font-compare/cases.json "$GITHUB_WORKSPACE/zig-out/font-compare/before")
+      - name: Compare
+        run: |
+          py="$RUNNER_TEMP/venv/bin/python3"
+          "$py" tools/font-compare/compare.py tools/font-compare/cases.json zig-out/font-compare
+          if [ -d zig-out/font-compare/before ]; then
+            mkdir -p zig-out/font-compare/vs-before
+            cp zig-out/font-compare/native* zig-out/font-compare/vs-before/
+            "$py" tools/font-compare/compare.py tools/font-compare/cases.json zig-out/font-compare/vs-before zig-out/font-compare/before --label before
+          fi
+          cp zig-out-native.log zig-out/font-compare/native.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: font-compare-${{ matrix.os }}
+          path: zig-out/font-compare/
