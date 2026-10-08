@@ -296,7 +296,7 @@ pub const MainPanel = struct {
         if (frame.current == null and frame.previous == null) return null;
         if (frame.active) window.requestAnimationFrame();
         const composer = self.slots.composer_view.read(cx);
-        return background.hero.layer(frame, window.viewportSize().height, self.width, &composer.surface_bounds, theme.surface_treatment == .frosted);
+        return background.hero.layer(frame, window.viewportSize().height, self.width, &composer.surface_bounds, theme.surface_treatment == .frosted, model.background_fade.current(app));
     }
 
     fn onDropPaths(self: *MainPanel, paths: *const zpui.ExternalPaths, _: *Window, cx: *Context(MainPanel)) void {

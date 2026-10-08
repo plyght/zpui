@@ -11,7 +11,8 @@
 //! Flags:
 //!   --fixtures <dir>        run without an engine from JSON fixtures (also ZERON_FIXTURES;
 //!                           ZERON_FIXTURE_SETTINGS_DIR=<dir> seeds the in-memory settings
-//!                           from <dir>/ui-settings.json, never written back)
+//!                           from <dir>/ui-settings.json and new-thread-background-fade.json,
+//!                           never written back)
 //!   --frames <n>            quit after n presented frames (scripted screenshots)
 //!   --size <w>x<h>          initial window size
 //!   --light / --dark        appearance override
@@ -125,6 +126,8 @@ fn onLaunch(l: *Launch, app: *App) void {
             model.settings_store.init(app, l.io, dir) catch |err| log.warn("settings: {t}", .{err});
             // Sticky composer picks + the explicit new-thread defaults.
             model.composer_store.init(app, l.io, dir) catch |err| log.warn("composer defaults: {t}", .{err});
+            // Settings → Appearance → Background fade (its own file; Rust drops unknown ui-settings keys).
+            model.background_fade.init(app, l.io, dir) catch |err| log.warn("background fade: {t}", .{err});
             // The custom theme library joins the registry before the first theme is built.
             settings_ui.theme_library.init(app, l.io, dir, true);
             if (model.settings_store.current(app)) |s| {
@@ -136,6 +139,7 @@ fn onLaunch(l: *Launch, app: *App) void {
     } else if (l.environ.get("ZERON_FIXTURE_SETTINGS_DIR")) |dir| {
         // Fixture run with a real (read-only) ui-settings.json, e.g. a background image.
         model.settings_store.initMemoryFrom(app, l.io, dir) catch |err| log.warn("settings: {t}", .{err});
+        model.background_fade.initMemoryFrom(app, l.io, dir) catch |err| log.warn("background fade: {t}", .{err});
         settings_ui.theme_library.init(app, l.io, dir, false);
     }
     actions.keymap.applyKeymap(app, &keymap_cfg, send) catch |err| log.err("keymap: {t}", .{err});

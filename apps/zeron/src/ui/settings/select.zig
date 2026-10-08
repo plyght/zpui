@@ -59,6 +59,8 @@ pub const SelectId = enum(u8) {
     update_policy,
     /// Appearance → Background effect (only while an image is available).
     background_effect,
+    /// Appearance → Background fade (beside the effect; `model.background_fade`).
+    background_fade,
     /// [dictation] Voice → Microphone (once dictation is on and ready).
     microphone,
     /// General → New threads (new_thread_defaults.zig).
@@ -167,6 +169,10 @@ fn formatPx(size: f32) []const u8 {
 fn familyIx(list: []const typography.UiFontFamily, f: typography.UiFontFamily) usize {
     for (list, 0..) |x, i| if (std.meta.activeTag(x) == std.meta.activeTag(f)) return i;
     return 0;
+}
+
+fn appOf(cx: anytype) *zpui.App {
+    return if (@TypeOf(cx) == *zpui.App) cx else cx.app;
 }
 
 fn appearanceOf(id: SelectId) zt.Appearance {
@@ -293,6 +299,12 @@ pub fn spec(v: *SettingsView, id: SelectId, cx: anytype) Spec {
             for (all) |e| list.append(a, .{ .label = e.label() }) catch {};
             const sel = std.mem.indexOfScalar(Effect, &all, s.newThreadBackgroundEffect) orelse 0;
             return .{ .label = "Background effect", .options = list.items, .selected = sel, .width = 128 };
+        },
+        .background_fade => {
+            const Fade = model.background_fade.BackgroundFade;
+            for (Fade.all) |f| list.append(a, .{ .label = f.label() }) catch {};
+            const sel = std.mem.indexOfScalar(Fade, &Fade.all, model.background_fade.current(appOf(cx))) orelse 0;
+            return .{ .label = "Background fade", .options = list.items, .selected = sel, .width = 128 };
         },
         .default_agent, .default_model => return new_thread_defaults.spec(v, id, a, cx),
         .thread_naming => {
@@ -428,6 +440,9 @@ pub fn commit(v: *SettingsView, id: SelectId, ix: usize, cx: *Context(SettingsVi
         .background_effect => if (ix < 5) {
             const all = [_]model.settings.NewThreadBackgroundEffect{ .none, .dither, .ascii, .halftone, .scanlines };
             background.install.setEffect(cx.app, all[ix]);
+        },
+        .background_fade => if (ix < model.background_fade.BackgroundFade.all.len) {
+            model.background_fade.set(cx.app, model.background_fade.BackgroundFade.all[ix]);
         },
         .thread_naming => thread_naming.commit(v, ix, cx),
         .default_agent, .default_model => new_thread_defaults.commit(v, id, ix, cx),

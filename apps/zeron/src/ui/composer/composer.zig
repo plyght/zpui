@@ -660,6 +660,15 @@ pub const ComposerView = struct {
 
     // ---- selection / drafts -------------------------------------------------------------
 
+    /// [background-fade] The cutout reveal around the pill while it sits on
+    /// the new-thread artwork (null in a chat or without a background).
+    fn heroReveal(self: *const ComposerView, cx: anytype) ?f32 {
+        if (self.selectedChat(cx) != null) return null;
+        const s = model.settings_store.current(cx.app) orelse return null;
+        if (s.newThreadComposerBackground == null) return null;
+        return model.background_fade.current(cx.app).cutoutReveal();
+    }
+
     fn selectedChat(self: *const ComposerView, cx: anytype) ?[]const u8 {
         const ws = self.state.read(cx).workspace.read(cx);
         return ws.selected_chat;
@@ -1593,7 +1602,7 @@ pub const ComposerView = struct {
         var pill = div()
             .onMouseDown(.left, cx.listener(ComposerView.onPillMouseDown))
             .rounded(px(m.composer_radius)).border1().borderColor(theme.onGlassBorder(theme.composerSurfaceBorder()))
-            .bg(theme.onGlass(theme.composerSurfaceBg())); // [liquid-glass] onGlass: no-op unless Liquid Glass
+            .bg(theme.onGlass(chrome.heroSurfaceBg(theme, self.heroReveal(cx)))); // [liquid-glass] onGlass: no-op unless Liquid Glass
         if (!theme.isFrost()) pill = pill.shadowLg();
 
         const body = if (expanded)

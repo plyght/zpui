@@ -260,10 +260,27 @@ fn measureZoom(v: *SettingsView, b: Bounds, _: *Window, _: *zpui.App) void {
     if (v.adjust) |*d| d.zoom_bounds = b;
 }
 
-const PaintCtx = struct { image: *RenderImage, draft: Adjustment };
+/// One pass of the preview: like the runtime hero (`hero.imageLayer`), the
+/// chosen Background fade's reveal pass under its cutout pass (scaled from
+/// the composer the canvas last painted around); `none` is one unmasked pass.
+const PaintCtx = struct { image: *RenderImage, draft: Adjustment, fade: background.hero.Fade = .none, cutout: bool = false };
 
 fn paintPreview(ctx: PaintCtx, b: Bounds, window: *Window, _: *zpui.App) void {
-    background.hero.paintAdjusted(window, ctx.image, b, ctx.draft, zpui.Corners(f32).all(11), null);
+    background.hero.paintAdjusted(window, ctx.image, b, ctx.draft, zpui.Corners(f32).all(11), background.hero.previewMask(b, ctx.cutout, ctx.fade));
+}
+
+fn previewPass(ctx: PaintCtx, size: zpui.Size(f32), alpha: f32) zpui.Div {
+    return div().absolute().top(px(0)).left(px(0)).w(px(size.width)).h(px(size.height)).opacity(alpha)
+        .child(zpui.canvas(ctx, paintPreview).w(px(size.width)).h(px(size.height)));
+}
+
+/// Where the composer sits on the hero (a hairline outline, so the cutout reads).
+fn composerOutline(t: *const Theme, size: zpui.Size(f32)) zpui.Div {
+    const local: Bounds = .{ .origin = .{ .x = 0, .y = 0 }, .size = size };
+    const c = background.hero.previewGeometry(local).composer;
+    const radius = background.hero.composer_radius * background.hero.previewScale(local);
+    return div().absolute().left(px(c.origin.x)).top(px(c.origin.y)).w(px(c.size.width)).h(px(@min(c.size.height, @max(size.height - c.origin.y, 0))))
+        .rounded(px(radius)).border1().borderColor(t.hairline(0.28));
 }
 
 fn noPaint(_: *SettingsView, _: Bounds, _: *Window, _: *zpui.App) void {}
@@ -307,7 +324,16 @@ pub fn render(v: *SettingsView, window: *Window, cx: *Context(SettingsView)) ?zp
         .onMouseDown(.left, cx.listener(onPreviewDown))
         .child(zpui.canvas(v, noPaint).withPrepaint(*SettingsView, measurePreview).w(px(size.width)).h(px(size.height)).absolute().top(px(0)).left(px(0)));
     if (ready) preview = preview.cursor(if (dragging) .closed_hand else .open_hand);
-    if (image) |img| preview = preview.child(zpui.canvas(PaintCtx{ .image = img, .draft = d.draft }, paintPreview).w(px(size.width)).h(px(size.height)));
+    if (image) |img| {
+        const fade = model.background_fade.current(app);
+        if (fade == .none) {
+            preview = preview.child(previewPass(.{ .image = img, .draft = d.draft }, size, 1));
+        } else {
+            preview = preview.child(previewPass(.{ .image = img, .draft = d.draft, .fade = fade, .cutout = false }, size, fade.cutoutReveal()))
+                .child(previewPass(.{ .image = img, .draft = d.draft, .fade = fade, .cutout = true }, size, 1));
+        }
+        preview = preview.child(composerOutline(t, size));
+    }
     if (!ready) preview = preview.child(div().absolute().inset0().flex().itemsCenter().justifyCenter()
         .textSize(rems(11.5)).textColor(t.text_muted)
         .child(if (!same_image) "Background changed. Close and adjust the new image." else if (!available) "Image unavailable. Choose a replacement or remove it." else "Preparing preview…"));

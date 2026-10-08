@@ -29,6 +29,7 @@ pub const settings_store = @import("settings_store.zig");
 pub const composer_defaults = @import("composer_defaults.zig");
 /// The composer-defaults global (+ explicit new-thread defaults).
 pub const composer_store = @import("composer_store.zig");
+pub const background_fade = @import("background_fade.zig");
 pub const types = @import("types.zig");
 pub const engine_state = @import("engine_state.zig");
 pub const workspace = @import("workspace.zig");

@@ -162,6 +162,58 @@ jobs:
             ZERON_SMOKE_SETTINGS=$page ZERON_SMOKE_OUT=zig-out/zeron-macos-settings-$page.png \
               ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
           done
+      # Settings → Appearance → Background fade: the new-thread canvas (--select none) with
+      # a busy and a plain background image under each option (Full = the Rust look,
+      # Subtle = the default, None = edge to edge), dark and light, plus the Appearance
+      # page showing the new select. ZERON_FIXTURE_SETTINGS_DIR seeds ui-settings.json and
+      # new-thread-background-fade.json read-only.
+      - name: Smoke test zeron new-thread background fade (Full, Subtle, None)
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          art="$RUNNER_TEMP/fade-art"
+          mkdir -p "$art"
+          python3 - "$art" <<'EOF'
+          import math, struct, sys, zlib
+          def png(path, w, h, px):
+              rows = bytearray()
+              for y in range(h):
+                  rows.append(0)
+                  for x in range(w):
+                      rows.extend(px(x, y))
+              def chunk(t, d):
+                  return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+              with open(path, "wb") as f:
+                  f.write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+                          + chunk(b"IDAT", zlib.compress(bytes(rows), 6)) + chunk(b"IEND", b""))
+          W, H = 1200, 700
+          def busy(x, y):
+              u, v = x / W, y / H
+              a = math.sin(x * 0.045) + math.sin(y * 0.06) + math.sin((x + y) * 0.03) + math.sin(math.hypot(x - 600, y - 300) * 0.05)
+              stripe = 60 if (x // 40 + y // 40) % 2 else 0
+              r = int(127 + 120 * math.sin(a * 1.7)) ; g = int(127 + 120 * math.sin(a * 1.7 + 2.1)); b = int(127 + 120 * math.sin(a * 1.7 + 4.2))
+              return bytes((min(255, r + stripe), min(255, int(g * (1 - v * 0.3))), min(255, b + int(u * 40))))
+          def plain(x, y):
+              v = y / H
+              return bytes((int(214 - 90 * v), int(170 - 60 * v), int(140 + 40 * v)))
+          png(sys.argv[1] + "/busy.png", W, H, busy)
+          png(sys.argv[1] + "/plain.png", W, H, plain)
+          EOF
+          for img in busy plain; do
+            for fade in full subtle none; do
+              dir="$RUNNER_TEMP/fade-$img-$fade"
+              mkdir -p "$dir"
+              printf '{"newThreadComposerBackground":{"path":"%s","name":"%s.png"}}' "$art/$img.png" "$img" > "$dir/ui-settings.json"
+              printf '{"fade":"%s"}' "$fade" > "$dir/new-thread-background-fade.json"
+              for mode in dark light; do
+                ZERON_FIXTURE_SETTINGS_DIR="$dir" ZERON_SMOKE_OUT=zig-out/zeron-macos-fade-$img-$fade-$mode.png \
+                  ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --select none --smoke-frames 90 --$mode
+              done
+            done
+          done
+          ZERON_FIXTURE_SETTINGS_DIR="$RUNNER_TEMP/fade-busy-subtle" ZERON_SMOKE_SETTINGS=appearance \
+            ZERON_SMOKE_OUT=zig-out/zeron-macos-fade-settings-appearance.png \
+            ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --select none --smoke-frames 60 --dark
       # [liquid-glass] macOS 15 has no NSGlassEffectView: forcing the Liquid Glass setting
       # must take the frosted fallback (no native glass views) and still render.
       - name: Smoke test zeron, Liquid Glass forced → frosted fallback (macOS 15)

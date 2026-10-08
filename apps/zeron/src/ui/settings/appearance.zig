@@ -326,6 +326,12 @@ fn materialCard(v: *SettingsView, t: *const Theme, s: *const UiSettings, cx: *Co
     if (available) card = card.child(w.cardRow(t, false)
         .child(w.textBlock(t, "Background effect", &.{.{ .text = s.newThreadBackgroundEffect.description() }}).flex1().minW(px(160)))
         .child(select.render(v, .background_effect, t, cx)));
+    if (available) {
+        const fade = model.background_fade.current(app);
+        card = card.child(w.cardRow(t, false)
+            .child(w.textBlock(t, "Background fade", &.{.{ .text = fade.description() }}).flex1().minW(px(160)))
+            .child(select.render(v, .background_fade, t, cx)));
+    }
 
     if (background.install.lastError(app)) |err| card = card.child(div().mx(px(16)).py(px(10)).borderT1().borderColor(w.rowDivider(t))
         .child(w.errorStrip(t, err).mt0()));

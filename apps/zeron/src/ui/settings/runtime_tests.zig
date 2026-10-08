@@ -176,11 +176,26 @@ test "Choose image installs the picked file and the new-thread canvas paints it;
     v.update(h.app, commitSelect, .{ select.SelectId.background_effect, 3 });
     try testing.expectEqual(model.settings.NewThreadBackgroundEffect.halftone, h.settings().newThreadBackgroundEffect);
 
+    // Background fade select (menu order Subtle, Full, None; Subtle by default).
+    const Fade = model.background_fade.BackgroundFade;
+    try testing.expectEqual(Fade.subtle, model.background_fade.current(h.app));
+    try testing.expectEqual(@as(usize, 0), select.selectedIndex(@constCast(v.read(h.app)), .background_fade, h.app));
+    v.update(h.app, commitSelect, .{ select.SelectId.background_fade, 2 });
+    try testing.expectEqual(Fade.none, model.background_fade.current(h.app));
+    try testing.expectEqual(@as(usize, 2), select.selectedIndex(@constCast(v.read(h.app)), .background_fade, h.app));
+    h.frames(2);
+
     // Back on the canvas the hero shows the artwork.
     h.tw().typeKey("escape");
     h.frames(6);
     const panel = h.handle.rootView(h.app).?.read(h.app).main.read(h.app);
     try testing.expect(panel.artwork_ready.current != null);
+    // Every fade paints the same artwork (None unmasked, Full/Subtle two passes).
+    for ([_]Fade{ .full, .subtle, .none }) |f| {
+        model.background_fade.set(h.app, f);
+        h.frames(2);
+        try testing.expect(h.handle.rootView(h.app).?.read(h.app).main.read(h.app).artwork_ready.current != null);
+    }
 
     _ = h.openSettings(.appearance);
     act(&h, appearance.removeBackground);
