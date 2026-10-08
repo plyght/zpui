@@ -17,6 +17,10 @@ pub const native_view_mod = @import("native_view.zig");
 pub const nativeView = native_view_mod.nativeView;
 pub const nativeViewWith = native_view_mod.nativeViewWith;
 pub const native_control = @import("native_control.zig");
+pub const native_popover = @import("native_popover.zig");
+pub const nativePopover = native_popover.nativePopover;
+pub const NativePopover = native_popover.NativePopover;
+pub const popoverContent = native_popover.content;
 // [liquid-glass] native Liquid Glass (liquid_glass.zig)
 pub const liquid_glass = @import("liquid_glass.zig");
 pub const liquidGlass = liquid_glass.liquidGlass;

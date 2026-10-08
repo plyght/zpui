@@ -51,6 +51,7 @@ pub const input_handler = @import("input_handler.zig");
 pub const image = @import("image.zig");
 pub const liquid_glass_mod = @import("liquid_glass.zig"); // [liquid-glass]
 pub const native_controls_mod = @import("native_controls.zig");
+pub const native_popover_mod = @import("native_popover.zig");
 /// Accessibility tree (src/a11y.zig).
 pub const a11y = @import("../a11y.zig");
 
@@ -265,6 +266,7 @@ pub const PaintIndex = struct {
     line_layout: text_mod.LineLayoutIndex = .{},
     native_views: usize = 0,
     overlay_ranges: usize = 0,
+    popovers: usize = 0,
 };
 
 /// An `onA11yAction` registration for one node of the frame's accessibility tree.
@@ -325,6 +327,8 @@ pub const Frame = struct {
     /// Accessibility tree, built while accessibility is active (`Window.a11yActive`).
     a11y: a11y.Tree,
     a11y_listeners: std.ArrayList(A11yListener) = .empty,
+    /// Native popovers shown this frame (`zpui.nativePopover`, native tooltips).
+    popover_requests: std.ArrayList(native_popover_mod.Request) = .empty,
 
     fn init(gpa: Allocator, keymap: *const @import("../app/keymap.zig").Keymap) Frame {
         return .{ .gpa = gpa, .dispatch_tree = .init(gpa, keymap), .a11y = .init(gpa) };
@@ -347,6 +351,7 @@ pub const Frame = struct {
         self.overlay_ranges.deinit(self.gpa);
         self.a11y.deinit();
         self.a11y_listeners.deinit(self.gpa);
+        self.popover_requests.deinit(self.gpa);
     }
 
     /// Reset for reuse. Element states still here were not carried into the newer frame,
@@ -370,6 +375,7 @@ pub const Frame = struct {
         self.overlay_capture_input = false;
         self.a11y.clear();
         self.a11y_listeners.clearRetainingCapacity();
+        self.popover_requests.clearRetainingCapacity();
         self.backdrop_hole = null; // [liquid-glass]
         self.focus = null;
         self.window_active = false;
@@ -509,6 +515,13 @@ pub const Window = struct {
     liquid_glass: liquid_glass_mod.Pool = .{},
     /// Native form controls of this window (native_controls.zig).
     native_controls: native_controls_mod.Pool = .{},
+    /// Native popover windows this window owns (native_popover.zig).
+    native_popovers: native_popover_mod.Pool = .{},
+    /// Set when this window is itself a native popover (sized to its content).
+    popover_role: ?native_popover_mod.Role = null,
+    /// Show tooltips in native popover windows (when the platform has them).
+    native_tooltips: bool = false,
+    native_tooltip_options: native_popover_mod.Options = native_popover_mod.tooltip_options,
     /// [liquid-glass] The backdrop hole last handed to the platform window.
     applied_backdrop_hole: ?platform.BackdropHole = null,
     /// Native views placed by the last present (hidden when a frame omits them).
@@ -602,6 +615,7 @@ pub const Window = struct {
             .a11y_action = cbA11yAction,
             .a11y_activation = cbA11yActivation,
             .native_control = cbNativeControl,
+            .popover_dismiss = cbPopoverDismiss,
         });
         return self;
     }
@@ -638,6 +652,7 @@ pub const Window = struct {
         self.present_overlay.deinit(gpa);
         self.liquid_glass.deinit(gpa); // [liquid-glass] (views went with the platform window)
         self.native_controls.deinit(gpa);
+        native_popover_mod.deinitWindow(self);
         self.dirty_views.deinit(gpa);
         self.pending_dirty_views.deinit(gpa);
         self.mouse_hit_test.ids.deinit(gpa);
@@ -694,7 +709,10 @@ pub const Window = struct {
     fn cbInput(ctx: ?*anyopaque, event: input.PlatformInput) platform.DispatchEventResult {
         const self = fromCtx(ctx);
         if (self.removed) return .{};
-        return self.dispatchEvent(event);
+        native_popover_mod.parentInput(self, event);
+        const result = self.dispatchEvent(event);
+        if (self.popover_role != null and !self.removed) native_popover_mod.popoverInput(self, event, result);
+        return result;
     }
 
     fn cbActive(ctx: ?*anyopaque, active: bool) void {
@@ -788,6 +806,26 @@ pub const Window = struct {
         return self.platform_window.nativeComposition();
     }
 
+    /// This window is a native popover container (`zpui.nativePopover`): its content
+    /// sits on the system material, so it should draw no card background of its own.
+    pub fn isNativePopover(self: *const Window) bool {
+        return self.popover_role != null;
+    }
+
+    /// `zpui.nativePopover` elements in this window open native popover windows (else
+    /// they render their fallbacks).
+    pub fn nativePopoversAvailable(self: *const Window) bool {
+        return native_popover_mod.available(self);
+    }
+
+    /// Show tooltips in native tooltip windows (when `nativePopoversAvailable`); off =
+    /// drawn on the overlay plane.
+    pub fn setNativeTooltips(self: *Window, on: bool) void {
+        if (self.native_tooltips == on) return;
+        self.native_tooltips = on;
+        self.refresh();
+    }
+
     /// The display the window is on (`platform.Display.id`), when the backend knows.
     pub fn displayId(self: *const Window) ?u32 {
         if (self.platform_closed) return null;
@@ -816,6 +854,12 @@ pub const Window = struct {
         const self = fromCtx(ctx);
         if (self.removed) return;
         self.handleA11yAction(request);
+    }
+
+    fn cbPopoverDismiss(ctx: ?*anyopaque, reason: platform.PopoverDismissReason) void {
+        const self = fromCtx(ctx);
+        if (self.removed) return;
+        native_popover_mod.popoverDismiss(self, reason);
     }
 
     fn cbNativeControl(ctx: ?*anyopaque, control: platform.NativeViewId, event: platform.NativeControlEvent) void {
@@ -1273,6 +1317,7 @@ pub const Window = struct {
         self.frame_count += 1;
         if (self.focused_id != focus_before) self.refresh();
         self.needs_present = true;
+        native_popover_mod.afterDraw(self);
     }
 
     fn markViewDirty(self: *Window, view_id: EntityId) void {
@@ -1292,13 +1337,19 @@ pub const Window = struct {
         const root_size = self.viewport_size;
 
         var root = self.root.?.intoAnyElement();
-        const root_layout = root.requestLayout(self, app);
-        const s = self.scale_factor;
-        self.layout_engine.stretchAutoSizeToFill(root_layout, .{
-            .width = style_mod.roundHalfTowardZero(root_size.width * s),
-            .height = style_mod.roundHalfTowardZero(root_size.height * s),
-        });
-        root.prepaintAsRoot(.zero, element.avail.definite(root_size), self, app);
+        if (self.popover_role) |*role| {
+            // A native popover sizes its window to the content (native_popover.zig).
+            role.measured = root.layoutAsRoot(element.avail.max_content, self, app);
+            root.prepaintAt(.zero, self, app);
+        } else {
+            const root_layout = root.requestLayout(self, app);
+            const s = self.scale_factor;
+            self.layout_engine.stretchAutoSizeToFill(root_layout, .{
+                .width = style_mod.roundHalfTowardZero(root_size.width * s),
+                .height = style_mod.roundHalfTowardZero(root_size.height * s),
+            });
+            root.prepaintAsRoot(.zero, element.avail.definite(root_size), self, app);
+        }
 
         self.prepaintDeferredDraws();
 
@@ -1331,6 +1382,10 @@ pub const Window = struct {
 
     fn prepaintTooltip(self: *Window) ?AnyElement {
         const app = self.app;
+        if (self.native_tooltips and native_popover_mod.available(self)) {
+            native_popover_mod.prepaintTooltip(self);
+            return null;
+        }
         var i = self.next_frame.tooltip_requests.items.len;
         while (i > 0) {
             i -= 1;
@@ -1954,6 +2009,7 @@ pub const Window = struct {
             .accessed_element_states = self.next_frame.accessed_element_states.items.len,
             .line_layout = self.text_system.layoutIndex(),
             .native_views = self.next_frame.native_views.items.len,
+            .popovers = self.next_frame.popover_requests.items.len,
             .overlay_ranges = self.next_frame.overlay_ranges.items.len,
         };
     }
@@ -2035,6 +2091,7 @@ pub const Window = struct {
         const scene_base = n.scene.len();
         n.scene.replay(gpa, range[0].scene, range[1].scene, &r.scene) catch @panic("OOM");
         n.native_views.appendSlice(gpa, r.native_views.items[range[0].native_views..range[1].native_views]) catch @panic("OOM");
+        n.popover_requests.appendSlice(gpa, r.popover_requests.items[range[0].popovers..range[1].popovers]) catch @panic("OOM");
         for (r.overlay_ranges.items[range[0].overlay_ranges..range[1].overlay_ranges]) |o| {
             const start = @max(o.start, range[0].scene) - range[0].scene + scene_base;
             const end = @min(o.end, range[1].scene) - range[0].scene + scene_base;

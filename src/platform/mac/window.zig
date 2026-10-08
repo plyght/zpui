@@ -35,6 +35,7 @@ const native_views = @import("native_views.zig");
 const native_controls = @import("native_controls.zig");
 const context_menu = @import("context_menu.zig");
 const mac_a11y = @import("a11y.zig");
+const popover_mod = @import("popover.zig");
 
 const log = std.log.scoped(.mac_window);
 
@@ -84,8 +85,14 @@ pub fn registerClasses() void {
 fn buildWindowClass(comptime super: [:0]const u8, comptime name: [:0]const u8) *objc.Class {
     const b = objc.ClassBuilder.init(super, name) orelse return objc.getClass(name).?;
     _ = b.addPointerIvar(state_ivar);
-    _ = b.addMethod("canBecomeMainWindow", &yes, B ++ "@:");
-    _ = b.addMethod("canBecomeKeyWindow", &yes, B ++ "@:");
+    _ = b.addMethod("canBecomeMainWindow", &canBecomeMainWindow, B ++ "@:");
+    _ = b.addMethod("canBecomeKeyWindow", &canBecomeKeyWindow, B ++ "@:");
+    // [native-popover] While a key popover child holds focus the parent keeps its active
+    // (key) look. Private AppKit hooks: overridden only where NSWindow has them.
+    inline for (.{ "_hasActiveAppearance", "_hasActiveAppearanceIgnoringKeyFocus", "_hasKeyAppearance" }) |hook| {
+        if (ak.class("NSWindow").msg(BOOL, "instancesRespondToSelector:", .{objc.cachedSel(hook)}) == YES)
+            _ = b.addMethod(hook, &activeAppearance(super, hook).f, B ++ "@:");
+    }
     _ = b.addMethod("windowDidResize:", &windowDidResize, "v@:@");
     _ = b.addMethod("windowDidChangeOcclusionState:", &windowDidChangeOcclusionState, "v@:@");
     _ = b.addMethod("windowWillEnterFullScreen:", &windowWillEnterFullScreen, "v@:@");
@@ -166,6 +173,32 @@ fn yes(_: id, _: SEL) callconv(.c) BOOL {
     return YES;
 }
 
+/// The `MacWindow` behind a ZPUIWindow / ZPUIPanel / ZPUIView (null once torn down).
+pub fn stateOf(obj: id) ?*MacWindow {
+    return state(obj);
+}
+
+fn canBecomeKeyWindow(this: id, _: SEL) callconv(.c) BOOL {
+    const w = state(this) orelse return YES;
+    const p = w.popover orelse return YES;
+    return objc.toBOOL(p.key);
+}
+
+fn canBecomeMainWindow(this: id, _: SEL) callconv(.c) BOOL {
+    const w = state(this) orelse return YES;
+    return objc.toBOOL(w.popover == null);
+}
+
+fn activeAppearance(comptime super: [:0]const u8, comptime name: [:0]const u8) type {
+    return struct {
+        fn f(this: id, _: SEL) callconv(.c) BOOL {
+            if (state(this)) |w| if (popover_mod.hasActiveChild(w)) return YES;
+            var sup = superOf(this, super);
+            return objc.msgSendSuper(BOOL, &sup, objc.cachedSel(name), .{});
+        }
+    };
+}
+
 // ---------------------------------------------------------------------------
 // MacWindow
 // ---------------------------------------------------------------------------
@@ -207,6 +240,10 @@ pub const MacWindow = struct {
     natives: native_views.Host = .{},
     /// NSAccessibility bridge (a11y.zig), created on first use.
     a11y: ?*mac_a11y.Bridge = null,
+    /// [native-popover] Set on popover panels (popover.zig).
+    popover: ?popover_mod.State = null,
+    /// [native-popover] Shown key popovers of this window (it then still looks active).
+    key_popovers: u32 = 0,
 
     // -- construction ---------------------------------------------------------
 
@@ -225,7 +262,8 @@ pub const MacWindow = struct {
         } else {
             style = S.titled | S.full_size_content_view;
         }
-        const cls = switch (params.kind) {
+        if (params.popover != null) style = S.nonactivating_panel; // borderless panel
+        const cls = if (params.popover != null) panel_class.? else switch (params.kind) {
             .normal => window_class.?,
             .popup => blk: {
                 style |= S.nonactivating_panel;
@@ -235,14 +273,16 @@ pub const MacWindow = struct {
         };
 
         // Position relative to the main screen, top-left origin (zui `MacWindow::open`).
-        const screen = (if (params.display_id) |did| ak.screenForDisplayId(did) else null) orelse
+        const popover_parent: ?*MacWindow = if (params.popover) |pp| fromWindow(pp.parent) else null;
+        const screen = if (popover_parent) |pw| pw.native_window.msg(?id, "screen", .{}) else (if (params.display_id) |did| ak.screenForDisplayId(did) else null) orelse
             ak.class("NSScreen").msg(?id, "mainScreen", .{});
         const screen_frame: NSRect = if (screen) |s| ak.frame(s) else .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 1440, .height = 900 } };
         const top_left: NSPoint = .{
             .x = screen_frame.origin.x + params.bounds.origin.x,
             .y = screen_frame.origin.y + screen_frame.size.height - params.bounds.origin.y,
         };
-        const content_rect: NSRect = .{
+        // [native-popover] Popover bounds are in the parent's content coordinates.
+        const content_rect: NSRect = if (popover_parent) |pw| popover_mod.contentToScreen(pw, params.bounds) else .{
             .origin = .{ .x = top_left.x, .y = top_left.y - params.bounds.size.height },
             .size = .{ .width = params.bounds.size.width, .height = params.bounds.size.height },
         };
@@ -321,6 +361,7 @@ pub const MacWindow = struct {
         }
 
         self.setBackgroundAppearance(params.background);
+        if (params.popover) |pp| popover_mod.setUp(self, pp);
 
         if (params.focus and params.show) {
             native_window.msg(void, "makeKeyAndOrderFront:", .{@as(?id, null)});
@@ -328,7 +369,7 @@ pub const MacWindow = struct {
             native_window.msg(void, "orderFront:", .{@as(?id, null)});
         }
         // The init origin can be off when the key screen differs from the main screen.
-        native_window.msg(void, "setFrameTopLeftPoint:", .{top_left});
+        if (popover_parent == null) native_window.msg(void, "setFrameTopLeftPoint:", .{top_left});
         self.moveTrafficLight();
         self.startDisplayLink();
         return self;
@@ -414,7 +455,7 @@ pub const MacWindow = struct {
 
     /// zui `display_layer` / first activation: draw synchronously inside the
     /// current Core Animation transaction (smooth live resize).
-    fn synchronousFrame(self: *MacWindow) void {
+    pub fn synchronousFrame(self: *MacWindow) void {
         self.renderer.setPresentsWithTransaction(true);
         self.stopDisplayLink();
         self.requestFrameCallback(true);
@@ -566,6 +607,7 @@ pub const MacWindow = struct {
     fn destroy(self: *MacWindow) void {
         if (self.frame_source) |*fs| fs.deinit();
         self.frame_source = null;
+        popover_mod.deinit(self); // [native-popover]
         objc.setIvar(self.native_view, state_ivar, null);
         objc.setIvar(self.native_window, state_ivar, null);
         self.native_window.msg(void, "setDelegate:", .{@as(?id, null)});
@@ -625,11 +667,23 @@ pub const MacWindow = struct {
         .attachNativeControl = vAttachNativeControl,
         .updateNativeControl = vUpdateNativeControl,
         .showContextMenu = vShowContextMenu,
+        .placePopover = vPlacePopover,
+        .screenBoundsInContent = vScreenBoundsInContent,
     };
 
     // Native context menus (context_menu.zig).
     fn vShowContextMenu(ptr: *anyopaque, request: platform.ContextMenuRequest, done: platform.ContextMenuDone) bool {
         return context_menu.show(cast(ptr), request, done);
+    }
+
+    // [native-popover] popover.zig.
+    fn vPlacePopover(ptr: *anyopaque, frame_: Bounds, visible: bool) void {
+        const self = cast(ptr);
+        if (self.closed) return;
+        popover_mod.place(self, frame_, visible);
+    }
+    fn vScreenBoundsInContent(ptr: *anyopaque) ?Bounds {
+        return popover_mod.screenBoundsInContent(cast(ptr));
     }
 
     // Native form controls (native_controls.zig).
@@ -742,7 +796,8 @@ pub const MacWindow = struct {
         return events.modifiersFromFlags(ak.class("NSEvent").msg(NSUInteger, "modifierFlags", .{}));
     }
     fn vIsActive(ptr: *anyopaque) bool {
-        return cast(ptr).native_window.msg(BOOL, "isKeyWindow", .{}) == YES;
+        const self = cast(ptr);
+        return self.native_window.msg(BOOL, "isKeyWindow", .{}) == YES or popover_mod.hasActiveChild(self);
     }
     fn vIsHovered(ptr: *anyopaque) bool {
         return cast(ptr).hovered;
@@ -942,7 +997,9 @@ fn windowDidBecomeKey(this: id, _: SEL, _: id) callconv(.c) void {
 
 fn windowDidResignKey(this: id, _: SEL, _: id) callconv(.c) void {
     const w = state(this) orelse return;
-    notifyActiveDeferred(w, w.native_window.msg(BOOL, "isKeyWindow", .{}) == YES);
+    if (w.popover != null) popover_mod.didResignKey(w); // [native-popover]
+    // A parent whose key popover took focus stays active.
+    notifyActiveDeferred(w, w.native_window.msg(BOOL, "isKeyWindow", .{}) == YES or popover_mod.hasActiveChild(w));
 }
 
 /// zui dispatches active-status changes through the foreground executor.

@@ -221,6 +221,9 @@ pub const TestPlatform = struct {
     symbol_renders: usize = 0,
     last_symbol: [64]u8 = undefined,
     last_symbol_len: usize = 0,
+    /// Reported by `supportsNativePopovers`: off by default, so `zpui.nativePopover`
+    /// renders its fallback; set true to exercise native popover windows.
+    native_popovers: bool = false,
     // -- lifecycle recording (setMenus / appCommand / postNotification / playSound) ------
     menus: []const pf.Menu = &.{},
     menu_sets: usize = 0,
@@ -369,6 +372,7 @@ pub const TestPlatform = struct {
         .playSound = vPlaySound,
         .supportsLiquidGlass = vSupportsLiquidGlass,
         .liquidGlassRevision = vLiquidGlassRevision,
+        .supportsNativePopovers = vSupportsNativePopovers,
         .setGlobalHotkey = vSetGlobalHotkey,
         .windowCaptureCapabilities = vWindowCaptureCapabilities,
         .captureActiveWindow = vCaptureActiveWindow,
@@ -429,6 +433,30 @@ pub const TestPlatform = struct {
     }
     fn vForegroundAfterCapture(ptr: *anyopaque) void {
         cast(ptr).foreground_requests += 1;
+    }
+
+    fn vSupportsNativePopovers(ptr: *anyopaque) bool {
+        return cast(ptr).native_popovers;
+    }
+
+    /// Open native popover windows (`WindowParams.popover`), oldest first.
+    pub fn popoverWindows(self: *const TestPlatform, out: []*TestWindow) []*TestWindow {
+        var n: usize = 0;
+        for (self.windows.items) |w| if (w.popover != null and n < out.len) {
+            out[n] = w;
+            n += 1;
+        };
+        return out[0..n];
+    }
+
+    /// The most recently opened native popover window, if any.
+    pub fn lastPopover(self: *const TestPlatform) ?*TestWindow {
+        var i = self.windows.items.len;
+        while (i > 0) {
+            i -= 1;
+            if (self.windows.items[i].popover != null) return self.windows.items[i];
+        }
+        return null;
     }
 
     fn vSupportsLiquidGlass(ptr: *anyopaque) bool {
@@ -492,7 +520,7 @@ pub const TestPlatform = struct {
     fn vOpenWindow(ptr: *anyopaque, params: pf.WindowParams) anyerror!pf.Window {
         const self = cast(ptr);
         const w = try self.gpa.create(TestWindow);
-        w.* = .{ .platform = self, .bounds = params.bounds, .size = params.bounds.size, .atlas = .init(self.gpa, .{}), .title = "" };
+        w.* = .{ .platform = self, .bounds = params.bounds, .size = params.bounds.size, .atlas = .init(self.gpa, .{}), .title = "", .popover = params.popover };
         try self.windows.append(self.gpa, w);
         return w.window();
     }
@@ -660,6 +688,12 @@ pub const TestWindow = struct {
     context_menu: ?*TestContextMenu = null,
     /// Menus shown so far.
     context_menu_count: u32 = 0,
+    /// Native popover windows: the open params, whether the window is shown, and the
+    /// number of `placePopover` calls. `bounds` holds the placed frame (parent content
+    /// coordinates).
+    popover: ?pf.PopoverParams = null,
+    popover_visible: bool = false,
+    popover_places: u32 = 0,
 
     pub fn window(self: *TestWindow) pf.Window {
         return .{ .ptr = self, .vtable = &vtable };
@@ -766,6 +800,27 @@ pub const TestWindow = struct {
         return u.tree;
     }
 
+    /// The backend asks this native popover to close (outside press / app switch).
+    pub fn simulatePopoverDismiss(self: *TestWindow, reason: pf.PopoverDismissReason) void {
+        if (self.callbacks.popover_dismiss) |f| f(self.callbacks.ctx, reason);
+    }
+
+    fn vPlacePopover(ptr: *anyopaque, placed: pf.Bounds, visible: bool) void {
+        const self = c(ptr);
+        self.popover_places += 1;
+        self.popover_visible = visible;
+        self.bounds = placed;
+        if (!std.meta.eql(self.size, placed.size)) self.simulateResize(placed.size, self.scale);
+    }
+
+    /// The default 1920×1080 display, in this window's content coordinates.
+    fn vScreenBoundsInContent(ptr: *anyopaque) ?pf.Bounds {
+        const self = c(ptr);
+        if (self.popover != null) return null;
+        const d: pf.Bounds = if (self.platform.display_list) |l| (if (l.len > 0) l[0].visible_bounds else .{ .origin = .zero, .size = .{ .width = 1920, .height = 1080 } }) else .{ .origin = .zero, .size = .{ .width = 1920, .height = 1080 } };
+        return .{ .origin = .{ .x = d.origin.x - self.bounds.origin.x, .y = d.origin.y - self.bounds.origin.y }, .size = d.size };
+    }
+
     /// Simulate key-window changes (`active_status_change`).
     pub fn simulateActive(self: *TestWindow, active: bool) void {
         self.active = active;
@@ -808,6 +863,8 @@ pub const TestWindow = struct {
         .configureLiquidGlass = vConfigureGlass,
         .setBackdropHole = vSetBackdropHole,
         .a11yUpdate = vA11yUpdate,
+        .placePopover = vPlacePopover,
+        .screenBoundsInContent = vScreenBoundsInContent,
         .measureNativeControl = vMeasureControl,
         .attachNativeControl = vAttachControl,
         .updateNativeControl = vUpdateControl,

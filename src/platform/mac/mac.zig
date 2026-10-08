@@ -106,10 +106,16 @@ pub const MacPlatform = struct {
         .requestCaptureAccess = vRequestCaptureAccess,
         .foregroundAfterCapture = vForegroundAfterCapture,
         .renderSystemSymbol = vRenderSystemSymbol,
+        .supportsNativePopovers = vSupportsNativePopovers,
     };
 
     fn vRenderSystemSymbol(_: *anyopaque, gpa: std.mem.Allocator, request: pf.SystemSymbolRequest) ?pf.SystemSymbolMask {
         return @import("system_symbol.zig").render(gpa, request);
+    }
+
+    /// [native-popover] Borderless glass panels (popover.zig).
+    fn vSupportsNativePopovers(_: *anyopaque) bool {
+        return true;
     }
 
     fn vSetGlobalHotkey(_: *anyopaque, hotkey: ?pf.GlobalHotkey, handler: pf.GlobalHotkeyHandler) void {

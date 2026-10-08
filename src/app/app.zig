@@ -923,10 +923,11 @@ pub const App = struct {
         return f(ctx, w, app);
     }
 
+    /// Open windows, not counting native popover containers (`zpui.nativePopover`).
     pub fn windowCount(app: *App) usize {
         var n: usize = 0;
         for (app.windows.items) |slot| if (slot) |w| {
-            n += @intFromBool(!w.removed);
+            n += @intFromBool(!w.removed and w.popover_role == null);
         };
         return n;
     }

@@ -145,6 +145,12 @@ pub const nativeCheckbox = elements.native_control.nativeCheckbox;
 pub const nativeSlider = elements.native_control.nativeSlider;
 pub const nativeSegmented = elements.native_control.nativeSegmented;
 pub const nativePopup = elements.native_control.nativePopup;
+pub const native_popover = elements.native_popover;
+pub const nativePopover = elements.nativePopover;
+pub const NativePopover = elements.NativePopover;
+pub const NativePopoverOptions = elements.native_popover.Options;
+pub const PopoverAnchor = elements.native_popover.Anchor;
+pub const popoverContent = elements.popoverContent;
 pub const nativeStepper = elements.native_control.nativeStepper;
 pub const nativeControlsAvailable = elements.native_control.nativeControlsAvailable;
 pub const NativeControlEvent = elements.native_control.Event;
@@ -222,4 +228,5 @@ test {
     _ = @import("a11y.zig");
     _ = @import("window/a11y_tests.zig");
     _ = @import("window/context_menu_tests.zig");
+    _ = @import("window/native_popover_tests.zig");
 }

@@ -119,6 +119,51 @@ pub const WindowParams = struct {
     /// Place the window on this display (`Display.id`); `bounds.origin` is then relative
     /// to that display's top-left. Null = the main display.
     display_id: ?u32 = null,
+    /// A native popover container (see `PopoverParams`; `kind` should be `.popup`).
+    /// `bounds` is then in the parent window's content coordinates.
+    popover: ?PopoverParams = null,
+};
+
+// ---- native popover containers (macOS: a borderless glass NSPanel) ---------------------
+
+/// The material behind a native popover's content.
+pub const PopoverMaterial = enum(u8) {
+    /// Pickers, cards, lists (NSVisualEffectView `.popover`).
+    popover,
+    /// Menu-like lists (`.menu`).
+    menu,
+    /// Hover hints (`.toolTip`).
+    tooltip,
+};
+
+/// A popover-style window that floats above its parent and may extend past it
+/// (`WindowParams.popover`). The backend draws the material, rounded corners, the
+/// system shadow and the system show / hide animation; zpui draws the content with a
+/// transparent background on top. Placement goes through `Window.placePopover`.
+pub const PopoverParams = struct {
+    /// The window the popover belongs to: it moves with it, and while the popover holds
+    /// keyboard focus the parent keeps its active (key) appearance.
+    parent: Window,
+    material: PopoverMaterial = .popover,
+    corner_radius: f32 = 12,
+    /// Liquid Glass (macOS 26+ NSGlassEffectView) instead of the classic material,
+    /// when the OS has it.
+    liquid_glass: bool = true,
+    /// Pin the appearance to dark / light (the app theme); null = follow the parent.
+    dark: ?bool = null,
+    /// The popover takes keyboard focus when shown (pickers with search fields).
+    key: bool = true,
+    /// Mouse events pass through to whatever is below (tooltips).
+    mouse_transparent: bool = false,
+};
+
+/// Why a native popover asks to be dismissed (`WindowCallbacks.popover_dismiss`).
+pub const PopoverDismissReason = enum(u8) {
+    /// A press outside the popover and its parent (another window or app), or the app
+    /// lost focus.
+    outside_click,
+    /// Escape reached the popover's window without being handled.
+    escape,
 };
 
 pub const CursorStyle = enum {
@@ -191,6 +236,8 @@ pub const WindowCallbacks = struct {
     a11y_activation: ?*const fn (ctx: ?*anyopaque, active: bool) void = null,
     /// The user changed a native control (`attachNativeControl`): its new value.
     native_control: ?*const fn (ctx: ?*anyopaque, view: NativeViewId, event: NativeControlEvent) void = null,
+    /// A native popover window (`WindowParams.popover`) should close.
+    popover_dismiss: ?*const fn (ctx: ?*anyopaque, reason: PopoverDismissReason) void = null,
 };
 
 /// gpui `NativeComposition` (zui dce5c1f): raw composition handles for embedding native surfaces
@@ -310,7 +357,25 @@ pub const Window = struct {
         /// thread exactly once, outside any event dispatch, with the chosen item's tag or
         /// null when the menu was dismissed.
         showContextMenu: ?*const fn (ptr: *anyopaque, request: ContextMenuRequest, done: ContextMenuDone) bool = null,
+        // -- native popovers (optional; see `PopoverParams`) --------------------------------
+        /// A popover window: move / resize to `frame` (parent content coordinates, logical
+        /// px) and show or hide it with the system animation. Applied asynchronously.
+        placePopover: ?*const fn (ptr: *anyopaque, frame: Bounds, visible: bool) void = null,
+        /// The usable area of the screen this window is on (menu bar and Dock excluded),
+        /// in this window's content coordinates; popovers flip and clamp against it.
+        screenBoundsInContent: ?*const fn (ptr: *anyopaque) ?Bounds = null,
     };
+
+    /// See `VTable.placePopover` (no-op on backends without popovers).
+    pub fn placePopover(w: Window, frame: Bounds, visible: bool) void {
+        if (w.vtable.placePopover) |f| f(w.ptr, frame, visible);
+    }
+
+    /// See `VTable.screenBoundsInContent`.
+    pub fn screenBoundsInContent(w: Window) ?Bounds {
+        const f = w.vtable.screenBoundsInContent orelse return null;
+        return f(w.ptr);
+    }
 
     /// gpui `PlatformWindow::native_composition`: null on every zpui backend (Windows-only upstream).
     pub fn nativeComposition(w: Window) ?NativeComposition {
@@ -704,7 +769,16 @@ pub const Platform = struct {
         /// `gpa`; null when the symbol does not exist on this OS. Main thread. Null =
         /// no system symbols (Linux).
         renderSystemSymbol: ?*const fn (ptr: *anyopaque, gpa: std.mem.Allocator, request: SystemSymbolRequest) ?SystemSymbolMask = null,
+        /// `openWindow` accepts `WindowParams.popover` (native popover containers).
+        /// Null = never (the core keeps popovers and tooltips in-window).
+        supportsNativePopovers: ?*const fn (ptr: *anyopaque) bool = null,
     };
+
+    /// Whether this backend hosts native popover containers (`WindowParams.popover`).
+    pub fn supportsNativePopovers(p: Platform) bool {
+        const f = p.vtable.supportsNativePopovers orelse return false;
+        return f(p.ptr);
+    }
 
     pub fn dispatcher(p: Platform) Dispatcher {
         return p.vtable.dispatcher(p.ptr);
