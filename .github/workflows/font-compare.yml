@@ -5,13 +5,17 @@ name: Font compare
 # for 11-28 px at regular / medium / semibold plus reference cases from Safari and System
 # Settings on dark (tools/font-compare/cases.json). Uploads the renders, per-case advance and
 # line-width deltas (budget 0.5 px), CoreText diagnostics and side-by-side sheets.
-# `before_ref`: also render zpui with src/ from that commit (zig-out/font-compare/before).
+# `before_ref`: also render zpui with src/ from that commit (zig-out/font-compare/before),
+# in `before_family` (the app drew its "system" choice as Helvetica before the fix).
 on:
   workflow_dispatch:
     inputs:
       before_ref:
         description: Also render zpui with src/ from this commit (empty = skip)
         default: ""
+      before_family:
+        description: Family for the before render
+        default: ".SystemUIFont"
 
 jobs:
   compare:
@@ -46,7 +50,7 @@ jobs:
         run: |
           git worktree add "$RUNNER_TEMP/before" HEAD
           git -C "$RUNNER_TEMP/before" checkout "${{ inputs.before_ref }}" -- src
-          (cd "$RUNNER_TEMP/before" && zig build font-compare --summary all -- tools/font-compare/cases.json "$GITHUB_WORKSPACE/zig-out/font-compare/before")
+          (cd "$RUNNER_TEMP/before" && zig build font-compare --summary all -- tools/font-compare/cases.json "$GITHUB_WORKSPACE/zig-out/font-compare/before" --family "${{ inputs.before_family || '.SystemUIFont' }}")
       - name: Compare
         run: |
           py="$RUNNER_TEMP/venv/bin/python3"

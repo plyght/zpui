@@ -177,8 +177,8 @@ func lineInfo(_ f: CTFont, _ text: String) -> (width: Double, xs: [Double], glyp
 func fontInfo(_ f: CTFont) -> [String: Any] {
     let traits = CTFontCopyTraits(f) as NSDictionary
     return ["postscript": CTFontCopyPostScriptName(f) as String, "size": Double(CTFontGetSize(f)),
-            "variation": variation(f), "weightTrait": (traits[kCTFontWeightTraitKey] as? Double) ?? 0,
-            "widthTrait": (traits[kCTFontWidthTraitKey] as? Double) ?? 0,
+            "variation": variation(f), "weightTrait": (traits[kCTFontWeightTrait] as? Double) ?? 0,
+            "widthTrait": (traits[kCTFontWidthTrait] as? Double) ?? 0,
             "descriptor": String(describing: CTFontCopyFontDescriptor(f)).replacingOccurrences(of: "\n", with: " ")]
 }
 
@@ -210,13 +210,13 @@ func cssToCT(_ w: Int) -> Double {
 /// zpui (HEAD): every face matching family ".AppleSystemUIFont", each at size = upem, best (width 0, nearest weight), copied to `size`.
 func zpuiPath(_ size: Double, _ weight: Int) -> CTFont? {
     let desc = CTFontDescriptorCreateWithAttributes([kCTFontFamilyNameAttribute: ".AppleSystemUIFont"] as CFDictionary)
-    let matches = (CTFontDescriptorCreateMatchingFontDescriptors(desc, [kCTFontFamilyNameAttribute] as CFSet) as? [CTFontDescriptor]) ?? []
+    let matches = (CTFontDescriptorCreateMatchingFontDescriptors(desc, NSSet(array: [kCTFontFamilyNameAttribute]) as CFSet) as? [CTFontDescriptor]) ?? []
     var best: CTFont? = nil; var bestScore = Double.infinity
     for d in matches {
         let base = CTFontCreateWithFontDescriptor(d, 0, nil)
         let unit = CTFontCreateCopyWithAttributes(base, CGFloat(CTFontGetUnitsPerEm(base)), nil, nil)
         let tr = CTFontCopyTraits(unit) as NSDictionary
-        let wt = (tr[kCTFontWeightTraitKey] as? Double) ?? 0, wd = (tr[kCTFontWidthTraitKey] as? Double) ?? 0
+        let wt = (tr[kCTFontWeightTrait] as? Double) ?? 0, wd = (tr[kCTFontWidthTrait] as? Double) ?? 0
         let italic = (CTFontGetSymbolicTraits(unit).rawValue & CTFontSymbolicTraits.traitItalic.rawValue) != 0
         let score = abs(wd) * 100 + abs(wt - cssToCT(weight)) + (italic ? 1000 : 0)
         if score < bestScore { bestScore = score; best = unit }
@@ -251,10 +251,10 @@ for weight in [400, 500, 600, 700] {
         cands.append(("nsfont_upem_copy", CTFontCreateCopyWithAttributes(NSFont.systemFont(ofSize: upem, weight: nsWeight(weight)) as CTFont, size, nil, nil)))
         cands.append(("nsfont_upem_desc", CTFontCreateWithFontDescriptor(CTFontCopyFontDescriptor(NSFont.systemFont(ofSize: upem, weight: nsWeight(weight)) as CTFont), size, nil)))
         let named = CTFontDescriptorCreateWithAttributes([kCTFontNameAttribute: ".AppleSystemUIFont",
-                                                          kCTFontTraitsAttribute: [kCTFontWeightTraitKey: cssToCT(weight)]] as CFDictionary)
+                                                          kCTFontTraitsAttribute: [kCTFontWeightTrait: cssToCT(weight)]] as CFDictionary)
         cands.append(("name_traits_desc", CTFontCreateWithFontDescriptor(named, size, nil)))
         let uiW = CTFontCreateUIFontForLanguage(.system, size, nil)!
-        let wdesc = CTFontDescriptorCreateWithAttributes([kCTFontTraitsAttribute: [kCTFontWeightTraitKey: cssToCT(weight)]] as CFDictionary)
+        let wdesc = CTFontDescriptorCreateWithAttributes([kCTFontTraitsAttribute: [kCTFontWeightTrait: cssToCT(weight)]] as CFDictionary)
         cands.append(("uifont_weight_copy", CTFontCreateCopyWithAttributes(uiW, size, nil, wdesc)))
         // AppKit's own descriptor: the UI usage attribute at the real size (optical size and tracking follow it).
         let usageDesc = CTFontDescriptorCreateWithAttributes(["NSCTFontUIUsageAttribute": usageName(weight)] as CFDictionary)
