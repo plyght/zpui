@@ -1,7 +1,8 @@
 //! zpui text system: shaping, wrapping, layout caching and glyph painting.
 //!
 //! Platform backends implement `platform.TextSystem` (`freetype.zig` on Linux,
-//! `coretext.zig` on macOS); everything else here is platform-independent.
+//! `coretext.zig` on macOS, `directwrite.zig` on Windows); everything else here is
+//! platform-independent.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -63,6 +64,7 @@ pub const font_catalog = @import("font_catalog.zig");
 pub const backend = switch (builtin.os.tag) {
     .linux => @import("freetype.zig"),
     .macos => @import("coretext.zig"),
+    .windows => @import("directwrite.zig"),
     else => struct {
         pub fn create(_: std.mem.Allocator) !platform.TextSystem {
             return error.Unsupported;
