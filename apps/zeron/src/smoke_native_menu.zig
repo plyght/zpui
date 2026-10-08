@@ -31,6 +31,8 @@ const Run = struct {
     which: Which,
     out: []const u8,
     waited: u32 = 0,
+    center: zpui.Point(f32) = .{ .x = 0, .y = 0 },
+    label: []const u8 = "",
 };
 
 var run_state: Run = undefined;
@@ -74,8 +76,25 @@ fn locate(_: *const void, win: *Window, _: *App) void {
         std.process.exit(1);
     };
     win.setA11yActive(false);
-    const center: zpui.Point(f32) = .{ .x = b.origin.x + @min(b.size.width / 2, 60), .y = b.origin.y + b.size.height / 2 };
-    std.debug.print("zeron smoke: native menu {t}: clicking \"{s}\" at {d:.0},{d:.0}\n", .{ run_state.which, label, center.x, center.y });
+    run_state.center = .{ .x = b.origin.x + @min(b.size.width / 2, 60), .y = b.origin.y + b.size.height / 2 };
+    run_state.label = label;
+    // A click on an inactive window only activates it (AppKit never delivers it to
+    // the view): bring the app forward and wait until the window is key.
+    Mac.activate(win);
+    run_state.waited = 0;
+    win.refresh();
+    win.onNextFrame({}, clickWhenKey);
+}
+
+fn clickWhenKey(_: *const void, win: *Window, _: *App) void {
+    if (!Mac.isKey(win) and run_state.waited < 120) {
+        run_state.waited += 1;
+        if (run_state.waited % 30 == 0) Mac.activate(win);
+        win.refresh();
+        return win.onNextFrame({}, clickWhenKey);
+    }
+    const center = run_state.center;
+    std.debug.print("zeron smoke: native menu {t}: clicking \"{s}\" at {d:.0},{d:.0} (window key: {}, after {d} frames)\n", .{ run_state.which, run_state.label, center.x, center.y, Mac.isKey(win), run_state.waited });
     Mac.click(win, center, run_state.which == .context);
     if (std.Thread.spawn(.{}, captureLater, .{})) |t| t.detach() else |err| {
         std.debug.print("FAIL: zeron smoke: capture thread: {t}\n", .{err});
@@ -89,10 +108,6 @@ fn captureLater() void {
     const io = run_state.io;
     io.sleep(.fromSeconds(2), .awake) catch {};
     const shown = native_menu.shown_count.load(.acquire);
-    if (shown == 0) {
-        std.debug.print("FAIL: zeron smoke: no native menu was shown (drawn fallback?)\n", .{});
-        std.process.exit(1);
-    }
     var gpa_state: std.heap.DebugAllocator(.{}) = .init;
     const gpa = gpa_state.allocator();
     const res = std.process.run(gpa, io, .{
@@ -107,6 +122,11 @@ fn captureLater() void {
         std.debug.print("FAIL: zeron smoke: screencapture failed: {s}\n", .{res.stderr});
         std.process.exit(1);
     }
+    // Captured either way, so a failure shows what was on screen instead.
+    if (shown == 0) {
+        std.debug.print("FAIL: zeron smoke: no native menu was shown (drawn fallback?); screen in {s}\n", .{run_state.out});
+        std.process.exit(1);
+    }
     std.debug.print("PASS: zeron smoke: native menu {t} shown ({d}), wrote {s} (screencapture -x)\n", .{ run_state.which, shown, run_state.out });
     std.process.exit(0);
 }
@@ -119,24 +139,39 @@ const Mac = if (builtin.os.tag == .macos) struct {
     const NSInteger = isize;
     const NSUInteger = usize;
 
-    /// Post a left click, or a right mouse down + up, at `p` (window coordinates).
-    fn click(win: *Window, p: zpui.Point(f32), right: bool) void {
+    fn activate(win: *Window) void {
         const mw = mac.MacWindow.fromWindow(win.platform_window);
         ak.sharedApp().msg(void, "activateIgnoringOtherApps:", .{objc.YES});
         mw.native_window.msg(void, "makeKeyAndOrderFront:", .{@as(?id, null)});
+    }
+
+    fn isKey(win: *Window) bool {
+        const mw = mac.MacWindow.fromWindow(win.platform_window);
+        return objc.fromBOOL(mw.native_window.msg(objc.BOOL, "isKeyWindow", .{})) and
+            objc.fromBOOL(ak.sharedApp().msg(objc.BOOL, "isActive", .{}));
+    }
+
+    /// Post a mouse move, then a left click or a right mouse down + up, at `p`
+    /// (window coordinates).
+    fn click(win: *Window, p: zpui.Point(f32), right: bool) void {
+        const mw = mac.MacWindow.fromWindow(win.platform_window);
         const height = ak.bounds(mw.native_view).size.height;
         const pt: ak.NSPoint = .{ .x = p.x, .y = height - @as(f64, p.y) };
         const num = mw.native_window.msg(NSInteger, "windowNumber", .{});
         const now = ak.class("NSProcessInfo").msg(id, "processInfo", .{}).msg(f64, "systemUptime", .{});
-        // NSEventType: left down 1 / up 2, right down 3 / up 4.
-        const types = if (right) [_]NSUInteger{ 3, 4 } else [_]NSUInteger{ 1, 2 };
+        // NSEventType: mouse moved 5 (hover first), left down 1 / up 2, right down 3 / up 4.
+        const types = if (right) [_]NSUInteger{ 5, 3, 4 } else [_]NSUInteger{ 5, 1, 2 };
         for (types, 0..) |ty, i| {
             const ev = ak.class("NSEvent").msg(?id, "mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:", .{
-                ty, pt, @as(NSUInteger, 0), now + @as(f64, @floatFromInt(i)) * 0.05, num, @as(?id, null), @as(NSInteger, 0), @as(NSInteger, 1), @as(f32, if (i == 1) 0 else 1),
+                ty, pt, @as(NSUInteger, 0), now + @as(f64, @floatFromInt(i)) * 0.05, num, @as(?id, null), @as(NSInteger, 0), @as(NSInteger, 1), @as(f32, if (ty == 3 or ty == 1) 1 else 0),
             }) orelse return;
             ak.sharedApp().msg(void, "postEvent:atStart:", .{ ev, objc.NO });
         }
     }
 } else struct {
+    fn activate(_: *Window) void {}
+    fn isKey(_: *Window) bool {
+        return true;
+    }
     fn click(_: *Window, _: zpui.Point(f32), _: bool) void {}
 };

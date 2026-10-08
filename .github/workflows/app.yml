@@ -234,17 +234,20 @@ jobs:
         shell: bash
         run: |
           mkdir -p zig-out/native-menus
+          status=0
           for which in context more; do
             for mode in dark light; do
               ZERON_SMOKE_NATIVE_MENU=$which ZERON_SMOKE_OUT=zig-out/native-menus/native-menu-$which-$mode.png \
-                ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --$mode 2>&1 | tee -a "$RUNNER_TEMP/native-menus.log"
-              test -s zig-out/native-menus/native-menu-$which-$mode.png || { echo "FAIL: no capture for $which ($mode)"; exit 1; }
+                ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --$mode 2>&1 | tee "zig-out/native-menus/$which-$mode.log" || status=1
+              test -s zig-out/native-menus/native-menu-$which-$mode.png || { echo "FAIL: no capture for $which ($mode)"; status=1; }
             done
           done
-          grep "zeron smoke: native menu" "$RUNNER_TEMP/native-menus.log"
+          exit $status
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: zeron-macos-native-menus
-          path: zig-out/native-menus/*.png
+          path: |
+            zig-out/native-menus/*.png
+            zig-out/native-menus/*.log
           if-no-files-found: warn
