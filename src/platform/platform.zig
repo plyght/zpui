@@ -302,6 +302,14 @@ pub const Window = struct {
         /// tree stays valid (the backend may keep the pointer and answer queries from it)
         /// until the next call or until the window closes.
         a11yUpdate: ?*const fn (ptr: *anyopaque, update: a11y.Update) void = null,
+
+        // -- native context menus (optional; see `ContextMenuRequest`) ---------------------
+        /// Pop up a native menu (macOS: NSMenu) at `request.position`. Everything in the
+        /// request is copied before returning. Returns false when this window shows no
+        /// native menus (the caller draws its own); otherwise `done` runs later on the main
+        /// thread exactly once, outside any event dispatch, with the chosen item's tag or
+        /// null when the menu was dismissed.
+        showContextMenu: ?*const fn (ptr: *anyopaque, request: ContextMenuRequest, done: ContextMenuDone) bool = null,
     };
 
     /// gpui `PlatformWindow::native_composition`: null on every zpui backend (Windows-only upstream).
@@ -360,6 +368,14 @@ pub const Window = struct {
     }
     pub fn updateNativeControl(w: Window, view: NativeViewId, state: NativeControlState) void {
         if (w.vtable.updateNativeControl) |f| f(w.ptr, view, state);
+    }
+    pub fn supportsContextMenus(w: Window) bool {
+        return w.vtable.showContextMenu != null;
+    }
+    /// See `VTable.showContextMenu`; false = unsupported (`done` is never called).
+    pub fn showContextMenu(w: Window, request: ContextMenuRequest, done: ContextMenuDone) bool {
+        const f = w.vtable.showContextMenu orelse return false;
+        return f(w.ptr, request, done);
     }
     pub fn supportsA11y(w: Window) bool {
         return w.vtable.a11yUpdate != null;
@@ -922,6 +938,53 @@ pub const Menu = struct {
     name: []const u8,
     items: []const MenuItem,
     disabled: bool = false,
+};
+
+// ---- native context menus (macOS: NSMenu popped up in the window) ----------------------
+
+pub const ContextMenuItemKind = enum(u8) { action, separator, header, submenu };
+
+/// A menu item's check mark (NSControlStateValueOff / On / Mixed).
+pub const ContextMenuCheck = enum(u8) { off, on, mixed };
+
+/// A menu icon: an 8-bit coverage mask (row-major, `width * height` bytes, device pixels)
+/// drawn as a template image (tinted by the menu like SF Symbols). `scale` = device pixels
+/// per point.
+pub const ContextMenuIcon = struct {
+    width: u32,
+    height: u32,
+    scale: f32,
+    alpha: []const u8,
+};
+
+pub const ContextMenuItem = struct {
+    kind: ContextMenuItemKind = .action,
+    label: []const u8 = "",
+    /// Reported back through `ContextMenuDone` (actions only).
+    tag: u32 = 0,
+    icon: ?ContextMenuIcon = null,
+    /// The displayed shortcut (not a binding: the app's keymap handles the keystroke).
+    shortcut: ?KeyEquivalent = null,
+    check: ContextMenuCheck = .off,
+    disabled: bool = false,
+    /// Destructive actions (Delete, Remove...) show in the system red.
+    destructive: bool = false,
+    /// `.submenu` children.
+    children: []const ContextMenuItem = &.{},
+};
+
+pub const ContextMenuRequest = struct {
+    items: []const ContextMenuItem,
+    /// The menu's top-left corner in window content coordinates (logical px).
+    position: Point,
+    /// Pin the menu's appearance to dark / light (the app theme); null = system.
+    dark: ?bool = null,
+};
+
+/// Completion of `showContextMenu`: the chosen item's tag, or null (dismissed).
+pub const ContextMenuDone = struct {
+    ctx: ?*anyopaque = null,
+    func: *const fn (ctx: ?*anyopaque, selected: ?u32) void,
 };
 
 pub const AppCommand = enum { hide, hide_other_apps, unhide_other_apps };

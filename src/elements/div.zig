@@ -3681,7 +3681,7 @@ pub const Interactivity = struct {
                         .bubble => {
                             const down = c.state.captured_mouse_down orelse return;
                             c.state.captured_mouse_down = null;
-                            const click: ClickEvent = .{ .mouse = .{ .down = down, .up = ev.* } };
+                            const click: ClickEvent = .{ .mouse = .{ .down = down, .up = ev.*, .bounds = c.hitbox.bounds } };
                             fireClick(c.state, &click, down.button != .left, w, a);
                         },
                     }

@@ -535,6 +535,74 @@ pub const TestPlatform = struct {
     }
 };
 
+/// The menu a `TestWindow` is showing (`showContextMenu`), deep-copied.
+pub const TestContextMenu = struct {
+    gpa: Allocator,
+    arena: std.heap.ArenaAllocator,
+    items: []const pf.ContextMenuItem,
+    position: pf.Point,
+    dark: ?bool,
+    done: pf.ContextMenuDone,
+
+    fn destroy(self: *TestContextMenu, gpa: Allocator) void {
+        self.arena.deinit();
+        gpa.destroy(self);
+    }
+
+    fn runDismiss(ctx: *anyopaque) void {
+        const self: *TestContextMenu = @ptrCast(@alignCast(ctx));
+        self.done.func(self.done.ctx, null);
+        self.destroy(self.gpa);
+    }
+
+    fn dropDismiss(ctx: *anyopaque) void {
+        const self: *TestContextMenu = @ptrCast(@alignCast(ctx));
+        self.destroy(self.gpa);
+    }
+
+    fn copyItems(a: Allocator, items: []const pf.ContextMenuItem) Allocator.Error![]const pf.ContextMenuItem {
+        const out = try a.alloc(pf.ContextMenuItem, items.len);
+        for (items, out) |it, *o| {
+            o.* = it;
+            o.label = try a.dupe(u8, it.label);
+            if (it.shortcut) |sc| o.shortcut = .{ .key = try a.dupe(u8, sc.key), .modifiers = sc.modifiers };
+            if (it.icon) |ic| o.icon = .{ .width = ic.width, .height = ic.height, .scale = ic.scale, .alpha = try a.dupe(u8, ic.alpha) };
+            o.children = try copyItems(a, it.children);
+        }
+        return out;
+    }
+
+    fn findIn(items: []const pf.ContextMenuItem, label: ?[]const u8, tag: u32) ?*const pf.ContextMenuItem {
+        for (items) |*it| {
+            if (it.kind == .submenu) {
+                if (label) |l| if (std.mem.eql(u8, it.label, l)) return it;
+                if (findIn(it.children, label, tag)) |hit| return hit;
+                continue;
+            }
+            if (label) |l| {
+                if (it.kind != .separator and std.mem.eql(u8, it.label, l)) return it;
+            } else if (it.kind == .action and it.tag == tag) return it;
+        }
+        return null;
+    }
+
+    /// The item labelled `label` (submenus searched depth-first).
+    pub fn find(self: *const TestContextMenu, label: []const u8) ?*const pf.ContextMenuItem {
+        return findIn(self.items, label, 0);
+    }
+
+    pub fn findTag(self: *const TestContextMenu, tag: u32) ?*const pf.ContextMenuItem {
+        return findIn(self.items, null, tag);
+    }
+
+    /// The top-level labels in order ("-" for separators), for order assertions.
+    pub fn labels(self: *const TestContextMenu, buf: [][]const u8) [][]const u8 {
+        const n = @min(buf.len, self.items.len);
+        for (self.items[0..n], buf[0..n]) |it, *b| b.* = if (it.kind == .separator) "-" else it.label;
+        return buf[0..n];
+    }
+};
+
 /// Headless `pf.Window` for tests: records presented scenes, holds its own sprite atlas and
 /// lets tests inject input (`simulateInput`, `click`, `moveMouse`, `typeKey`) and resizes.
 pub const TestWindow = struct {
@@ -585,6 +653,13 @@ pub const TestWindow = struct {
     /// many arrived.
     a11y_update: ?pf.a11y.Update = null,
     a11y_update_count: u32 = 0,
+    /// Native context menus (`showContextMenu`): off by default, so callers draw their
+    /// menus; set true to exercise the native path. The open menu (a deep copy) waits for
+    /// `simulateContextMenuSelect` / `simulateContextMenuDismiss`.
+    native_menus: bool = false,
+    context_menu: ?*TestContextMenu = null,
+    /// Menus shown so far.
+    context_menu_count: u32 = 0,
 
     pub fn window(self: *TestWindow) pf.Window {
         return .{ .ptr = self, .vtable = &vtable };
@@ -597,6 +672,7 @@ pub const TestWindow = struct {
     }
 
     fn free(self: *TestWindow) void {
+        if (self.context_menu) |m| m.destroy(self.platform.gpa);
         self.atlas.deinit();
         self.platform.gpa.destroy(self);
     }
@@ -735,7 +811,60 @@ pub const TestWindow = struct {
         .measureNativeControl = vMeasureControl,
         .attachNativeControl = vAttachControl,
         .updateNativeControl = vUpdateControl,
+        .showContextMenu = vShowContextMenu,
     };
+
+    fn vShowContextMenu(ptr: *anyopaque, request: pf.ContextMenuRequest, done: pf.ContextMenuDone) bool {
+        const self = c(ptr);
+        if (!self.native_menus or self.closed) return false;
+        const gpa = self.platform.gpa;
+        // A second menu replaces the first, which reports a dismissal (AppKit's behavior)
+        // later on the main thread, never from inside this call.
+        if (self.context_menu) |old| {
+            self.context_menu = null;
+            self.platform.test_dispatcher.dispatcher().dispatchOnMainThread(.{ .ctx = old, .run = TestContextMenu.runDismiss, .drop = TestContextMenu.dropDismiss }, .high);
+        }
+        const m = gpa.create(TestContextMenu) catch return false;
+        m.* = .{ .gpa = gpa, .arena = .init(gpa), .position = request.position, .dark = request.dark, .done = done, .items = &.{} };
+        m.items = TestContextMenu.copyItems(m.arena.allocator(), request.items) catch {
+            m.destroy(gpa);
+            return false;
+        };
+        self.context_menu = m;
+        self.context_menu_count += 1;
+        return true;
+    }
+
+    /// Act like the user choosing the item tagged `tag` in the open menu. Returns false
+    /// when no menu is open or no enabled action carries `tag`.
+    pub fn simulateContextMenuSelect(self: *TestWindow, tag: u32) bool {
+        const m = self.context_menu orelse return false;
+        const item = m.findTag(tag) orelse return false;
+        if (item.disabled) return false;
+        return self.closeContextMenu(tag);
+    }
+
+    /// Choose the enabled action labelled `label` (searching submenus).
+    pub fn simulateContextMenuSelectLabel(self: *TestWindow, label: []const u8) bool {
+        const m = self.context_menu orelse return false;
+        const item = m.find(label) orelse return false;
+        if (item.kind != .action or item.disabled) return false;
+        return self.closeContextMenu(item.tag);
+    }
+
+    /// Act like the user dismissing the open menu (Escape / clicking elsewhere).
+    pub fn simulateContextMenuDismiss(self: *TestWindow) bool {
+        if (self.context_menu == null) return false;
+        return self.closeContextMenu(null);
+    }
+
+    fn closeContextMenu(self: *TestWindow, selected: ?u32) bool {
+        const m = self.context_menu.?;
+        self.context_menu = null;
+        defer m.destroy(self.platform.gpa);
+        m.done.func(m.done.ctx, selected);
+        return true;
+    }
 
     /// Fixed fake frame sizes (logical px) standing in for AppKit's intrinsic sizes.
     fn vMeasureControl(ptr: *anyopaque, state: pf.NativeControlState) ?pf.Size {

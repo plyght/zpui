@@ -11,6 +11,8 @@ const Bounds = geometry.Bounds(Pixels);
 pub const MouseClickEvent = struct {
     down: input.MouseDownEvent,
     up: input.MouseUpEvent,
+    /// Bounds of the clicked element (window coordinates).
+    bounds: Bounds = .{ .origin = .zero, .size = .zero },
 };
 
 pub const KeyboardButton = enum { enter, space };
@@ -39,6 +41,14 @@ pub const ClickEvent = union(enum) {
         return switch (self) {
             .mouse => |m| m.up.position,
             .keyboard => |k| .{ .x = k.bounds.origin.x, .y = k.bounds.bottom() },
+        };
+    }
+
+    /// Bounds of the clicked element (window coordinates); zero-sized when unknown.
+    pub fn targetBounds(self: ClickEvent) Bounds {
+        return switch (self) {
+            .mouse => |m| m.bounds,
+            .keyboard => |k| k.bounds,
         };
     }
 

@@ -149,6 +149,13 @@ pub const nativeStepper = elements.native_control.nativeStepper;
 pub const nativeControlsAvailable = elements.native_control.nativeControlsAvailable;
 pub const NativeControlEvent = elements.native_control.Event;
 pub const NativeViewId = platform.NativeViewId;
+/// Native context menus (macOS NSMenu; false elsewhere so callers draw their own;
+/// src/window/context_menu.zig).
+pub const context_menu = @import("window/context_menu.zig");
+pub const showContextMenu = context_menu.show;
+pub const contextMenusAvailable = context_menu.supported;
+pub const ContextMenuItem = context_menu.MenuItem;
+pub const ContextMenuSelection = context_menu.Selection;
 /// [liquid-glass] Native Liquid Glass (macOS 26+; src/elements/liquid_glass.zig).
 pub const liquid_glass = elements.liquid_glass;
 pub const liquidGlass = elements.liquidGlass;
@@ -214,4 +221,5 @@ test {
     _ = @import("window/external_paths.zig");
     _ = @import("a11y.zig");
     _ = @import("window/a11y_tests.zig");
+    _ = @import("window/context_menu_tests.zig");
 }

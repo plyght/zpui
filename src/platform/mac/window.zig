@@ -33,6 +33,7 @@ const atlas_mod = @import("../../atlas.zig");
 const Renderer = @import("../../renderer/renderer.zig").Renderer;
 const native_views = @import("native_views.zig");
 const native_controls = @import("native_controls.zig");
+const context_menu = @import("context_menu.zig");
 const mac_a11y = @import("a11y.zig");
 
 const log = std.log.scoped(.mac_window);
@@ -623,7 +624,13 @@ pub const MacWindow = struct {
         .measureNativeControl = vMeasureNativeControl,
         .attachNativeControl = vAttachNativeControl,
         .updateNativeControl = vUpdateNativeControl,
+        .showContextMenu = vShowContextMenu,
     };
+
+    // Native context menus (context_menu.zig).
+    fn vShowContextMenu(ptr: *anyopaque, request: platform.ContextMenuRequest, done: platform.ContextMenuDone) bool {
+        return context_menu.show(cast(ptr), request, done);
+    }
 
     // Native form controls (native_controls.zig).
     fn vMeasureNativeControl(_: *anyopaque, cs: platform.NativeControlState) ?platform.Size {
