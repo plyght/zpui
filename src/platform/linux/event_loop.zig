@@ -106,6 +106,10 @@ pub const Hooks = struct {
     ctx: ?*anyopaque = null,
     /// Runs before every blocking wait (flush outgoing requests, prepare reads).
     before_wait: ?*const fn (ctx: ?*anyopaque) void = null,
+    /// Runs right after every wait, before any handler or timer (finish or cancel a
+    /// prepared read, so handlers that talk to the server, e.g. a Vulkan present that
+    /// reads the display itself, never block on a read held across them).
+    after_wait: ?*const fn (ctx: ?*anyopaque) void = null,
     /// Runs after every wait, once all ready handlers ran (dispatch queued protocol events).
     after_dispatch: ?*const fn (ctx: ?*anyopaque) void = null,
 };
@@ -234,6 +238,7 @@ pub const EventLoop = struct {
         var events: [32]linux.epoll_event = undefined;
         const rc = linux.epoll_wait(l.epfd, &events, events.len, timeout_ms);
         const n: usize = if (linux.errno(rc) == .SUCCESS) rc else 0;
+        if (l.hooks.after_wait) |f| f(l.hooks.ctx);
 
         l.running = true;
         var woke = false;

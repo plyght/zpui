@@ -24,6 +24,7 @@ pub fn build(b: *std.Build) void {
     addLinuxText(b, target, optimize, zpui);
     addMetalRenderer(b, target, optimize, zpui);
     addMacPlatform(b, target, optimize, zpui);
+    addOverlayDemo(b, target, optimize, zpui);
     addZeronSyntax(b, target, optimize, test_step);
     addImageSupport(b, target, optimize, zpui);
     addZeronMarkdownDiff(b, target, optimize, test_step);
@@ -402,6 +403,17 @@ fn addMacPlatform(
     const install_check = b.addInstallFile(check.getEmittedBin(), "mac-check.o");
     const check_step = b.step("mac-check", "Compile the macOS platform backend + demo to zig-out/mac-check.o (no SDK needed)");
     check_step.dependOn(&install_check.step);
+    // The overlay demo (examples/overlay_demo.zig) against the macOS backend, too.
+    const overlay_check = b.addObject(.{
+        .name = "overlay-demo-check",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/overlay_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    check_step.dependOn(&b.addInstallFile(overlay_check.getEmittedBin(), "overlay-demo-check.o").step);
     if (!native) {
         b.getInstallStep().dependOn(&install_check.step);
         return;
@@ -424,6 +436,36 @@ fn addMacPlatform(
     run.setCwd(b.path("."));
     run.addPassthruArgs();
     const step = b.step("mac-window", "Run the macOS window demo (ZPUI_SMOKE_FRAMES=N for the CI smoke test)");
+    step.dependOn(&run.step);
+}
+
+/// `overlay-demo` (examples/overlay_demo.zig, docs/DESKTOP_OVERLAY.md): a transparent
+/// always-on-top overlay with a blob pulsing on global key events, an aspect-locked
+/// resize handle and a tray item. `ZPUI_SMOKE_FRAMES=N` renders N frames, checks that
+/// nothing is drawn while idle, writes zig-out/overlay-demo.png and exits. Native
+/// Linux and macOS hosts only.
+fn addOverlayDemo(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    const os = target.result.os.tag;
+    if (os != .linux and !(os == .macos and @import("builtin").os.tag == .macos)) return;
+    const demo = b.addExecutable(.{
+        .name = "overlay-demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/overlay_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    b.installArtifact(demo);
+    const run = b.addRunArtifact(demo);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    const step = b.step("overlay-demo", "Run the desktop overlay demo (ZPUI_SMOKE_FRAMES=N for the smoke test)");
     step.dependOn(&run.step);
 }
 

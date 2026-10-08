@@ -181,7 +181,7 @@ pub const Client = struct {
         if (self.compositor == null or self.wm_base == null) return error.WaylandMissingGlobals;
 
         self.source = try plat.loop.addFd(c.wl_display_get_fd(display), linux.EPOLL.IN, .{ .ctx = self, .func = onReadable });
-        plat.loop.hooks = .{ .ctx = self, .before_wait = beforeWait, .after_dispatch = afterDispatch };
+        plat.loop.hooks = .{ .ctx = self, .before_wait = beforeWait, .after_wait = afterWait, .after_dispatch = afterDispatch };
         return self;
     }
 
@@ -223,6 +223,27 @@ pub const Client = struct {
         self.read_prepared = true;
         self.read_done = false;
         _ = c.wl_display_flush(self.display);
+    }
+
+    /// The prepared read never outlives the wait: read now if the socket is readable,
+    /// else cancel, then dispatch. Otherwise a handler or timer that presents a frame
+    /// (Mesa's Wayland WSI reads the display in vkQueuePresentKHR) would block forever
+    /// in wl_display_read_events waiting for this thread's own outstanding read.
+    fn afterWait(ctx: ?*anyopaque) void {
+        const self: *Client = @ptrCast(@alignCast(ctx.?));
+        if (!self.read_prepared) return;
+        self.read_prepared = false;
+        var pfd = [1]linux.pollfd{.{ .fd = c.wl_display_get_fd(self.display), .events = linux.POLL.IN, .revents = 0 }};
+        const rc = linux.poll(&pfd, 1, 0);
+        if (linux.errno(rc) == .SUCCESS and rc > 0) {
+            if (pfd[0].revents & (linux.POLL.ERR | linux.POLL.HUP) != 0) {
+                c.wl_display_cancel_read(self.display);
+                return self.fail();
+            }
+            self.read_done = true;
+            if (c.wl_display_read_events(self.display) < 0) return self.fail();
+        } else c.wl_display_cancel_read(self.display);
+        if (c.wl_display_dispatch_pending(self.display) < 0) self.fail();
     }
 
     fn onReadable(ctx: ?*anyopaque, events: u32) void {
@@ -1726,7 +1747,9 @@ pub const Window = struct {
     fn onFirstFrameTimer(ctx: ?*anyopaque, _: event_loop.TimerId) void {
         const self: *Window = @ptrCast(@alignCast(ctx.?));
         self.first_frame_timer = null;
-        if (self.configured) self.common.requestFrame(!self.presented) else requestFrame(self);
+        // Not configured yet: the configure event requests the first frame (polling
+        // here would spin the loop until it arrives).
+        if (self.configured) self.common.requestFrame(!self.presented);
     }
     fn spriteAtlas(ptr: *anyopaque) *atlas_mod.Atlas {
         const self = cast(ptr);
