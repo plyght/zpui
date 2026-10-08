@@ -7,9 +7,11 @@
 const std = @import("std");
 const zpui = @import("zpui");
 const mac_window = @import("mac_window.zig");
+const prefs_demo = @import("prefs_demo.zig");
 
 export fn zpui_mac_check() callconv(.c) usize {
     var sum: usize = @intFromPtr(&mac_window.main);
+    sum +%= @intFromPtr(&prefs_demo.main);
     sum +%= @intFromPtr(&zpui.mac_platform.create);
     sum +%= @intFromPtr(&zpui.mac_platform.MacWindow.open);
     return sum;
