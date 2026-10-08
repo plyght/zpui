@@ -396,7 +396,7 @@ pub const MetalRenderer = struct {
 
         if (options.surface) |surface| switch (surface) {
             .metal_layer => |existing| self.metal_layer = try self.configureLayer(existing, options.transparent),
-            .vulkan => return error.UnsupportedSurface,
+            .vulkan, .hwnd => return error.UnsupportedSurface,
         };
         errdefer if (self.metal_layer) |l| l.release();
         try self.resize(options.size);

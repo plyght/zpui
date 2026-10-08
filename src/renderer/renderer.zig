@@ -1,5 +1,6 @@
 //! Backend-agnostic renderer interface. `Renderer` is selected at compile
-//! time by target OS: Metal on Apple platforms, Vulkan elsewhere. Every
+//! time by target OS: Metal on Apple platforms, D3D11 on Windows, Vulkan
+//! elsewhere. Every
 //! backend exposes the same API:
 //!
 //!   init(gpa, options) !Renderer
@@ -25,13 +26,14 @@ const builtin = @import("builtin");
 const geometry = @import("../geometry.zig");
 const Atlas = @import("../atlas.zig").Atlas;
 
-pub const Backend = enum { metal, vulkan };
+pub const Backend = enum { metal, vulkan, d3d11 };
 
-pub const backend: Backend = if (builtin.os.tag.isDarwin()) .metal else .vulkan;
+pub const backend: Backend = if (builtin.os.tag.isDarwin()) .metal else if (builtin.os.tag == .windows) .d3d11 else .vulkan;
 
 pub const Renderer = switch (backend) {
     .metal => @import("metal/renderer.zig").MetalRenderer,
     .vulkan => @import("vulkan/Renderer.zig"),
+    .d3d11 => @import("d3d11/Renderer.zig"),
 };
 
 /// Options shared by every backend.
@@ -54,8 +56,11 @@ pub const Surface = union(enum) {
     /// macOS: an existing `CAMetalLayer*` to render into, or null to have the
     /// renderer create one (fetch it with `Renderer.layer()` and attach it to a view).
     metal_layer: ?*anyopaque,
-    /// Linux/Windows: the platform layer creates a `VkSurfaceKHR` from the renderer's instance.
+    /// Linux: the platform layer creates a `VkSurfaceKHR` from the renderer's instance.
     vulkan: VulkanSurface,
+    /// Windows: an `HWND`. The D3D11 renderer presents through a DirectComposition
+    /// flip-model swapchain bound to it (premultiplied alpha when `transparent`).
+    hwnd: *anyopaque,
 };
 
 /// How the Vulkan renderer obtains its `VkSurfaceKHR` (it owns the instance,
