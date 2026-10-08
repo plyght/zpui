@@ -28,6 +28,7 @@ The zeron Rust engine/daemon is unchanged; the client talks to it over its local
 | zeron right-pane host | `apps/zeron/src/ui/shell/right_pane.zig` | per-chat tabs (Diffs, History, commit diffs, Terminal, Browser page, file editors), `+` menu, drag reorder, takeover, docked Files explorer |
 | zeron pickers | `apps/zeron/src/ui/pickers/` | project / device / checkout / branch popovers on the composer chips, "New project" folder browser |
 | zeron browser pane | `apps/zeron/src/ui/browser/`, `src/platform/mac/native_views.zig` | WKWebView as a zpui native child view + overlay plane (macOS); zeron's WebKitGTK helper (`apps/zeron/native/linux-browser/`) with offscreen frames (Linux); WatchPreviews, toolbar, loading bar |
+| Desktop overlay companion features | `src/platform/desktop.zig`, `src/app/desktop.zig`, mac + linux backends | overlay windows, global input (macOS permissionless), tray, foreground app, launch at login — `docs/DESKTOP_OVERLAY.md`, `zig build overlay-demo` |
 | Linux system appearance | `src/platform/linux/appearance.zig` | settings-portal `color-scheme` + `SettingChanged` over a pure-Zig D-Bus client, gsettings fallback |
 
 ## In progress
