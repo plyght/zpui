@@ -632,8 +632,12 @@ fn faceProps(font: cf.CTFontRef) Props {
     return .{ .weight = coreTextWeightToCss(@floatCast(ct_weight)), .style = style, .width = @floatCast(width) };
 }
 
-/// font-kit's piecewise-linear map between CoreText weights (-1..1) and CSS weights (0..1000).
-const ct_weights = [_]f32{ -1.0, -0.7, -0.5, -0.23, 0.0, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0 };
+/// Piecewise-linear map between CoreText weight traits (-1..1) and CSS weights (0..1000),
+/// at Apple's `NSFont.Weight` / `kCTFontWeight*` stops (ultraLight -0.8 ... medium 0.23,
+/// semibold 0.3, bold 0.4, heavy 0.56, black 0.62), which is what CoreText reports for
+/// usWeightClass 100..900. font-kit's table (zui) puts 500 at 0.2, so a Medium face (0.23)
+/// read as CSS 530 and a 500 request fell back to Regular (SF Pro Medium never rendered).
+const ct_weights = [_]f32{ -1.0, -0.8, -0.6, -0.4, 0.0, 0.23, 0.3, 0.4, 0.56, 0.62, 1.0 };
 
 fn coreTextWeightToCss(w: f32) f32 {
     if (w <= ct_weights[0]) return 0;
@@ -831,6 +835,24 @@ test "css weight mapping round trips" {
     try std.testing.expectApproxEqAbs(@as(f32, 400), coreTextWeightToCss(0), 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 700), coreTextWeightToCss(0.4), 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 0.4), cssWeightToCoreText(700), 0.001);
+    // Apple's stops: SF Pro Medium / Semibold report 0.23 / 0.3 (NSFont.Weight.medium/.semibold).
+    try std.testing.expectApproxEqAbs(@as(f32, 500), coreTextWeightToCss(0.23), 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 600), coreTextWeightToCss(0.3), 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 300), coreTextWeightToCss(-0.4), 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 900), coreTextWeightToCss(0.62), 0.01);
+    for ([_]f32{ 100, 250, 400, 500, 550, 600, 800, 900 }) |w| try std.testing.expectApproxEqAbs(w, coreTextWeightToCss(cssWeightToCoreText(w)), 0.01);
+}
+
+test "a 500 request picks the Medium face (CoreText trait 0.23), not Regular" {
+    const cands = [_]Props{
+        .{ .weight = coreTextWeightToCss(0), .style = .normal },
+        .{ .weight = coreTextWeightToCss(0.23), .style = .normal },
+        .{ .weight = coreTextWeightToCss(0.3), .style = .normal },
+        .{ .weight = coreTextWeightToCss(0.4), .style = .normal },
+    };
+    try std.testing.expectEqual(@as(usize, 1), bestMatch(&cands, .{ .weight = 500, .style = .normal }));
+    try std.testing.expectEqual(@as(usize, 2), bestMatch(&cands, .{ .weight = 600, .style = .normal }));
+    try std.testing.expectEqual(@as(usize, 0), bestMatch(&cands, .{ .weight = 400, .style = .normal }));
 }
 
 test "best match prefers style then CSS weight order" {
