@@ -247,6 +247,28 @@ pub const TestPlatform = struct {
     captures_requested: usize = 0,
     access_requests: std.ArrayList(pf.CaptureAccess) = .empty,
     foreground_requests: usize = 0,
+    // -- desktop companion simulation (docs/DESKTOP_OVERLAY.md) --------------------------
+    /// The running global input monitor's callback (null = stopped).
+    input_monitor: ?pf.Callback(pf.GlobalInputEvent, void) = null,
+    /// What `startGlobalInputMonitor` reports (and whether it then runs: only on `.ok`).
+    input_monitor_status: pf.InputMonitorStatus = .ok,
+    precise_input: bool = false,
+    input_permission: pf.InputPermission = .not_applicable,
+    permission_requests: usize = 0,
+    /// The installed tray item (menu kept by the caller until the next `setTrayItem`),
+    /// and how many times it was set. `tray_supported = false` simulates no tray host.
+    tray: ?pf.TrayItem = null,
+    tray_sets: usize = 0,
+    tray_supported: bool = true,
+    /// The simulated foreground app (`simulateForegroundApp`).
+    foreground_id: [64]u8 = undefined,
+    foreground_id_len: ?usize = null,
+    foreground_name: [64]u8 = undefined,
+    foreground_name_len: usize = 0,
+    foreground_cb: pf.Callback(void, void) = .{},
+    /// The last `setLaunchAtLogin` request.
+    launch_at_login: ?bool = null,
+    launch_at_login_calls: usize = 0,
 
     pub fn create(gpa: Allocator) Allocator.Error!*TestPlatform {
         const self = try gpa.create(TestPlatform);
@@ -340,6 +362,30 @@ pub const TestPlatform = struct {
         return null;
     }
 
+    /// Deliver a global input event like the OS monitor would (false when not running).
+    pub fn simulateGlobalInput(self: *TestPlatform, event: pf.GlobalInputEvent) bool {
+        const cb = self.input_monitor orelse return false;
+        _ = cb.call(event);
+        return true;
+    }
+    /// Change the foreground app (null = unknown) and fire the callback.
+    pub fn simulateForegroundApp(self: *TestPlatform, app: ?pf.ForegroundApp) void {
+        if (app) |a| {
+            const n = @min(a.id.len, self.foreground_id.len);
+            @memcpy(self.foreground_id[0..n], a.id[0..n]);
+            self.foreground_id_len = n;
+            const m = @min(a.name.len, self.foreground_name.len);
+            @memcpy(self.foreground_name[0..m], a.name[0..m]);
+            self.foreground_name_len = m;
+        } else self.foreground_id_len = null;
+        _ = self.foreground_cb.call({});
+    }
+    /// The tag of the tray menu action named `name`, if any.
+    pub fn trayTag(self: *const TestPlatform, name: []const u8) ?usize {
+        const t = self.tray orelse return null;
+        return findItemTag(t.menu, name);
+    }
+
     pub fn advanceClock(self: *TestPlatform, delta_ns: u64) void {
         self.test_dispatcher.advanceClock(delta_ns);
     }
@@ -379,7 +425,56 @@ pub const TestPlatform = struct {
         .requestCaptureAccess = vRequestCaptureAccess,
         .foregroundAfterCapture = vForegroundAfterCapture,
         .renderSystemSymbol = vRenderSystemSymbol,
+        .startGlobalInputMonitor = vStartGlobalInputMonitor,
+        .stopGlobalInputMonitor = vStopGlobalInputMonitor,
+        .setPreciseInput = vSetPreciseInput,
+        .inputPermission = vInputPermission,
+        .requestInputPermission = vRequestInputPermission,
+        .setTrayItem = vSetTrayItem,
+        .foregroundApp = vForegroundApp,
+        .setForegroundAppCallback = vSetForegroundAppCallback,
+        .setLaunchAtLogin = vSetLaunchAtLogin,
     };
+
+    fn vStartGlobalInputMonitor(ptr: *anyopaque, cb: pf.Callback(pf.GlobalInputEvent, void)) pf.InputMonitorStatus {
+        const self = cast(ptr);
+        self.input_monitor = if (self.input_monitor_status == .ok) cb else null;
+        return self.input_monitor_status;
+    }
+    fn vStopGlobalInputMonitor(ptr: *anyopaque) void {
+        cast(ptr).input_monitor = null;
+    }
+    fn vSetPreciseInput(ptr: *anyopaque, on: bool) void {
+        cast(ptr).precise_input = on;
+    }
+    fn vInputPermission(ptr: *anyopaque) pf.InputPermission {
+        return cast(ptr).input_permission;
+    }
+    fn vRequestInputPermission(ptr: *anyopaque) void {
+        cast(ptr).permission_requests += 1;
+    }
+    fn vSetTrayItem(ptr: *anyopaque, item: ?pf.TrayItem) anyerror!void {
+        const self = cast(ptr);
+        if (!self.tray_supported) return error.Unsupported;
+        self.tray = item;
+        self.tray_sets += 1;
+    }
+    fn vForegroundApp(ptr: *anyopaque, buf: []u8) ?pf.ForegroundApp {
+        const self = cast(ptr);
+        const n = self.foreground_id_len orelse return null;
+        if (buf.len < n + self.foreground_name_len) return null;
+        @memcpy(buf[0..n], self.foreground_id[0..n]);
+        @memcpy(buf[n..][0..self.foreground_name_len], self.foreground_name[0..self.foreground_name_len]);
+        return .{ .id = buf[0..n], .name = buf[n..][0..self.foreground_name_len] };
+    }
+    fn vSetForegroundAppCallback(ptr: *anyopaque, cb: pf.Callback(void, void)) void {
+        cast(ptr).foreground_cb = cb;
+    }
+    fn vSetLaunchAtLogin(ptr: *anyopaque, _: []const u8, _: []const u8, on: bool) anyerror!void {
+        const self = cast(ptr);
+        self.launch_at_login = on;
+        self.launch_at_login_calls += 1;
+    }
 
     /// The fake symbol: a solid block 1.2 × the point size wide and 1 × tall (before
     /// `fit`), whose coverage encodes the weight (40 + 20 per step) so tests can tell
@@ -520,7 +615,8 @@ pub const TestPlatform = struct {
     fn vOpenWindow(ptr: *anyopaque, params: pf.WindowParams) anyerror!pf.Window {
         const self = cast(ptr);
         const w = try self.gpa.create(TestWindow);
-        w.* = .{ .platform = self, .bounds = params.bounds, .size = params.bounds.size, .atlas = .init(self.gpa, .{}), .title = "", .popover = params.popover };
+        w.* = .{ .platform = self, .bounds = params.bounds, .size = params.bounds.size, .atlas = .init(self.gpa, .{}), .title = "", .popover = params.popover, .kind = params.kind, .mouse_passthrough = params.mouse_passthrough };
+        if (params.anchor) |a| w.applyAnchor(a, params.display_id);
         try self.windows.append(self.gpa, w);
         return w.window();
     }
@@ -695,6 +791,28 @@ pub const TestWindow = struct {
     popover: ?pf.PopoverParams = null,
     popover_visible: bool = false,
     popover_places: u32 = 0,
+    /// Overlay state (`WindowParams.kind` / `mouse_passthrough` / `anchor`, `setVisible`).
+    kind: pf.WindowKind = .normal,
+    mouse_passthrough: bool = false,
+    anchor: ?pf.OverlayAnchor = null,
+    anchor_display: ?u32 = null,
+    visible: bool = true,
+    /// The last `setInputRegion` (copied; null = whole window).
+    input_region: ?[]pf.Bounds = null,
+    /// What `screenMousePosition` reports (default: bounds origin + mouse).
+    screen_mouse: ?pf.Point = null,
+
+    fn applyAnchor(self: *TestWindow, anchor: pf.OverlayAnchor, display_id: ?u32) void {
+        self.anchor = anchor;
+        self.anchor_display = display_id;
+        var displays: [8]pf.Display = undefined;
+        const n = TestPlatform.vDisplays(self.platform, &displays);
+        var vis = displays[0].visible_bounds;
+        for (displays[0..n]) |d| if (display_id != null and d.id == display_id.?) {
+            vis = d.visible_bounds;
+        };
+        self.bounds.origin = pf.desktop.anchoredOrigin(anchor, vis, self.size);
+    }
 
     pub fn window(self: *TestWindow) pf.Window {
         return .{ .ptr = self, .vtable = &vtable };
@@ -708,6 +826,7 @@ pub const TestWindow = struct {
 
     fn free(self: *TestWindow) void {
         if (self.context_menu) |m| m.destroy(self.platform.gpa);
+        if (self.input_region) |r| self.platform.gpa.free(r);
         self.atlas.deinit();
         self.platform.gpa.destroy(self);
     }
@@ -870,7 +989,36 @@ pub const TestWindow = struct {
         .attachNativeControl = vAttachControl,
         .updateNativeControl = vUpdateControl,
         .showContextMenu = vShowContextMenu,
+        .setMousePassthrough = vSetMousePassthrough,
+        .setAnchor = vSetAnchor,
+        .setVisible = vSetVisible,
+        .setInputRegion = vSetInputRegion,
+        .screenMousePosition = vScreenMousePosition,
     };
+
+    fn vSetInputRegion(ptr: *anyopaque, rects: ?[]const pf.Bounds) void {
+        const self = c(ptr);
+        if (self.input_region) |r| self.platform.gpa.free(r);
+        self.input_region = if (rects) |r| self.platform.gpa.dupe(pf.Bounds, r) catch null else null;
+    }
+    fn vScreenMousePosition(ptr: *anyopaque) ?pf.Point {
+        const self = c(ptr);
+        if (self.screen_mouse) |p| return p;
+        return .{ .x = self.bounds.origin.x + self.mouse.x, .y = self.bounds.origin.y + self.mouse.y };
+    }
+
+    fn vSetMousePassthrough(ptr: *anyopaque, on: bool) void {
+        c(ptr).mouse_passthrough = on;
+    }
+    fn vSetAnchor(ptr: *anyopaque, anchor: pf.OverlayAnchor, display_id: ?u32) void {
+        c(ptr).applyAnchor(anchor, display_id);
+    }
+    fn vSetVisible(ptr: *anyopaque, visible: bool) void {
+        const self = c(ptr);
+        self.visible = visible;
+        // A hidden window gets no frame callbacks (like the real backends).
+        if (!visible) self.frame_requested = false;
+    }
 
     fn vShowContextMenu(ptr: *anyopaque, request: pf.ContextMenuRequest, done: pf.ContextMenuDone) bool {
         const self = c(ptr);
@@ -1068,6 +1216,10 @@ pub const TestWindow = struct {
     }
     fn vResize(ptr: *anyopaque, size: pf.Size) void {
         const self = c(ptr);
+        self.size = size;
+        // Anchored overlays keep their anchored corner fixed.
+        if (self.anchor) |a| self.applyAnchor(a, self.anchor_display);
+        self.bounds.size = size;
         self.simulateResize(size, self.scale);
     }
     fn vScale(ptr: *anyopaque) f32 {
@@ -1107,6 +1259,7 @@ pub const TestWindow = struct {
     fn vStartResize(_: *anyopaque, _: pf.ResizeEdge) void {}
     fn vSetClientInset(_: *anyopaque, _: pf.Pixels) void {}
     fn vRequestFrame(ptr: *anyopaque) void {
+        if (!c(ptr).visible) return;
         c(ptr).frame_requested = true;
     }
     fn vDraw(ptr: *anyopaque, scene: *const scene_mod.Scene) anyerror!void {

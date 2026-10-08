@@ -534,6 +534,7 @@ fn keyEquivalent(app: *App, arena: Allocator, action: AnyAction) Allocator.Error
 
 /// The menu action for `tag` (null if stale).
 pub fn menuAction(app: *App, tag: usize) ?*const AnyAction {
+    if (tag >= @import("desktop.zig").tray_tag_base) return @import("desktop.zig").trayAction(app, tag);
     if (tag >= app.lifecycle.menu_actions.items.len) return null;
     return &app.lifecycle.menu_actions.items[tag];
 }

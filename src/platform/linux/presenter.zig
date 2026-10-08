@@ -40,6 +40,11 @@ pub const Presenter = struct {
         try p.renderer.drawScene(scene, .{ .width = @intCast(width), .height = @intCast(height) }, scale, clear);
     }
 
+    /// Hidden window: drop the swapchain until the next draw.
+    pub fn park(p: *Presenter) void {
+        p.renderer.parkSwapchain();
+    }
+
     pub fn atlas(p: *Presenter) *atlas_mod.Atlas {
         return p.renderer.atlas();
     }

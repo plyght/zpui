@@ -71,6 +71,7 @@ const geometry = @import("../geometry.zig");
 const DispatchPhase = @import("dispatch_tree.zig").DispatchPhase;
 const arena_mod = @import("../window/arena.zig");
 pub const lifecycle_mod = @import("lifecycle.zig");
+pub const desktop_mod = @import("desktop.zig");
 
 // ---------------------------------------------------------------------------------------
 // Erased callbacks. gpui boxes closures; zpui stores a function pointer plus small inline
@@ -242,6 +243,8 @@ pub const App = struct {
     image_services: ?*@import("../window/image.zig").ImageServices = null,
     /// Quit / reopen / open-URL listeners and the menu bar (lifecycle.zig).
     lifecycle: lifecycle_mod.Lifecycle = .{},
+    /// Global input monitor, foreground app, tray item (desktop.zig).
+    desktop: desktop_mod.Desktop = .{},
 
     /// Create an App that owns `plat` (deinit'ed with the App).
     pub fn init(gpa: Allocator, plat: platform.Platform) Allocator.Error!*App {
@@ -330,6 +333,7 @@ pub const App = struct {
         while (gal.next()) |l| l.deinit(gpa);
         app.global_action_listeners.deinit(gpa);
         app.lifecycle.deinit(gpa);
+        app.desktop.deinit(gpa);
         if (app.text_system) |ts| {
             ts.deinit();
             gpa.destroy(ts);
@@ -440,6 +444,41 @@ pub const App = struct {
         app.platform.playSound(wav);
     }
     /// Fill `out` with the connected displays; returns the count.
+    // ---- desktop companion features (desktop.zig, docs/DESKTOP_OVERLAY.md) -------------
+    /// `f(ctx, event: platform.GlobalInputEvent, app)` per system-wide key / mouse event.
+    pub fn startGlobalInputMonitor(app: *App, ctx: anytype, comptime f: anytype) platform.InputMonitorStatus {
+        return desktop_mod.startGlobalInputMonitor(app, ctx, f);
+    }
+    pub fn stopGlobalInputMonitor(app: *App) void {
+        desktop_mod.stopGlobalInputMonitor(app);
+    }
+    /// See `platform.Platform.VTable.setPreciseInput` (macOS: CGEventTap instead of the
+    /// permissionless monitor).
+    pub fn setPreciseInput(app: *App, on: bool) void {
+        app.platform.setPreciseInput(on);
+    }
+    pub fn inputPermission(app: *App) platform.InputPermission {
+        return app.platform.inputPermission();
+    }
+    pub fn requestInputPermission(app: *App) void {
+        app.platform.requestInputPermission();
+    }
+    /// The foreground application (strings copied into `buf`), null when unknown.
+    pub fn foregroundApp(app: *App, buf: []u8) ?platform.ForegroundApp {
+        return app.platform.foregroundApp(buf);
+    }
+    /// `f(ctx, app)` whenever the foreground application changes.
+    pub fn onForegroundAppChange(app: *App, ctx: anytype, comptime f: anytype) Allocator.Error!void {
+        return desktop_mod.onForegroundAppChange(app, ctx, f);
+    }
+    /// Tray / menu bar item with an action menu (null removes it).
+    pub fn setTray(app: *App, tray: ?desktop_mod.Tray) !void {
+        return desktop_mod.setTray(app, tray);
+    }
+    pub fn setLaunchAtLogin(app: *App, app_id: []const u8, exe_path: []const u8, on: bool) !void {
+        return desktop_mod.setLaunchAtLogin(app, app_id, exe_path, on);
+    }
+
     pub fn displays(app: *App, out: []platform.Display) usize {
         return app.platform.vtable.displays(app.platform.ptr, out);
     }

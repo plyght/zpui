@@ -27,6 +27,8 @@ pub const file_dialog = @import("file_dialog.zig");
 pub const notifications = @import("notifications.zig");
 pub const atspi = @import("atspi.zig");
 pub const window_capture = @import("window_capture.zig");
+pub const global_input = @import("global_input.zig");
+pub const tray = @import("tray.zig");
 const text_mod = @import("../../text/text.zig");
 
 pub const BackendKind = enum { wayland, x11 };
@@ -65,6 +67,10 @@ pub const LinuxPlatform = struct {
     atspi: ?*atspi.Bridge = null,
     /// Global hotkey + window capture (window_capture.zig), created on first use.
     capture: ?*window_capture.Service = null,
+    /// Global input monitor (global_input.zig) while running.
+    input_monitor: ?*global_input.Monitor = null,
+    /// StatusNotifierItem (tray.zig) while a tray item is set.
+    tray_item: ?*tray.Tray = null,
 
     /// Ends `run` after the current loop iteration.
     pub fn requestQuit(self: *LinuxPlatform) void {
@@ -100,7 +106,83 @@ pub const LinuxPlatform = struct {
         .setGlobalHotkey = setGlobalHotkey,
         .windowCaptureCapabilities = windowCaptureCapabilities,
         .captureActiveWindow = captureActiveWindow,
+        .startGlobalInputMonitor = startGlobalInputMonitor,
+        .stopGlobalInputMonitor = stopGlobalInputMonitor,
+        .setPreciseInput = setPreciseInput,
+        .inputPermission = inputPermission,
+        .requestInputPermission = requestInputPermission,
+        .setTrayItem = setTrayItem,
+        .foregroundApp = foregroundApp,
+        .setForegroundAppCallback = setForegroundAppCallback,
+        .setLaunchAtLogin = setLaunchAtLogin,
     };
+
+    // -- desktop companion features (docs/DESKTOP_OVERLAY.md) --------------------------
+
+    fn startGlobalInputMonitor(ptr: *anyopaque, cb: platform.Callback(platform.GlobalInputEvent, void)) platform.InputMonitorStatus {
+        const self = cast(ptr);
+        stopGlobalInputMonitor(ptr);
+        const r = global_input.Monitor.start(self.gpa, &self.loop, cb, self.backend == .wayland) catch return .unsupported;
+        self.input_monitor = r.monitor;
+        return r.status;
+    }
+    fn stopGlobalInputMonitor(ptr: *anyopaque) void {
+        const self = cast(ptr);
+        if (self.input_monitor) |m| m.destroy();
+        self.input_monitor = null;
+    }
+    /// Every Linux backend is already precise (keycodes, no characters).
+    fn setPreciseInput(_: *anyopaque, _: bool) void {}
+    fn inputPermission(ptr: *anyopaque) platform.InputPermission {
+        // X11: XInput2 needs no permission. Wayland: read access to /dev/input/event*.
+        return switch (cast(ptr).backend) {
+            .x11 => .not_applicable,
+            .wayland => global_input.evdevReadable(),
+        };
+    }
+    fn requestInputPermission(ptr: *anyopaque) void {
+        // No OS prompt exists: input devices are readable by the `input` group.
+        if (cast(ptr).backend == .wayland and global_input.evdevReadable() != .granted)
+            std.log.scoped(.linux).warn("global input on Wayland needs read access to /dev/input/event*: add the user to the `input` group (sudo usermod -aG input $USER) and log in again", .{});
+    }
+    fn setTrayItem(ptr: *anyopaque, item: ?platform.TrayItem) anyerror!void {
+        const self = cast(ptr);
+        const it = item orelse {
+            if (self.tray_item) |t| t.destroy();
+            self.tray_item = null;
+            return;
+        };
+        if (self.tray_item == null) self.tray_item = try tray.Tray.create(self.gpa, &self.loop, &self.callbacks, .fromProcess());
+        try self.tray_item.?.set(appIdForTray(), it);
+    }
+    var exe_name_buf: [256]u8 = undefined;
+    /// The executable's basename (the SNI `Id`).
+    fn appIdForTray() []const u8 {
+        const n = std.os.linux.readlink("/proc/self/exe", &exe_name_buf, exe_name_buf.len);
+        if (std.os.linux.errno(n) != .SUCCESS or n == 0) return "zpui";
+        return std.fs.path.basename(exe_name_buf[0..n]);
+    }
+    fn foregroundApp(ptr: *anyopaque, buf: []u8) ?platform.ForegroundApp {
+        return switch (cast(ptr).backend) {
+            inline else => |b| b.foregroundApp(buf),
+        };
+    }
+    fn setForegroundAppCallback(ptr: *anyopaque, cb: platform.Callback(void, void)) void {
+        switch (cast(ptr).backend) {
+            inline else => |b| b.setForegroundCallback(cb),
+        }
+    }
+    /// XDG autostart: `~/.config/autostart/<app_id>.desktop`.
+    fn setLaunchAtLogin(_: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void {
+        const env = struct {
+            fn get(name: [*:0]const u8) ?[]const u8 {
+                return if (std.c.getenv(name)) |v| std.mem.span(v) else null;
+            }
+        };
+        var path_buf: [4096]u8 = undefined;
+        const path = try platform.desktop.autostartPath(&path_buf, env.get("XDG_CONFIG_HOME"), env.get("HOME"), app_id);
+        try writeOrRemove(path, if (on) .{ .app_id = app_id, .exe_path = exe_path } else null);
+    }
 
     fn captureService(self: *LinuxPlatform) ?*window_capture.Service {
         if (self.capture == null) {
@@ -223,6 +305,10 @@ pub const LinuxPlatform = struct {
         self.atspi = null;
         if (self.capture) |c| c.destroy();
         self.capture = null;
+        if (self.input_monitor) |m| m.destroy();
+        self.input_monitor = null;
+        if (self.tray_item) |t| t.destroy();
+        self.tray_item = null;
         switch (self.backend) {
             inline else => |b| b.destroy(),
         }
@@ -232,6 +318,48 @@ pub const LinuxPlatform = struct {
         self.gpa.destroy(self);
     }
 };
+
+/// Writes the autostart entry (creating the directory) or deletes it.
+fn writeOrRemove(path: []const u8, entry: ?struct { app_id: []const u8, exe_path: []const u8 }) !void {
+    const linux = std.os.linux;
+    var zbuf: [4097]u8 = undefined;
+    if (path.len >= zbuf.len) return error.NameTooLong;
+    @memcpy(zbuf[0..path.len], path);
+    zbuf[path.len] = 0;
+    const pathz: [*:0]const u8 = zbuf[0..path.len :0];
+    const e = entry orelse {
+        const rc = linux.unlink(pathz);
+        return switch (linux.errno(rc)) {
+            .SUCCESS, .NOENT => {},
+            else => error.RemoveFailed,
+        };
+    };
+    // mkdir -p of the parent.
+    const dir = std.fs.path.dirname(path) orelse return error.BadPath;
+    var i: usize = 1;
+    while (i <= dir.len) : (i += 1) {
+        if (i == dir.len or dir[i] == '/') {
+            var d: [4097]u8 = undefined;
+            @memcpy(d[0..i], dir[0..i]);
+            d[i] = 0;
+            _ = linux.mkdir(d[0..i :0], 0o755);
+        }
+    }
+    var out: [8192]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&out);
+    try platform.desktop.writeAutostartEntry(&w, e.app_id, e.exe_path);
+    const fd_rc = linux.open(pathz, .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true, .CLOEXEC = true }, 0o644);
+    if (linux.errno(fd_rc) != .SUCCESS) return error.WriteFailed;
+    const fd: linux.fd_t = @intCast(fd_rc);
+    defer _ = linux.close(fd);
+    const data = w.buffered();
+    var off: usize = 0;
+    while (off < data.len) {
+        const n = linux.write(fd, data[off..].ptr, data.len - off);
+        if (linux.errno(n) != .SUCCESS) return error.WriteFailed;
+        off += n;
+    }
+}
 
 extern "c" fn execvp(file: [*:0]const u8, argv: [*:null]const ?[*:0]const u8) c_int;
 

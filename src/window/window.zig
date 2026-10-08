@@ -826,6 +826,39 @@ pub const Window = struct {
         self.refresh();
     }
 
+    // ---- overlay windows (docs/DESKTOP_OVERLAY.md) ------------------------------------------
+    /// Let mouse events fall through to whatever is below the window (or stop doing so).
+    pub fn setMousePassthrough(self: *Window, on: bool) void {
+        if (self.platform_closed) return;
+        self.platform_window.setMousePassthrough(on);
+    }
+    /// Pin the window to a corner of a display's work area (null display = current/main).
+    pub fn setAnchor(self: *Window, anchor: platform.OverlayAnchor, display_id: ?u32) void {
+        if (self.platform_closed) return;
+        self.platform_window.setAnchor(anchor, display_id);
+    }
+    /// Hide / show without destroying. Showing redraws the window.
+    pub fn setVisible(self: *Window, visible: bool) void {
+        if (self.platform_closed) return;
+        self.platform_window.setVisible(visible);
+        if (visible) {
+            self.refresh();
+            // A request made while hidden was dropped by the backend: ask again.
+            self.platform_window.requestFrame();
+        }
+    }
+
+    /// Per-region click-through (window coordinates; null = whole window, empty = none).
+    pub fn setInputRegion(self: *Window, rects: ?[]const Bounds) void {
+        if (self.platform_closed) return;
+        self.platform_window.setInputRegion(rects);
+    }
+    /// The pointer in global screen coordinates (drags of overlay windows), if known.
+    pub fn screenMousePosition(self: *const Window) ?Point {
+        if (self.platform_closed) return null;
+        return self.platform_window.screenMousePosition();
+    }
+
     /// The display the window is on (`platform.Display.id`), when the backend knows.
     pub fn displayId(self: *const Window) ?u32 {
         if (self.platform_closed) return null;

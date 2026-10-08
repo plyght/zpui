@@ -108,6 +108,13 @@ pub const Client = struct {
     cursor_shape_manager: ?*c.struct_wp_cursor_shape_manager_v1 = null,
     text_input_manager: ?*c.struct_zwp_text_input_manager_v3 = null,
     blur_manager: ?*c.struct_org_kde_kwin_blur_manager = null,
+    /// wlr-layer-shell (overlay windows; absent on GNOME / Mutter).
+    layer_shell: ?*c.struct_zwlr_layer_shell_v1 = null,
+    /// wlr-foreign-toplevel-management (the foreground app; wlroots compositors).
+    toplevel_manager: ?*c.struct_zwlr_foreign_toplevel_manager_v1 = null,
+    toplevels: std.ArrayList(*ForeignToplevel) = .empty,
+    active_toplevel: ?*ForeignToplevel = null,
+    foreground_cb: platform.Callback(void, void) = .{},
     outputs: std.ArrayList(Output) = .empty,
 
     // Seat devices.
@@ -194,6 +201,11 @@ pub const Client = struct {
         if (self.ime_preedit) |t| self.gpa.free(t);
         if (self.cursor_theme) |t| c.wl_cursor_theme_destroy(t);
         if (self.cursor_surface) |s| c.wl_surface_destroy(s);
+        for (self.toplevels.items) |t| {
+            c.zwlr_foreign_toplevel_handle_v1_destroy(t.handle);
+            self.gpa.destroy(t);
+        }
+        self.toplevels.deinit(self.gpa);
         self.outputs.deinit(self.gpa);
         self.keyboard.deinit();
         c.wl_display_disconnect(self.display);
@@ -285,6 +297,11 @@ pub const Client = struct {
             self.text_input_manager = self.bind(c.struct_zwp_text_input_manager_v3, name, &c.zwp_text_input_manager_v3_interface, version, 1);
         } else if (eql(u8, iface, "org_kde_kwin_blur_manager")) {
             self.blur_manager = self.bind(c.struct_org_kde_kwin_blur_manager, name, &c.org_kde_kwin_blur_manager_interface, version, 1);
+        } else if (eql(u8, iface, "zwlr_layer_shell_v1") and std.c.getenv("ZPUI_NO_LAYER_SHELL") == null) {
+            self.layer_shell = self.bind(c.struct_zwlr_layer_shell_v1, name, &c.zwlr_layer_shell_v1_interface, version, 4);
+        } else if (eql(u8, iface, "zwlr_foreign_toplevel_manager_v1")) {
+            self.toplevel_manager = self.bind(c.struct_zwlr_foreign_toplevel_manager_v1, name, &c.zwlr_foreign_toplevel_manager_v1_interface, version, 3);
+            _ = c.zwlr_foreign_toplevel_manager_v1_add_listener(self.toplevel_manager, &toplevel_manager_listener, self);
         } else return;
         self.setupSeatDevices();
     }
@@ -370,6 +387,58 @@ pub const Client = struct {
 
     fn onOutputName(_: ?*anyopaque, _: ?*c.struct_wl_output, _: [*c]const u8) callconv(.c) void {}
 
+    // -- foreign toplevels (foreground application) ------------------------------------
+
+    const toplevel_manager_listener: c.struct_zwlr_foreign_toplevel_manager_v1_listener = .{ .toplevel = onForeignToplevel, .finished = onToplevelManagerFinished };
+    const toplevel_handle_listener: c.struct_zwlr_foreign_toplevel_handle_v1_listener = .{
+        .title = ForeignToplevel.onTitle,
+        .app_id = ForeignToplevel.onAppId,
+        .output_enter = ForeignToplevel.onOutput,
+        .output_leave = ForeignToplevel.onOutput,
+        .state = ForeignToplevel.onState,
+        .done = ForeignToplevel.onDone,
+        .closed = ForeignToplevel.onClosed,
+        .parent = ForeignToplevel.onParent,
+    };
+
+    fn onForeignToplevel(data: ?*anyopaque, _: ?*c.struct_zwlr_foreign_toplevel_manager_v1, handle: ?*c.struct_zwlr_foreign_toplevel_handle_v1) callconv(.c) void {
+        const self: *Client = @ptrCast(@alignCast(data.?));
+        const h = handle orelse return;
+        const t = self.gpa.create(ForeignToplevel) catch return;
+        t.* = .{ .client = self, .handle = h };
+        self.toplevels.append(self.gpa, t) catch {
+            self.gpa.destroy(t);
+            c.zwlr_foreign_toplevel_handle_v1_destroy(h);
+            return;
+        };
+        _ = c.zwlr_foreign_toplevel_handle_v1_add_listener(h, &toplevel_handle_listener, t);
+    }
+
+    fn onToplevelManagerFinished(data: ?*anyopaque, m: ?*c.struct_zwlr_foreign_toplevel_manager_v1) callconv(.c) void {
+        const self: *Client = @ptrCast(@alignCast(data.?));
+        c.zwlr_foreign_toplevel_manager_v1_destroy(m);
+        self.toplevel_manager = null;
+    }
+
+    fn setActiveToplevel(self: *Client, t: ?*ForeignToplevel) void {
+        if (self.active_toplevel == t) return;
+        self.active_toplevel = t;
+        _ = self.foreground_cb.call({});
+    }
+
+    pub fn setForegroundCallback(self: *Client, cb: platform.Callback(void, void)) void {
+        self.foreground_cb = cb;
+    }
+
+    /// The activated toplevel's app_id (wlr-foreign-toplevel); null without the protocol.
+    pub fn foregroundApp(self: *Client, buf: []u8) ?platform.ForegroundApp {
+        const t = self.active_toplevel orelse return null;
+        const id = t.app_id[0..t.app_id_len];
+        if (id.len == 0 or id.len > buf.len) return null;
+        @memcpy(buf[0..id.len], id);
+        return .{ .id = buf[0..id.len], .name = buf[0..id.len] };
+    }
+
     pub fn displays(self: *Client, out: []platform.Display) usize {
         var n: usize = 0;
         for (self.outputs.items, 0..) |o, i| {
@@ -379,7 +448,7 @@ pub const Client = struct {
                 .origin = .{ .x = @floatFromInt(o.x), .y = @floatFromInt(o.y) },
                 .size = .{ .width = @as(f32, @floatFromInt(o.width)) / scale, .height = @as(f32, @floatFromInt(o.height)) / scale },
             };
-            out[n] = .{ .id = @intCast(i), .bounds = b, .visible_bounds = b, .scale_factor = scale };
+            out[n] = .{ .id = @intCast(i), .bounds = b, .visible_bounds = b, .scale_factor = scale, .primary = i == 0 };
             n += 1;
         }
         return n;
@@ -988,12 +1057,72 @@ pub const Client = struct {
     }
 };
 
+/// One wlr-foreign-toplevel handle (another app's window). Only the app_id and the
+/// activated state are kept; titles are ignored (never stored).
+const ForeignToplevel = struct {
+    client: *Client,
+    handle: *c.struct_zwlr_foreign_toplevel_handle_v1,
+    app_id: [128]u8 = undefined,
+    app_id_len: usize = 0,
+    pending_activated: bool = false,
+
+    fn cast(data: ?*anyopaque) *ForeignToplevel {
+        return @ptrCast(@alignCast(data.?));
+    }
+    fn onTitle(_: ?*anyopaque, _: ?*c.struct_zwlr_foreign_toplevel_handle_v1, _: [*c]const u8) callconv(.c) void {}
+    fn onAppId(data: ?*anyopaque, _: ?*c.struct_zwlr_foreign_toplevel_handle_v1, id: [*c]const u8) callconv(.c) void {
+        const t = cast(data);
+        const s = if (id != null) std.mem.span(id) else "";
+        t.app_id_len = @min(s.len, t.app_id.len);
+        @memcpy(t.app_id[0..t.app_id_len], s[0..t.app_id_len]);
+    }
+    fn onOutput(_: ?*anyopaque, _: ?*c.struct_zwlr_foreign_toplevel_handle_v1, _: ?*c.struct_wl_output) callconv(.c) void {}
+    fn onState(data: ?*anyopaque, _: ?*c.struct_zwlr_foreign_toplevel_handle_v1, states: [*c]c.struct_wl_array) callconv(.c) void {
+        const t = cast(data);
+        t.pending_activated = false;
+        for (arrayU32(states)) |st| if (st == c.ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_ACTIVATED) {
+            t.pending_activated = true;
+        };
+    }
+    fn onDone(data: ?*anyopaque, _: ?*c.struct_zwlr_foreign_toplevel_handle_v1) callconv(.c) void {
+        const t = cast(data);
+        const cl = t.client;
+        if (t.pending_activated) {
+            cl.setActiveToplevel(t);
+        } else if (cl.active_toplevel == t) cl.setActiveToplevel(null);
+    }
+    fn onClosed(data: ?*anyopaque, h: ?*c.struct_zwlr_foreign_toplevel_handle_v1) callconv(.c) void {
+        const t = cast(data);
+        const cl = t.client;
+        for (cl.toplevels.items, 0..) |x, i| if (x == t) {
+            _ = cl.toplevels.swapRemove(i);
+            break;
+        };
+        if (cl.active_toplevel == t) cl.setActiveToplevel(null);
+        c.zwlr_foreign_toplevel_handle_v1_destroy(h);
+        cl.gpa.destroy(t);
+    }
+    fn onParent(_: ?*anyopaque, _: ?*c.struct_zwlr_foreign_toplevel_handle_v1, _: ?*c.struct_zwlr_foreign_toplevel_handle_v1) callconv(.c) void {}
+};
+
 pub const Window = struct {
     client: *Client,
     common: common.Common = .{},
     surface: *c.struct_wl_surface,
-    xdg_surface: *c.struct_xdg_surface,
-    toplevel: *c.struct_xdg_toplevel,
+    /// xdg-shell role (normal windows, and overlays without layer-shell).
+    xdg_surface: ?*c.struct_xdg_surface = null,
+    toplevel: ?*c.struct_xdg_toplevel = null,
+    /// wlr-layer-shell role (overlay windows when the compositor has it).
+    layer_surface: ?*c.struct_zwlr_layer_surface_v1 = null,
+    kind: platform.WindowKind = .normal,
+    anchor: platform.OverlayAnchor = .{},
+    mouse_passthrough: bool = false,
+    /// `setVisible(false)`: unmapped (null buffer), no frame callbacks, swapchain parked.
+    hidden: bool = false,
+    /// `setInputRegion` (surface-local logical px); null = whole surface.
+    input_rects: ?[]platform.Bounds = null,
+    /// The output the layer surface was created on (null = compositor's choice).
+    layer_output: ?*c.struct_wl_output = null,
     decoration: ?*c.struct_zxdg_toplevel_decoration_v1 = null,
     fractional_scale: ?*c.struct_wp_fractional_scale_v1 = null,
     viewport: ?*c.struct_wp_viewport = null,
@@ -1022,37 +1151,60 @@ pub const Window = struct {
         const gpa = client.gpa;
         const surface = c.wl_compositor_create_surface(client.compositor) orelse return error.WaylandSurface;
         errdefer c.wl_surface_destroy(surface);
-        const xdg_surface = c.xdg_wm_base_get_xdg_surface(client.wm_base, surface) orelse return error.WaylandSurface;
-        errdefer c.xdg_surface_destroy(xdg_surface);
-        const toplevel = c.xdg_surface_get_toplevel(xdg_surface) orelse return error.WaylandSurface;
-        errdefer c.xdg_toplevel_destroy(toplevel);
 
         const self = try gpa.create(Window);
         errdefer gpa.destroy(self);
-        self.* = .{ .client = client, .surface = surface, .xdg_surface = xdg_surface, .toplevel = toplevel, .min_size = params.min_size };
+        self.* = .{ .client = client, .surface = surface, .min_size = params.min_size, .kind = params.kind, .anchor = params.anchor orelse .{} };
         self.common.size = params.bounds.size;
         self.common.background = params.background;
-
         _ = c.wl_surface_add_listener(surface, &surface_listener, self);
-        _ = c.xdg_surface_add_listener(xdg_surface, &xdg_surface_listener, self);
-        _ = c.xdg_toplevel_add_listener(toplevel, &toplevel_listener, self);
 
-        if (params.titlebar) |tb| self.setTitleZ(tb.title);
-        if (params.app_id) |id| {
-            const z = try gpa.dupeSentinel(u8, id, 0);
-            defer gpa.free(z);
-            c.xdg_toplevel_set_app_id(toplevel, z);
-        }
-        if (params.min_size) |m| c.xdg_toplevel_set_min_size(toplevel, @intFromFloat(m.width), @intFromFloat(m.height));
+        if (params.kind == .overlay and client.layer_shell != null) {
+            // Overlay layer, pinned to a corner by anchors + margins, never focused.
+            const output: ?*c.struct_wl_output = if (params.display_id) |d| (if (d < client.outputs.items.len) client.outputs.items[d].output else null) else null;
+            const ns = params.app_id orelse "zpui-overlay";
+            const ns_z = try gpa.dupeSentinel(u8, ns, 0);
+            defer gpa.free(ns_z);
+            const layer = c.zwlr_layer_shell_v1_get_layer_surface(client.layer_shell, surface, output, c.ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, ns_z) orelse return error.WaylandSurface;
+            self.layer_surface = layer;
+            self.layer_output = output;
+            _ = c.zwlr_layer_surface_v1_add_listener(layer, &layer_listener, self);
+            self.applyLayerState(self.common.size);
+        } else {
+            const xdg_surface = c.xdg_wm_base_get_xdg_surface(client.wm_base, surface) orelse return error.WaylandSurface;
+            errdefer c.xdg_surface_destroy(xdg_surface);
+            const toplevel = c.xdg_surface_get_toplevel(xdg_surface) orelse return error.WaylandSurface;
+            errdefer c.xdg_toplevel_destroy(toplevel);
+            self.xdg_surface = xdg_surface;
+            self.toplevel = toplevel;
+            _ = c.xdg_surface_add_listener(xdg_surface, &xdg_surface_listener, self);
+            _ = c.xdg_toplevel_add_listener(toplevel, &toplevel_listener, self);
 
-        if (client.decoration_manager) |m| {
-            self.decoration = c.zxdg_decoration_manager_v1_get_toplevel_decoration(m, toplevel);
-            _ = c.zxdg_toplevel_decoration_v1_add_listener(self.decoration, &decoration_listener, self);
-            c.zxdg_toplevel_decoration_v1_set_mode(self.decoration, switch (params.decorations) {
-                .server => c.ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE,
-                .client => c.ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE,
-            });
+            if (params.titlebar) |tb| self.setTitleZ(tb.title);
+            if (params.app_id) |id| {
+                const z = try gpa.dupeSentinel(u8, id, 0);
+                defer gpa.free(z);
+                c.xdg_toplevel_set_app_id(toplevel, z);
+            }
+            if (params.kind == .overlay) {
+                // No layer-shell (GNOME): a plain fixed-size toplevel; the compositor
+                // places it and keeps it in the normal stacking order (best effort).
+                const w: i32 = @intFromFloat(params.bounds.size.width);
+                const h: i32 = @intFromFloat(params.bounds.size.height);
+                c.xdg_toplevel_set_min_size(toplevel, w, h);
+                c.xdg_toplevel_set_max_size(toplevel, w, h);
+            } else if (params.min_size) |m| c.xdg_toplevel_set_min_size(toplevel, @intFromFloat(m.width), @intFromFloat(m.height));
+
+            if (client.decoration_manager) |m| {
+                self.decoration = c.zxdg_decoration_manager_v1_get_toplevel_decoration(m, toplevel);
+                _ = c.zxdg_toplevel_decoration_v1_add_listener(self.decoration, &decoration_listener, self);
+                c.zxdg_toplevel_decoration_v1_set_mode(self.decoration, if (params.decorations == .client or params.kind == .overlay)
+                    c.ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE
+                else
+                    c.ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+            }
         }
+        if (params.mouse_passthrough) self.applyPassthrough(true);
         if (client.fractional_scale_manager != null and client.viewporter != null) {
             self.fractional_scale = c.wp_fractional_scale_manager_v1_get_fractional_scale(client.fractional_scale_manager, surface);
             _ = c.wp_fractional_scale_v1_add_listener(self.fractional_scale, &fractional_listener, self);
@@ -1064,8 +1216,12 @@ pub const Window = struct {
         errdefer _ = client.windows.pop();
 
         // Initial commit without a buffer; the compositor answers with a configure.
-        c.wl_surface_commit(surface);
-        _ = c.wl_display_roundtrip(client.display);
+        // A window created hidden stays without a role commit until `setVisible(true)`.
+        self.hidden = !params.show;
+        if (!self.hidden) {
+            c.wl_surface_commit(surface);
+            _ = c.wl_display_roundtrip(client.display);
+        }
 
         const dev = self.common.deviceSize();
         self.presenter = Presenter.init(gpa, .{ .wayland = .{ .display = client.display, .surface = surface } }, dev.width, dev.height, params.background != .opaque_) catch |e| blk: {
@@ -1080,7 +1236,7 @@ pub const Window = struct {
         const z = self.client.gpa.dupeSentinel(u8, title, 0) catch return;
         if (self.title_z) |t| self.client.gpa.free(t);
         self.title_z = z;
-        c.xdg_toplevel_set_title(self.toplevel, z);
+        if (self.toplevel) |t| c.xdg_toplevel_set_title(t, z);
     }
 
     fn closeWindow(self: *Window) void {
@@ -1094,8 +1250,10 @@ pub const Window = struct {
         if (self.viewport) |v| c.wp_viewport_destroy(v);
         if (self.fractional_scale) |f| c.wp_fractional_scale_v1_destroy(f);
         if (self.decoration) |d| c.zxdg_toplevel_decoration_v1_destroy(d);
-        c.xdg_toplevel_destroy(self.toplevel);
-        c.xdg_surface_destroy(self.xdg_surface);
+        if (self.toplevel) |t| c.xdg_toplevel_destroy(t);
+        if (self.xdg_surface) |x| c.xdg_surface_destroy(x);
+        if (self.layer_surface) |l| c.zwlr_layer_surface_v1_destroy(l);
+        if (self.input_rects) |r| gpa.free(r);
         c.wl_surface_destroy(self.surface);
         _ = c.wl_display_flush(self.client.display);
         self.entered_outputs.deinit(gpa);
@@ -1259,6 +1417,52 @@ pub const Window = struct {
         if (first or self.presenter != null) self.common.requestFrame(true);
     }
 
+    // -- layer shell / overlay ----------------------------------------------------------
+
+    const layer_listener: c.struct_zwlr_layer_surface_v1_listener = .{ .configure = onLayerConfigure, .closed = onLayerClosed };
+
+    /// Size, anchors, margins, no keyboard focus, no exclusive zone (the margins are
+    /// measured from other panels' exclusive zones: the work area).
+    fn applyLayerState(self: *Window, size: platform.Size) void {
+        const l = self.layer_surface orelse return;
+        const p = platform.desktop.layerPlacement(self.anchor);
+        c.zwlr_layer_surface_v1_set_size(l, @intFromFloat(@max(1, @round(size.width))), @intFromFloat(@max(1, @round(size.height))));
+        c.zwlr_layer_surface_v1_set_anchor(l, p.anchor);
+        c.zwlr_layer_surface_v1_set_margin(l, p.margin[0], p.margin[1], p.margin[2], p.margin[3]);
+        c.zwlr_layer_surface_v1_set_keyboard_interactivity(l, c.ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+        c.zwlr_layer_surface_v1_set_exclusive_zone(l, 0);
+    }
+
+    fn onLayerConfigure(data: ?*anyopaque, layer: ?*c.struct_zwlr_layer_surface_v1, serial: u32, width: u32, height: u32) callconv(.c) void {
+        const self: *Window = @ptrCast(@alignCast(data.?));
+        c.zwlr_layer_surface_v1_ack_configure(layer, serial);
+        var size = self.common.size;
+        if (width > 0 and height > 0) size = .{ .width = @floatFromInt(width), .height = @floatFromInt(height) };
+        const first = !self.configured;
+        self.configured = true;
+        self.applySize(size);
+        if (first or self.presenter != null) self.common.requestFrame(true);
+    }
+
+    fn onLayerClosed(data: ?*anyopaque, _: ?*c.struct_zwlr_layer_surface_v1) callconv(.c) void {
+        const self: *Window = @ptrCast(@alignCast(data.?));
+        self.closeWindow();
+    }
+
+    /// Empty input region = clicks go to whatever is below; the `setInputRegion` rects;
+    /// null = the whole surface.
+    fn applyPassthrough(self: *Window, on: bool) void {
+        self.mouse_passthrough = on;
+        if (on or self.input_rects != null) {
+            const region = c.wl_compositor_create_region(self.client.compositor) orelse return;
+            defer c.wl_region_destroy(region);
+            if (!on) for (self.input_rects.?) |r| c.wl_region_add(region, @intFromFloat(@floor(r.origin.x)), @intFromFloat(@floor(r.origin.y)), @intFromFloat(@ceil(r.size.width)), @intFromFloat(@ceil(r.size.height)));
+            c.wl_surface_set_input_region(self.surface, region);
+        } else c.wl_surface_set_input_region(self.surface, null);
+        // Double-buffered: applied by the next commit (the next frame, or this one).
+        if (self.configured and !self.hidden) c.wl_surface_commit(self.surface);
+    }
+
     const frame_listener: c.struct_wl_callback_listener = .{ .done = onFrameDone };
 
     fn onFrameDone(data: ?*anyopaque, cb: ?*c.struct_wl_callback, _: u32) callconv(.c) void {
@@ -1315,7 +1519,75 @@ pub const Window = struct {
         .updateImePosition = updateImePosition,
         .close = close,
         .a11yUpdate = a11yUpdate,
+        .setMousePassthrough = setMousePassthrough,
+        .setAnchor = setAnchor,
+        .setVisible = setVisible,
+        .setInputRegion = setInputRegion,
+        .screenMousePosition = screenMousePosition,
     };
+
+    fn setMousePassthrough(ptr: *anyopaque, on: bool) void {
+        cast(ptr).applyPassthrough(on);
+        _ = c.wl_display_flush(cast(ptr).client.display);
+    }
+    fn setInputRegion(ptr: *anyopaque, rects: ?[]const platform.Bounds) void {
+        const self = cast(ptr);
+        const gpa = self.client.gpa;
+        if (self.input_rects) |r| gpa.free(r);
+        self.input_rects = if (rects) |r| gpa.dupe(platform.Bounds, r) catch null else null;
+        self.applyPassthrough(self.mouse_passthrough);
+        _ = c.wl_display_flush(self.client.display);
+    }
+    /// Layer surfaces: output position + anchored origin (from anchor, margins and the
+    /// output's logical size; exclusive zones of panels are not known to clients) +
+    /// the surface-local pointer. xdg-toplevels never learn their position: null.
+    fn screenMousePosition(ptr: *anyopaque) ?platform.Point {
+        const self = cast(ptr);
+        if (self.layer_surface == null) return null;
+        const cl = self.client;
+        const out_ptr = self.layer_output orelse (if (self.entered_outputs.items.len > 0) self.entered_outputs.items[0] else null);
+        var displays: [16]platform.Display = undefined;
+        const n = cl.displays(&displays);
+        var found: ?platform.Bounds = null;
+        for (cl.outputs.items, 0..) |o, i| if (i < n and (out_ptr == null or o.output == out_ptr)) {
+            found = displays[i].bounds;
+            break;
+        };
+        const b = found orelse return null;
+        const origin = platform.desktop.anchoredOrigin(self.anchor, b, self.common.size);
+        return .{ .x = origin.x + self.common.mouse_position.x, .y = origin.y + self.common.mouse_position.y };
+    }
+    fn setAnchor(ptr: *anyopaque, anchor: platform.OverlayAnchor, _: ?u32) void {
+        // The output is fixed when the layer surface is created (`WindowParams.display_id`).
+        const self = cast(ptr);
+        self.anchor = anchor;
+        if (self.layer_surface == null) return; // xdg-toplevel: clients cannot position
+        self.applyLayerState(self.common.size);
+        if (self.configured and !self.hidden) c.wl_surface_commit(self.surface);
+        _ = c.wl_display_flush(self.client.display);
+    }
+    fn setVisible(ptr: *anyopaque, visible: bool) void {
+        const self = cast(ptr);
+        if (self.hidden == !visible) return;
+        self.hidden = !visible;
+        if (!visible) {
+            // Unmap: drop the swapchain, attach no buffer. The surface returns to its
+            // pre-configure state; showing re-commits and waits for a configure.
+            if (self.first_frame_timer) |t| self.client.plat.loop.cancelTimer(t);
+            self.first_frame_timer = null;
+            if (self.frame_callback) |cb| c.wl_callback_destroy(cb);
+            self.frame_callback = null;
+            if (self.presenter) |*p| p.park();
+            c.wl_surface_attach(self.surface, null, 0, 0);
+            c.wl_surface_commit(self.surface);
+            self.configured = false;
+            self.presented = false;
+        } else {
+            self.applyLayerState(self.common.size);
+            c.wl_surface_commit(self.surface);
+        }
+        _ = c.wl_display_flush(self.client.display);
+    }
 
     fn setCallbacks(ptr: *anyopaque, cbs: platform.WindowCallbacks) void {
         const self = cast(ptr);
@@ -1338,6 +1610,14 @@ pub const Window = struct {
         // Clients may pick their own size only while not maximized/fullscreen.
         const self = cast(ptr);
         if (self.common.maximized or self.common.fullscreen) return;
+        if (self.layer_surface != null) {
+            // The anchors keep the corner fixed; set_size rides on the next frame's commit
+            // together with the new-size buffer (no separate commit, no flicker).
+            self.applyLayerState(size);
+        } else if (self.kind == .overlay) if (self.toplevel) |t| {
+            c.xdg_toplevel_set_min_size(t, @intFromFloat(size.width), @intFromFloat(size.height));
+            c.xdg_toplevel_set_max_size(t, @intFromFloat(size.width), @intFromFloat(size.height));
+        };
         self.applySize(size);
     }
     fn scaleFactor(ptr: *anyopaque) f32 {
@@ -1379,22 +1659,26 @@ pub const Window = struct {
         // Needs xdg-activation with a token; not supported yet.
     }
     fn minimize(ptr: *anyopaque) void {
-        c.xdg_toplevel_set_minimized(cast(ptr).toplevel);
+        if (cast(ptr).toplevel) |t| c.xdg_toplevel_set_minimized(t);
     }
     fn zoom(ptr: *anyopaque) void {
         const self = cast(ptr);
-        if (self.common.maximized) c.xdg_toplevel_unset_maximized(self.toplevel) else c.xdg_toplevel_set_maximized(self.toplevel);
+        const t = self.toplevel orelse return;
+        if (self.common.maximized) c.xdg_toplevel_unset_maximized(t) else c.xdg_toplevel_set_maximized(t);
     }
     fn toggleFullscreen(ptr: *anyopaque) void {
         const self = cast(ptr);
-        if (self.common.fullscreen) c.xdg_toplevel_unset_fullscreen(self.toplevel) else c.xdg_toplevel_set_fullscreen(self.toplevel, null);
+        const t = self.toplevel orelse return;
+        if (self.common.fullscreen) c.xdg_toplevel_unset_fullscreen(t) else c.xdg_toplevel_set_fullscreen(t, null);
     }
     fn startWindowMove(ptr: *anyopaque) void {
         const self = cast(ptr);
-        c.xdg_toplevel_move(self.toplevel, self.client.seat, self.client.last_button_serial);
+        const t = self.toplevel orelse return;
+        c.xdg_toplevel_move(t, self.client.seat, self.client.last_button_serial);
     }
     fn startWindowResize(ptr: *anyopaque, edge: platform.ResizeEdge) void {
         const self = cast(ptr);
+        const t = self.toplevel orelse return;
         const e: u32 = switch (edge) {
             .top => c.XDG_TOPLEVEL_RESIZE_EDGE_TOP,
             .top_right => c.XDG_TOPLEVEL_RESIZE_EDGE_TOP_RIGHT,
@@ -1405,7 +1689,7 @@ pub const Window = struct {
             .left => c.XDG_TOPLEVEL_RESIZE_EDGE_LEFT,
             .top_left => c.XDG_TOPLEVEL_RESIZE_EDGE_TOP_LEFT,
         };
-        c.xdg_toplevel_resize(self.toplevel, self.client.seat, self.client.last_button_serial, e);
+        c.xdg_toplevel_resize(t, self.client.seat, self.client.last_button_serial, e);
     }
     fn setClientInset(ptr: *anyopaque, inset: f32) void {
         // Shadow/resize border drawn by the app for CSD: exclude it from the window geometry.
@@ -1414,10 +1698,11 @@ pub const Window = struct {
         const i: i32 = @intFromFloat(inset);
         const w: i32 = @intFromFloat(self.common.size.width);
         const h: i32 = @intFromFloat(self.common.size.height);
-        if (i > 0 and w > 2 * i and h > 2 * i) c.xdg_surface_set_window_geometry(self.xdg_surface, i, i, w - 2 * i, h - 2 * i);
+        if (self.xdg_surface) |x| if (i > 0 and w > 2 * i and h > 2 * i) c.xdg_surface_set_window_geometry(x, i, i, w - 2 * i, h - 2 * i);
     }
     fn requestFrame(ptr: *anyopaque) void {
         const self = cast(ptr);
+        if (self.hidden) return;
         if (!self.presented) {
             // Unmapped surfaces never get frame callbacks: tick from the event loop instead.
             if (self.first_frame_timer == null)
@@ -1430,7 +1715,7 @@ pub const Window = struct {
     fn draw(ptr: *anyopaque, scene: *const scene_mod.Scene) anyerror!void {
         const self = cast(ptr);
         const p = if (self.presenter) |*p| p else return error.NoRenderer;
-        if (!self.configured) return; // no buffer may be attached before the first configure
+        if (!self.configured or self.hidden) return; // no buffer may be attached before the first configure
         // Throttle to the compositor: the present's commit carries this frame callback.
         _ = self.armFrameCallback();
         const dev = self.common.deviceSize();

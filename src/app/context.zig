@@ -81,6 +81,12 @@ pub fn Context(comptime T: type) type {
             return self.app.gpa;
         }
 
+        /// The platform (raw backend features: global input, tray, foreground app, ...;
+        /// `App` has typed helpers for most of them).
+        pub fn platform(self: *const Self) @import("../platform/platform.zig").Platform {
+            return self.app.platform;
+        }
+
         /// A new strong handle to this entity (release it when done).
         pub fn entity(self: *Self) Entity(T) {
             self.app.entities.retain(self.entity_id);

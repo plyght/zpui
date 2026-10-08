@@ -68,6 +68,8 @@ const ATOM_WM_NAME = 39;
 const ATOM_WM_NORMAL_HINTS = 40;
 const ATOM_WM_SIZE_HINTS = 41;
 const ATOM_WM_CLASS = 67;
+const ATOM_WM_HINTS = 35;
+const ATOM_WINDOW = 33;
 
 const atom_names = [_][:0]const u8{
     "WM_PROTOCOLS",                 "WM_DELETE_WINDOW",             "WM_CHANGE_STATE",
@@ -86,6 +88,10 @@ const atom_names = [_][:0]const u8{
     "XdndTypeList",                 "text/uri-list",                "_ZPUI_XDND",
     "image/png",                    "image/jpeg",                   "image/bmp",
     "image/tiff",                   "image/gif",                    "image/webp",
+    // Overlay windows (docs/DESKTOP_OVERLAY.md).
+    "_NET_WM_STATE_ABOVE",          "_NET_WM_STATE_STICKY",         "_NET_WM_STATE_SKIP_TASKBAR",
+    "_NET_WM_STATE_SKIP_PAGER",     "_NET_WM_WINDOW_TYPE_UTILITY",  "_NET_WORKAREA",
+    "_NET_CURRENT_DESKTOP",         "_NET_WM_DESKTOP",
 };
 
 const Atoms = struct {
@@ -132,6 +138,14 @@ const Atoms = struct {
     IMAGE_TIFF: u32 = 0,
     IMAGE_GIF: u32 = 0,
     IMAGE_WEBP: u32 = 0,
+    _NET_WM_STATE_ABOVE: u32 = 0,
+    _NET_WM_STATE_STICKY: u32 = 0,
+    _NET_WM_STATE_SKIP_TASKBAR: u32 = 0,
+    _NET_WM_STATE_SKIP_PAGER: u32 = 0,
+    _NET_WM_WINDOW_TYPE_UTILITY: u32 = 0,
+    _NET_WORKAREA: u32 = 0,
+    _NET_CURRENT_DESKTOP: u32 = 0,
+    _NET_WM_DESKTOP: u32 = 0,
 
     fn intern(conn: *c.xcb_connection_t) Atoms {
         var cookies: [atom_names.len]c.xcb_intern_atom_cookie_t = undefined;
@@ -441,6 +455,9 @@ pub const Client = struct {
     mapping_watcher: ?*MappingWatcher = null,
     /// The XDND drag currently over one of our windows.
     dnd: Dnd = .{},
+    /// Foreground-app change callback (root `_NET_ACTIVE_WINDOW` PropertyNotify).
+    foreground_cb: platform.Callback(void, void) = .{},
+    last_active_window: u32 = 0,
 
     pub fn create(gpa: Allocator, plat: *LinuxPlatform) !*Client {
         const dpy = c.XOpenDisplay(null) orelse return error.X11ConnectFailed;
@@ -841,6 +858,16 @@ pub const Client = struct {
             },
             PROPERTY_NOTIFY => {
                 const e: *const c.xcb_property_notify_event_t = @ptrCast(@alignCast(ev));
+                if (e.window == self.screen.root) {
+                    if (e.atom == self.atoms._NET_ACTIVE_WINDOW and self.foreground_cb.func != null) {
+                        const active = self.activeWindow();
+                        if (active != self.last_active_window) {
+                            self.last_active_window = active;
+                            _ = self.foreground_cb.call({});
+                        }
+                    }
+                    return;
+                }
                 if (e.atom != self.atoms._NET_WM_STATE) return;
                 if (self.windowFor(e.window)) |w| w.readWmState();
             },
@@ -1059,9 +1086,82 @@ pub const Client = struct {
             .width = self.logical(@floatFromInt(self.screen.width_in_pixels)),
             .height = self.logical(@floatFromInt(self.screen.height_in_pixels)),
         } };
-        out[0] = .{ .id = 0, .bounds = b, .visible_bounds = b, .scale_factor = self.scale };
+        out[0] = .{ .id = 0, .bounds = b, .visible_bounds = self.workArea(), .scale_factor = self.scale, .primary = true };
         return 1;
     }
+
+    /// The current desktop's `_NET_WORKAREA` (screen minus panels), logical pixels; the
+    /// whole screen when the WM does not publish one.
+    pub fn workArea(self: *Client) platform.Bounds {
+        const full: platform.Bounds = .{ .origin = .zero, .size = .{
+            .width = self.logical(@floatFromInt(self.screen.width_in_pixels)),
+            .height = self.logical(@floatFromInt(self.screen.height_in_pixels)),
+        } };
+        var desktop: u32 = 0;
+        if (self.rootCardinals(self.atoms._NET_CURRENT_DESKTOP, 1)) |v| desktop = v.buf[0];
+        const area = self.rootCardinals(self.atoms._NET_WORKAREA, 4 * 32) orelse return full;
+        const i: usize = @as(usize, desktop) * 4;
+        if (i + 4 > area.len) return full;
+        const v = area.buf[i..][0..4];
+        if (v[2] == 0 or v[3] == 0) return full;
+        return .{
+            .origin = .{ .x = self.logical(@floatFromInt(v[0])), .y = self.logical(@floatFromInt(v[1])) },
+            .size = .{ .width = self.logical(@floatFromInt(v[2])), .height = self.logical(@floatFromInt(v[3])) },
+        };
+    }
+
+    const Cardinals = struct { buf: [128]u32, len: usize };
+
+    fn rootCardinals(self: *Client, atom: u32, max: u32) ?Cardinals {
+        return self.windowCardinals(self.screen.root, atom, max);
+    }
+
+    /// Up to `max` 32-bit values of property `atom` on `win` (any 32-bit type).
+    fn windowCardinals(self: *Client, win: u32, atom: u32, max: u32) ?Cardinals {
+        if (atom == 0) return null;
+        const reply = c.xcb_get_property_reply(self.conn, c.xcb_get_property(self.conn, 0, win, atom, 0, 0, @min(max, 128)), null);
+        if (reply == null) return null;
+        defer std.c.free(reply);
+        if (reply.*.format != 32) return null;
+        const n: usize = @min(@as(usize, @intCast(@divTrunc(c.xcb_get_property_value_length(reply), 4))), 128);
+        if (n == 0) return null;
+        const vals: [*]const u32 = @ptrCast(@alignCast(c.xcb_get_property_value(reply) orelse return null));
+        var out: Cardinals = .{ .buf = undefined, .len = n };
+        @memcpy(out.buf[0..n], vals[0..n]);
+        return out;
+    }
+
+    // -- foreground application -------------------------------------------------------
+
+    pub fn setForegroundCallback(self: *Client, cb: platform.Callback(void, void)) void {
+        self.foreground_cb = cb;
+        // PropertyNotify for the root window (`_NET_ACTIVE_WINDOW` changes).
+        const mask: u32 = c.XCB_EVENT_MASK_PROPERTY_CHANGE;
+        _ = c.xcb_change_window_attributes(self.conn, self.screen.root, c.XCB_CW_EVENT_MASK, &mask);
+        _ = c.xcb_flush(self.conn);
+        self.last_active_window = self.activeWindow();
+    }
+
+    fn activeWindow(self: *Client) u32 {
+        const v = self.rootCardinals(self.atoms._NET_ACTIVE_WINDOW, 1) orelse return 0;
+        return v.buf[0];
+    }
+
+    /// `WM_CLASS` (class part) of the `_NET_ACTIVE_WINDOW`, copied into `buf`.
+    pub fn foregroundApp(self: *Client, buf: []u8) ?platform.ForegroundApp {
+        const win = self.activeWindow();
+        if (win == 0) return null;
+        const reply = c.xcb_get_property_reply(self.conn, c.xcb_get_property(self.conn, 0, win, ATOM_WM_CLASS, ATOM_STRING, 0, 64), null);
+        if (reply == null) return null;
+        defer std.c.free(reply);
+        const len: usize = @intCast(c.xcb_get_property_value_length(reply));
+        const bytes: [*]const u8 = @ptrCast(c.xcb_get_property_value(reply) orelse return null);
+        const class = wmClassName(bytes[0..len]) orelse return null;
+        if (class.len > buf.len) return null;
+        @memcpy(buf[0..class.len], class);
+        return .{ .id = buf[0..class.len], .name = buf[0..class.len] };
+    }
+
 
     pub fn openWindow(self: *Client, params: platform.WindowParams) !platform.Window {
         const w = try Window.create(self, params);
@@ -1117,6 +1217,14 @@ pub const Window = struct {
     mapped: bool = false,
     origin: platform.Point = .zero,
     frame_timer: ?event_loop.TimerId = null,
+    kind: platform.WindowKind = .normal,
+    /// Overlay placement (re-applied when the work area changes size).
+    anchor: ?platform.OverlayAnchor = null,
+    mouse_passthrough: bool = false,
+    /// `setVisible(false)`: unmapped, no frame timer, swapchain parked.
+    hidden: bool = false,
+    /// `setInputRegion` (logical px); null = whole window.
+    input_rects: ?[]platform.Bounds = null,
 
     fn create(client: *Client, params: platform.WindowParams) !*Window {
         const gpa = client.gpa;
@@ -1143,11 +1251,13 @@ pub const Window = struct {
         const scale = client.scale;
         const dw: u16 = @intFromFloat(@max(1, @round(params.bounds.size.width * scale)));
         const dh: u16 = @intFromFloat(@max(1, @round(params.bounds.size.height * scale)));
-        _ = c.xcb_create_window(conn, depth, xid, client.screen.root, @intFromFloat(params.bounds.origin.x * scale), @intFromFloat(params.bounds.origin.y * scale), dw, dh, 0, c.XCB_WINDOW_CLASS_INPUT_OUTPUT, visual, mask, &values);
+        // Anchored overlays: a corner of the work area (`_NET_WORKAREA`), not `bounds.origin`.
+        const origin = if (params.anchor) |a| platform.desktop.anchoredOrigin(a, client.workArea(), params.bounds.size) else params.bounds.origin;
+        _ = c.xcb_create_window(conn, depth, xid, client.screen.root, @intFromFloat(@round(origin.x * scale)), @intFromFloat(@round(origin.y * scale)), dw, dh, 0, c.XCB_WINDOW_CLASS_INPUT_OUTPUT, visual, mask, &values);
 
         const self = try gpa.create(Window);
         errdefer gpa.destroy(self);
-        self.* = .{ .client = client, .xid = xid, .colormap = colormap, .origin = params.bounds.origin };
+        self.* = .{ .client = client, .xid = xid, .colormap = colormap, .origin = origin, .kind = params.kind, .anchor = params.anchor, .hidden = !params.show };
         self.common.size = params.bounds.size;
         self.common.scale = scale;
         self.common.background = params.background;
@@ -1155,18 +1265,19 @@ pub const Window = struct {
         const a = &client.atoms;
         client.setProperty32(xid, a.WM_PROTOCOLS, ATOM_ATOM, &.{ a.WM_DELETE_WINDOW, a._NET_WM_PING });
         client.setProperty32(xid, a._NET_WM_PID, ATOM_CARDINAL, &.{@intCast(linux.getpid())});
-        client.setProperty32(xid, a._NET_WM_WINDOW_TYPE, ATOM_ATOM, &.{a._NET_WM_WINDOW_TYPE_NORMAL});
+        if (params.kind == .overlay) self.setOverlayProperties(params.bounds.size) else client.setProperty32(xid, a._NET_WM_WINDOW_TYPE, ATOM_ATOM, &.{a._NET_WM_WINDOW_TYPE_NORMAL});
         // XDND protocol version 5: file drops arrive as XdndEnter/Position/Drop.
         client.setProperty32(xid, a.XdndAware, ATOM_ATOM, &.{5});
         if (params.titlebar) |tb| self.setTitleImpl(tb.title);
         const app_id = params.app_id orelse "zpui";
         var class_buf: [256]u8 = undefined;
         if (std.fmt.bufPrint(&class_buf, "{s}\x00{s}\x00", .{ app_id, app_id })) |cls| client.setProperty(xid, ATOM_WM_CLASS, ATOM_STRING, 8, cls) else |_| {}
-        if (params.decorations == .client) {
+        if (params.decorations == .client or params.kind == .overlay) {
             // _MOTIF_WM_HINTS { flags = DECORATIONS, functions, decorations = 0, input_mode, status }
             client.setProperty32(xid, a._MOTIF_WM_HINTS, a._MOTIF_WM_HINTS, &.{ 2, 0, 0, 0, 0 });
         }
-        self.setSizeHints(params.min_size);
+        if (params.kind != .overlay) self.setSizeHints(params.min_size);
+        if (params.mouse_passthrough) self.applyPassthrough(true);
 
         if (client.xi_opcode != null) {
             var bits: [4]u8 = @splat(0);
@@ -1182,7 +1293,11 @@ pub const Window = struct {
 
         try client.windows.append(gpa, self);
         errdefer _ = client.windows.pop();
-        if (params.show) _ = c.xcb_map_window(conn, xid);
+        if (params.show) {
+            _ = c.xcb_map_window(conn, xid);
+            // Some WMs place new windows themselves; restate the anchored position.
+            if (params.anchor != null) self.moveTo(origin);
+        }
         _ = c.xcb_flush(conn);
 
         self.presenter = Presenter.init(gpa, .{ .xcb = .{ .connection = conn, .window = xid } }, dw, dh, transparent) catch |e| blk: {
@@ -1190,6 +1305,64 @@ pub const Window = struct {
             break :blk null;
         };
         return self;
+    }
+
+    /// EWMH for `WindowKind.overlay`: a utility window above everything, on every
+    /// desktop, without taskbar / pager entries, that never takes keyboard focus
+    /// (WM_HINTS input = False), with a fixed size.
+    fn setOverlayProperties(self: *Window, size: platform.Size) void {
+        const client = self.client;
+        const a = &client.atoms;
+        client.setProperty32(self.xid, a._NET_WM_WINDOW_TYPE, ATOM_ATOM, &.{a._NET_WM_WINDOW_TYPE_UTILITY});
+        client.setProperty32(self.xid, a._NET_WM_STATE, ATOM_ATOM, &.{ a._NET_WM_STATE_ABOVE, a._NET_WM_STATE_STICKY, a._NET_WM_STATE_SKIP_TASKBAR, a._NET_WM_STATE_SKIP_PAGER });
+        client.setProperty32(self.xid, a._NET_WM_DESKTOP, ATOM_CARDINAL, &.{0xFFFF_FFFF});
+        // WM_HINTS { flags = InputHint, input = False, ... }
+        client.setProperty32(self.xid, ATOM_WM_HINTS, ATOM_WM_HINTS, &.{ 1, 0, 0, 0, 0, 0, 0, 0, 0 });
+        // WM_NORMAL_HINTS: program position + min = max size.
+        var hints: [18]u32 = @splat(0);
+        hints[0] = 1 | 4 | 16 | 32; // USPosition | PPosition | PMinSize | PMaxSize
+        const w: u32 = @intFromFloat(@max(1, @round(size.width * client.scale)));
+        const h: u32 = @intFromFloat(@max(1, @round(size.height * client.scale)));
+        hints[5] = w;
+        hints[6] = h;
+        hints[7] = w;
+        hints[8] = h;
+        client.setProperty32(self.xid, ATOM_WM_NORMAL_HINTS, ATOM_WM_SIZE_HINTS, &hints);
+    }
+
+    /// Input shape: empty (clicks reach the windows below), the `setInputRegion` rects,
+    /// or the default (whole window).
+    fn applyPassthrough(self: *Window, on: bool) void {
+        self.mouse_passthrough = on;
+        self.applyInputShape();
+    }
+
+    fn applyInputShape(self: *Window) void {
+        const dpy = self.client.dpy;
+        if (self.mouse_passthrough) {
+            c.XShapeCombineRectangles(dpy, self.xid, c.ShapeInput, 0, 0, null, 0, c.ShapeSet, c.Unsorted);
+        } else if (self.input_rects) |rects| {
+            var xr: [64]c.XRectangle = undefined;
+            const n = @min(rects.len, xr.len);
+            const s = self.client.scale;
+            for (rects[0..n], xr[0..n]) |r, *o| o.* = .{
+                .x = @intFromFloat(@round(r.origin.x * s)),
+                .y = @intFromFloat(@round(r.origin.y * s)),
+                .width = @intFromFloat(@max(0, @round(r.size.width * s))),
+                .height = @intFromFloat(@max(0, @round(r.size.height * s))),
+            };
+            c.XShapeCombineRectangles(dpy, self.xid, c.ShapeInput, 0, 0, &xr, @intCast(n), c.ShapeSet, c.Unsorted);
+        } else {
+            c.XShapeCombineMask(dpy, self.xid, c.ShapeInput, 0, 0, 0, c.ShapeSet);
+        }
+        _ = c.XFlush(dpy);
+    }
+
+    fn moveTo(self: *Window, origin: platform.Point) void {
+        const s = self.client.scale;
+        const vals = [_]i32{ @intFromFloat(@round(origin.x * s)), @intFromFloat(@round(origin.y * s)) };
+        _ = c.xcb_configure_window(self.client.conn, self.xid, c.XCB_CONFIG_WINDOW_X | c.XCB_CONFIG_WINDOW_Y, &vals);
+        self.origin = origin;
     }
 
     fn setSizeHints(self: *Window, min_size: ?platform.Size) void {
@@ -1217,6 +1390,7 @@ pub const Window = struct {
         if (client.plat.atspi) |br| br.removeWindow(&self.common);
         if (self.frame_timer) |t| client.plat.loop.cancelTimer(t);
         if (self.presenter) |*p| p.deinit(client.gpa);
+        if (self.input_rects) |r| client.gpa.free(r);
         _ = c.xcb_destroy_window(client.conn, self.xid);
         if (self.colormap != 0) _ = c.xcb_free_colormap(client.conn, self.colormap);
         _ = c.xcb_flush(client.conn);
@@ -1310,7 +1484,54 @@ pub const Window = struct {
         .updateImePosition = updateImePosition,
         .close = close,
         .a11yUpdate = a11yUpdate,
+        .setMousePassthrough = setMousePassthrough,
+        .setAnchor = setAnchor,
+        .setVisible = setVisible,
+        .setInputRegion = setInputRegion,
+        .screenMousePosition = screenMousePosition,
     };
+
+    fn setMousePassthrough(ptr: *anyopaque, on: bool) void {
+        cast(ptr).applyPassthrough(on);
+    }
+    fn setInputRegion(ptr: *anyopaque, rects: ?[]const platform.Bounds) void {
+        const self = cast(ptr);
+        const gpa = self.client.gpa;
+        if (self.input_rects) |r| gpa.free(r);
+        self.input_rects = if (rects) |r| gpa.dupe(platform.Bounds, r) catch null else null;
+        self.applyInputShape();
+    }
+    fn screenMousePosition(ptr: *anyopaque) ?platform.Point {
+        // Root coordinates of the last pointer event (motion keeps arriving during the
+        // implicit grab of a press inside the window).
+        const client = cast(ptr).client;
+        return .{ .x = client.logical(client.root_position.x), .y = client.logical(client.root_position.y) };
+    }
+    fn setAnchor(ptr: *anyopaque, anchor: platform.OverlayAnchor, _: ?u32) void {
+        // One X screen = one display (`displays`): the work area of the current desktop.
+        const self = cast(ptr);
+        self.anchor = anchor;
+        self.moveTo(platform.desktop.anchoredOrigin(anchor, self.client.workArea(), self.common.size));
+        _ = c.xcb_flush(self.client.conn);
+    }
+    fn setVisible(ptr: *anyopaque, visible: bool) void {
+        const self = cast(ptr);
+        if (self.hidden == !visible) return;
+        self.hidden = !visible;
+        const conn = self.client.conn;
+        if (visible) {
+            _ = c.xcb_map_window(conn, self.xid);
+            if (self.anchor) |a| self.moveTo(platform.desktop.anchoredOrigin(a, self.client.workArea(), self.common.size));
+            _ = c.xcb_flush(conn);
+            self.common.requestFrame(true);
+        } else {
+            if (self.frame_timer) |t| self.client.plat.loop.cancelTimer(t);
+            self.frame_timer = null;
+            _ = c.xcb_unmap_window(conn, self.xid);
+            _ = c.xcb_flush(conn);
+            if (self.presenter) |*p| p.park();
+        }
+    }
 
     fn setCallbacks(ptr: *anyopaque, cbs: platform.WindowCallbacks) void {
         const self = cast(ptr);
@@ -1332,7 +1553,22 @@ pub const Window = struct {
     fn resize(ptr: *anyopaque, size: platform.Size) void {
         const self = cast(ptr);
         const s = self.client.scale;
-        const vals = [_]u32{ @intFromFloat(@max(1, size.width * s)), @intFromFloat(@max(1, size.height * s)) };
+        const w: u32 = @intFromFloat(@max(1, @round(size.width * s)));
+        const h: u32 = @intFromFloat(@max(1, @round(size.height * s)));
+        if (self.kind == .overlay) {
+            // Fixed-size hints first (min = max), else the WM refuses the new size.
+            self.setOverlayProperties(size);
+            if (self.anchor) |a| {
+                // Anchored corner stays put: move + resize in one ConfigureWindow.
+                const o = platform.desktop.anchoredOrigin(a, self.client.workArea(), size);
+                const vals = [_]u32{ @bitCast(@as(i32, @intFromFloat(@round(o.x * s)))), @bitCast(@as(i32, @intFromFloat(@round(o.y * s)))), w, h };
+                _ = c.xcb_configure_window(self.client.conn, self.xid, c.XCB_CONFIG_WINDOW_X | c.XCB_CONFIG_WINDOW_Y | c.XCB_CONFIG_WINDOW_WIDTH | c.XCB_CONFIG_WINDOW_HEIGHT, &vals);
+                self.origin = o;
+                _ = c.xcb_flush(self.client.conn);
+                return;
+            }
+        }
+        const vals = [_]u32{ w, h };
         _ = c.xcb_configure_window(self.client.conn, self.xid, c.XCB_CONFIG_WINDOW_WIDTH | c.XCB_CONFIG_WINDOW_HEIGHT, &vals);
         _ = c.xcb_flush(self.client.conn);
     }
@@ -1372,6 +1608,7 @@ pub const Window = struct {
     }
     fn activate(ptr: *anyopaque) void {
         const self = cast(ptr);
+        if (self.kind == .overlay) return; // overlays never take focus
         self.client.sendRootMessage(self.xid, self.client.atoms._NET_ACTIVE_WINDOW, .{ 1, 0, 0, 0, 0 });
     }
     fn minimize(ptr: *anyopaque) void {
@@ -1421,12 +1658,13 @@ pub const Window = struct {
         // No vsync event on X11 without Present: tick at the refresh rate (the FIFO
         // swapchain still paces the actual presents).
         const self = cast(ptr);
-        if (self.frame_timer != null) return;
+        if (self.frame_timer != null or self.hidden) return;
         self.frame_timer = self.client.plat.loop.addTimer(self.client.refresh_ns, .{ .ctx = self, .func = onFrameTimer }) catch null;
     }
     fn draw(ptr: *anyopaque, scene: *const scene_mod.Scene) anyerror!void {
         const self = cast(ptr);
         const p = if (self.presenter) |*p| p else return error.NoRenderer;
+        if (self.hidden) return;
         const dev = self.common.deviceSize();
         try p.draw(scene, dev.width, dev.height, self.common.scale);
     }
@@ -1676,6 +1914,15 @@ const Dnd = struct {
     }
 };
 
+/// `WM_CLASS` = "instance\0class\0" → the class (else the instance).
+pub fn wmClassName(bytes: []const u8) ?[]const u8 {
+    var it = std.mem.splitScalar(u8, bytes, 0);
+    const instance = it.next() orelse return null;
+    const class = it.next() orelse "";
+    if (class.len > 0) return class;
+    return if (instance.len > 0) instance else null;
+}
+
 /// `text/uri-list` → local paths (comments and non-`file:` URIs skipped).
 pub fn parseUriList(gpa: Allocator, bytes: []const u8, out: *std.ArrayList([]u8)) void {
     var it = std.mem.tokenizeAny(u8, bytes, "\r\n\x00");
@@ -1689,6 +1936,12 @@ pub fn parseUriList(gpa: Allocator, bytes: []const u8, out: *std.ArrayList([]u8)
 // ---------------------------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "wmClassName prefers the class" {
+    try testing.expectEqualStrings("firefox", wmClassName("Navigator\x00firefox\x00").?);
+    try testing.expectEqualStrings("xterm", wmClassName("xterm\x00").?);
+    try testing.expect(wmClassName("") == null);
+}
 
 test "uri lists become paths" {
     var out: std.ArrayList([]u8) = .empty;

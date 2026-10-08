@@ -95,7 +95,15 @@ pub const WindowBackgroundAppearance = enum { opaque_, transparent, blurred };
 
 pub const WindowDecorations = enum { server, client };
 
-pub const WindowKind = enum { normal, popup, floating };
+/// `overlay`: a borderless, always-on-top, never-focused window on every workspace with
+/// no taskbar / dock entry (desktop companions; docs/DESKTOP_OVERLAY.md).
+pub const WindowKind = enum { normal, popup, floating, overlay };
+
+/// Which corner of the display's visible (work-area) bounds an overlay is pinned to.
+pub const OverlayCorner = enum { top_left, top_right, bottom_left, bottom_right };
+/// Overlay placement (`WindowParams.anchor`, `Window.setAnchor`): `margin` is the inward
+/// offset from `corner` in logical pixels.
+pub const OverlayAnchor = struct { corner: OverlayCorner = .bottom_right, margin: Point = .{ .x = 16, .y = 16 } };
 
 pub const TitlebarOptions = struct {
     title: []const u8 = "",
@@ -122,6 +130,12 @@ pub const WindowParams = struct {
     /// A native popover container (see `PopoverParams`; `kind` should be `.popup`).
     /// `bounds` is then in the parent window's content coordinates.
     popover: ?PopoverParams = null,
+    /// Mouse events pass through to whatever is below. Toggle later with `Window.setMousePassthrough`.
+    mouse_passthrough: bool = false,
+    /// Overlay placement. When set, `bounds.origin` is ignored and the window is pinned to a corner
+    /// of the display's visible (work-area) bounds, offset inward by `margin`.
+    /// Wayland layer-shell maps this to anchors + margins (clients can't position themselves otherwise).
+    anchor: ?OverlayAnchor = null,
 };
 
 // ---- native popover containers (macOS: a borderless glass NSPanel) ---------------------
@@ -364,7 +378,46 @@ pub const Window = struct {
         /// The usable area of the screen this window is on (menu bar and Dock excluded),
         /// in this window's content coordinates; popovers flip and clamp against it.
         screenBoundsInContent: ?*const fn (ptr: *anyopaque) ?Bounds = null,
+
+        // -- overlay windows (docs/DESKTOP_OVERLAY.md) ----------------------------------------
+        /// Mouse events pass through to whatever is below the window (or stop doing so).
+        setMousePassthrough: *const fn (ptr: *anyopaque, on: bool) void,
+        /// Pin the window to a corner of `display_id`'s work area (null = its current / the
+        /// main display).
+        setAnchor: *const fn (ptr: *anyopaque, anchor: OverlayAnchor, display_id: ?u32) void,
+        setVisible: *const fn (ptr: *anyopaque, visible: bool) void, // hide/show without destroying
+        /// Per-region click-through: only `rects` (window content coordinates, logical px)
+        /// take mouse input, the rest passes to whatever is below. null = the whole
+        /// window takes input; an empty slice = fully passthrough. `setMousePassthrough(true)`
+        /// overrides it (all-or-nothing) until switched off again. Copied.
+        setInputRegion: *const fn (ptr: *anyopaque, rects: ?[]const Bounds) void,
+        /// The pointer in global screen coordinates (logical px, top-left origin of the
+        /// display layout, the space of `Display.bounds`), null when unknown. Valid while
+        /// the window holds the implicit pointer grab of a press inside it (drags).
+        screenMousePosition: *const fn (ptr: *anyopaque) ?Point,
     };
+
+    /// See `VTable.setMousePassthrough`.
+    pub fn setMousePassthrough(w: Window, on: bool) void {
+        w.vtable.setMousePassthrough(w.ptr, on);
+    }
+    /// See `VTable.setAnchor`.
+    pub fn setAnchor(w: Window, anchor: OverlayAnchor, display_id: ?u32) void {
+        w.vtable.setAnchor(w.ptr, anchor, display_id);
+    }
+    /// Hide / show the window without destroying it. A hidden window gets no frame
+    /// callbacks and parks its renderer / display link.
+    pub fn setVisible(w: Window, visible: bool) void {
+        w.vtable.setVisible(w.ptr, visible);
+    }
+    /// See `VTable.setInputRegion`.
+    pub fn setInputRegion(w: Window, rects: ?[]const Bounds) void {
+        w.vtable.setInputRegion(w.ptr, rects);
+    }
+    /// See `VTable.screenMousePosition`.
+    pub fn screenMousePosition(w: Window) ?Point {
+        return w.vtable.screenMousePosition(w.ptr);
+    }
 
     /// See `VTable.placePopover` (no-op on backends without popovers).
     pub fn placePopover(w: Window, frame: Bounds, visible: bool) void {
@@ -772,7 +825,60 @@ pub const Platform = struct {
         /// `openWindow` accepts `WindowParams.popover` (native popover containers).
         /// Null = never (the core keeps popovers and tooltips in-window).
         supportsNativePopovers: ?*const fn (ptr: *anyopaque) bool = null,
+
+        // -- desktop companion features (docs/DESKTOP_OVERLAY.md) ------------------------------
+        /// Callback runs on the main thread. Returns the status of the strongest backend it could start.
+        startGlobalInputMonitor: *const fn (ptr: *anyopaque, cb: Callback(GlobalInputEvent, void)) InputMonitorStatus,
+        stopGlobalInputMonitor: *const fn (ptr: *anyopaque) void,
+        /// Opt into (true) or out of (false, the default) the precise global input backend.
+        /// macOS: false = the permissionless counter monitor (no TCC prompt; key class
+        /// `.other`, estimated `key_x`); true = the listen-only CGEventTap (Input
+        /// Monitoring permission). Takes effect on the next `startGlobalInputMonitor`
+        /// (restarts a running monitor). No-op where every backend is already precise
+        /// (Linux, Windows).
+        setPreciseInput: *const fn (ptr: *anyopaque, on: bool) void,
+        inputPermission: *const fn (ptr: *anyopaque) InputPermission,
+        /// Shows the OS prompt / opens the right settings pane. No-op where not applicable.
+        requestInputPermission: *const fn (ptr: *anyopaque) void,
+        /// Install, replace or (null) remove the tray / menu bar item. Items report back
+        /// through `PlatformCallbacks.menu_action`. `error.Unsupported` when the desktop has
+        /// no tray host.
+        setTrayItem: *const fn (ptr: *anyopaque, item: ?TrayItem) anyerror!void,
+        /// Copies into `buf`; null when unknown (e.g. Wayland without a foreign-toplevel protocol).
+        foregroundApp: *const fn (ptr: *anyopaque, buf: []u8) ?ForegroundApp,
+        /// Fires on the main thread whenever the foreground app changes.
+        setForegroundAppCallback: *const fn (ptr: *anyopaque, cb: Callback(void, void)) void,
+        setLaunchAtLogin: *const fn (ptr: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void,
     };
+
+    /// See `VTable.startGlobalInputMonitor`.
+    pub fn startGlobalInputMonitor(p: Platform, cb: Callback(GlobalInputEvent, void)) InputMonitorStatus {
+        return p.vtable.startGlobalInputMonitor(p.ptr, cb);
+    }
+    pub fn stopGlobalInputMonitor(p: Platform) void {
+        p.vtable.stopGlobalInputMonitor(p.ptr);
+    }
+    pub fn setPreciseInput(p: Platform, on: bool) void {
+        p.vtable.setPreciseInput(p.ptr, on);
+    }
+    pub fn inputPermission(p: Platform) InputPermission {
+        return p.vtable.inputPermission(p.ptr);
+    }
+    pub fn requestInputPermission(p: Platform) void {
+        p.vtable.requestInputPermission(p.ptr);
+    }
+    pub fn setTrayItem(p: Platform, item: ?TrayItem) !void {
+        return p.vtable.setTrayItem(p.ptr, item);
+    }
+    pub fn foregroundApp(p: Platform, buf: []u8) ?ForegroundApp {
+        return p.vtable.foregroundApp(p.ptr, buf);
+    }
+    pub fn setForegroundAppCallback(p: Platform, cb: Callback(void, void)) void {
+        p.vtable.setForegroundAppCallback(p.ptr, cb);
+    }
+    pub fn setLaunchAtLogin(p: Platform, app_id: []const u8, exe_path: []const u8, on: bool) !void {
+        return p.vtable.setLaunchAtLogin(p.ptr, app_id, exe_path, on);
+    }
 
     /// Whether this backend hosts native popover containers (`WindowParams.popover`).
     pub fn supportsNativePopovers(p: Platform) bool {
@@ -870,6 +976,42 @@ pub const Platform = struct {
         if (p.vtable.foregroundAfterCapture) |f| f(p.ptr);
     }
 };
+
+// ---------------------------------------------------------------------------------------
+// Global input monitor, tray item, foreground app (docs/DESKTOP_OVERLAY.md)
+// ---------------------------------------------------------------------------------------
+
+pub const GlobalInputKind = enum { key_down, key_up, mouse_down, mouse_up, scroll };
+/// Coarse key class only: the app animates, it never needs which character was typed.
+pub const GlobalKeyClass = enum { letter, digit, space, enter, backspace, tab, modifier, arrow, other };
+pub const GlobalInputEvent = struct {
+    kind: GlobalInputKind,
+    key: GlobalKeyClass = .other,
+    /// Rough horizontal position of the key on a US layout, 0 = far left, 1 = far right.
+    /// Lets the companion move its left/right paw. 0.5 when unknown.
+    key_x: f32 = 0.5,
+    timestamp_ns: u64,
+};
+pub const InputMonitorStatus = enum { ok, needs_permission, unsupported };
+pub const InputPermission = enum { granted, denied, not_determined, not_applicable };
+
+pub const TrayItem = struct {
+    /// PNG bytes (RGBA). macOS marks it as a template image when `template` is set.
+    icon_png: []const u8,
+    template: bool = true,
+    tooltip: []const u8 = "",
+    /// Reuses the existing app menu item model (`menu_action` callback receives the tag).
+    menu: []const MenuItem,
+};
+
+pub const ForegroundApp = struct {
+    /// Stable identifier: bundle id (mac), executable basename (Windows), WM_CLASS / app_id (Linux).
+    id: []const u8,
+    name: []const u8,
+};
+
+/// Pure helpers behind the contract (anchor geometry, keycode tables, autostart files).
+pub const desktop = @import("desktop.zig");
 
 // ---------------------------------------------------------------------------------------
 // Global hotkey + frontmost-window capture (zeron Appshots: `appshots/{macos,linux}`)

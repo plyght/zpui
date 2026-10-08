@@ -11,6 +11,8 @@
 #include "cursor-shape-v1-client-protocol.h"
 #include "text-input-unstable-v3-client-protocol.h"
 #include "org-kde-kwin-blur-client-protocol.h"
+#include "wlr-layer-shell-unstable-v1-client-protocol.h"
+#include "wlr-foreign-toplevel-management-unstable-v1-client-protocol.h"
 
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-compose.h>
@@ -21,6 +23,7 @@
 #include <X11/Xcursor/Xcursor.h>
 #include <X11/extensions/XInput2.h>
 #include <X11/extensions/XI2proto.h>
+#include <X11/extensions/shape.h>
 #include <xcb/xcb.h>
 #include <xcb/xkb.h>
 

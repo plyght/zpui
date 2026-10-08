@@ -187,7 +187,8 @@ fn addLinuxPlatform(
     const protocols = [_][]const u8{
         "xdg-shell",              "xdg-decoration-unstable-v1", "fractional-scale-v1",
         "viewporter",             "tablet-v2",                  "cursor-shape-v1",
-        "text-input-unstable-v3", "org-kde-kwin-blur",
+        "text-input-unstable-v3", "org-kde-kwin-blur",          "wlr-layer-shell-unstable-v1",
+        "wlr-foreign-toplevel-management-unstable-v1",
     };
     for (protocols) |name| {
         const xml = b.path(b.fmt("src/platform/linux/protocols/{s}.xml", .{name}));
@@ -203,7 +204,7 @@ fn addLinuxPlatform(
     for ([_][]const u8{
         "wayland-client", "wayland-cursor", "xkbcommon", "xkbcommon-x11",
         "X11",            "X11-xcb",        "xcb",       "xcb-xkb",
-        "Xcursor",        "Xi",
+        "Xcursor",        "Xi",             "Xext",
     }) |lib| zpui.linkSystemLibrary(lib, .{});
 
     const demo = b.addExecutable(.{

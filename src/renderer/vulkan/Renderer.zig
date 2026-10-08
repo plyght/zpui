@@ -246,6 +246,19 @@ pub fn resize(self: *Renderer, size: Size) !void {
     }
 }
 
+/// Release the swapchain images (a hidden window costs no GPU memory or presents); the
+/// next `drawScene` recreates it. No-op for offscreen renderers.
+pub fn parkSwapchain(self: *Renderer) void {
+    if (self.offscreen != null or self.swapchain.handle == null) return;
+    self.device.waitIdle();
+    self.swapchain.deinit(&self.device);
+}
+
+/// Whether `parkSwapchain` released the swapchain (and no draw recreated it yet).
+pub fn swapchainParked(self: *const Renderer) bool {
+    return self.offscreen == null and self.swapchain.handle == null;
+}
+
 fn syncSurfaceState(self: *Renderer) void {
     // The surface may impose its own extent.
     self.size = .{ .width = @intCast(self.swapchain.extent.width), .height = @intCast(self.swapchain.extent.height) };
@@ -485,7 +498,7 @@ fn createPipeline(self: *Renderer, desc: PipelineDesc) !c.VkPipeline {
 pub fn drawScene(self: *Renderer, scene: *const Scene, viewport: Size, scale_factor: f32, clear: Hsla) !void {
     _ = scale_factor;
     if (viewport.width <= 0 or viewport.height <= 0) return;
-    if (viewport.width != self.size.width or viewport.height != self.size.height) try self.resize(viewport);
+    if (viewport.width != self.size.width or viewport.height != self.size.height or self.swapchainParked()) try self.resize(viewport);
 
     const dev = self.device.handle;
     const frame = &self.frames[self.frame_index];
