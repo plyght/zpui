@@ -43,6 +43,7 @@ pub fn build(b: *std.Build) void {
     addZeronMedia(b, target, optimize, zpui, test_step);
     addZeronLifecycle(b);
     addZeronVoice(b, target, optimize, zpui);
+    addAudio(b, target, optimize, zpui, test_step);
 }
 
 /// zeron on-device dictation engine (apps/zeron/src/voice, port of zeron
@@ -1223,4 +1224,69 @@ fn findRootModule(step: *std.Build.Step, path: []const u8) ?*std.Build.Module {
     }
     for (step.dependencies.items) |dep| if (findRootModule(dep, path)) |m| return m;
     return null;
+}
+
+/// zpui.audio (src/audio/): low-latency sound-effect playback, also exported
+/// as the standalone `zpui_audio` module (no GPU/windowing dependencies).
+/// `zig build audio-test` runs its tests (null backend, offline rendering),
+/// `zig build audio-demo` plays a synthesized click pattern on the default
+/// output (`ZPUI_AUDIO_OFFLINE=out.wav` renders it to a file instead), and
+/// `audio-check` compiles the demo for the selected target: an object file
+/// (zig-out/audio-check.o) when targeting macOS from another host (no SDK),
+/// a linked executable otherwise.
+fn addAudio(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+    test_step: *std.Build.Step,
+) void {
+    const os = target.result.os.tag;
+    const host_os = @import("builtin").os.tag;
+    const mac_cross = os == .macos and host_os != .macos;
+    const audio = b.addModule("zpui_audio", .{
+        .root_source_file = b.path("src/audio/audio.zig"),
+        .target = target,
+        .optimize = optimize,
+        // Linux backends are dlopen'ed; macOS uses libdispatch + AudioToolbox.
+        .link_libc = os != .windows,
+    });
+    if (os == .macos and !mac_cross) {
+        for ([_]*std.Build.Module{ audio, zpui }) |m| {
+            m.linkFramework("AudioToolbox", .{});
+            m.linkFramework("CoreAudio", .{});
+            m.linkFramework("CoreFoundation", .{});
+        }
+    }
+
+    const tests = b.addTest(.{ .name = "zpui_audio", .root_module = audio });
+    const run_tests = b.addRunArtifact(tests);
+    b.step("audio-test", "Run the zpui.audio tests (null backend, offline rendering)").dependOn(&run_tests.step);
+    if (!mac_cross) test_step.dependOn(&run_tests.step);
+
+    const demo_mod = b.createModule(.{
+        .root_source_file = b.path("examples/audio_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "zpui_audio", .module = audio }},
+    });
+    if (mac_cross) {
+        const check_mod = b.createModule(.{
+            .root_source_file = b.path("examples/audio_check.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui_audio", .module = audio }},
+        });
+        const obj = b.addObject(.{ .name = "audio-check", .root_module = check_mod });
+        const install = b.addInstallFile(obj.getEmittedBin(), "audio-check.o");
+        b.step("audio-check", "Compile zpui.audio + demo for -Dtarget (object only when cross-compiling to macOS)").dependOn(&install.step);
+        return;
+    }
+    const demo = b.addExecutable(.{ .name = "audio-demo", .root_module = demo_mod });
+    const install_demo = b.addInstallArtifact(demo, .{});
+    b.step("audio-check", "Compile zpui.audio + demo for -Dtarget (object only when cross-compiling to macOS)").dependOn(&install_demo.step);
+    const run = b.addRunArtifact(demo);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    b.step("audio-demo", "Play a synthesized keyboard-click pattern (ZPUI_AUDIO_OFFLINE=out.wav renders to a WAV file)").dependOn(&run.step);
 }

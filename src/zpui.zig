@@ -43,6 +43,8 @@ pub const mac_platform = if (@import("builtin").os.tag == .macos) @import("platf
 pub const text = @import("text/text.zig");
 /// Image decoding, SVG rendering, image cache and object-fit (src/image/).
 pub const image = @import("image/image.zig");
+/// Low-latency sound-effect playback (src/audio/); also the standalone `zpui_audio` module.
+pub const audio = @import("audio/audio.zig");
 
 pub const style = @import("style.zig");
 pub const Style = style.Style;
