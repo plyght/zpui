@@ -282,6 +282,26 @@ for weight in [400, 500, 600, 700] {
         diag.append(row)
     }
 }
+// Probe: the system font around 28 pt, including the one-ULP-larger size zpui uses on the
+// first run of a line (layoutLine breaks ligatures across runs by alternating sizes).
+for size in [27.0, 27.5, 28.0, Double(Float(28).nextUp), 28.5, 29.0, 13.0, Double(Float(13).nextUp)] {
+    let usageDesc = CTFontDescriptorCreateWithAttributes(["NSCTFontUIUsageAttribute": "CTFontRegularUsage"] as CFDictionary)
+    let f = CTFontCreateWithFontDescriptor(usageDesc, CGFloat(size), nil)
+    let ns = NSFont.systemFont(ofSize: CGFloat(size), weight: .regular) as CTFont
+    let li = lineInfo(f, sample), ln = lineInfo(ns, sample)
+    // Every descriptor attribute (tracking, optical size, usage) as CoreText reports it.
+    let tracking = String(describing: CTFontDescriptorCopyAttributes(CTFontCopyFontDescriptor(f))).replacingOccurrences(of: "\n", with: " ")
+    var gl = li.glyphs.map { CGGlyph($0) }
+    var adv = [CGSize](repeating: .zero, count: gl.count)
+    CTFontGetAdvancesForGlyphs(f, .default, &gl, &adv, gl.count)
+    let tkWidth = NSAttributedString(string: sample, attributes: [.font: NSFont.systemFont(ofSize: CGFloat(size), weight: .regular)]).size().width
+    print(String(format: "probe size %.7f ps=%@ ctsize=%.7f var=%@ tracking=%@ ctline=%.4f nsfont_ctline=%.4f attr_size=%.4f", size,
+                 CTFontCopyPostScriptName(f) as String as NSString, Double(CTFontGetSize(f)), variation(f).description as NSString,
+                 tracking as NSString, li.width, ln.width, Double(tkWidth)))
+    print("probe size \(size) advances(first 12): \(adv.prefix(12).map { String(format: "%.3f", $0.width) }.joined(separator: " "))")
+    print("probe size \(size) positions(first 12): \(li.xs.prefix(12).map { String(format: "%.3f", $0) }.joined(separator: " "))")
+}
+
 let djson = try JSONSerialization.data(withJSONObject: diag, options: [.prettyPrinted, .sortedKeys])
 try djson.write(to: URL(fileURLWithPath: outDir + "/diag.json"))
 print("done")

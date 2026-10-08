@@ -16,13 +16,16 @@ on:
       before_family:
         description: Family for the before render
         default: ".SystemUIFont"
+      runners:
+        description: JSON list of runners (xcode-27 is the macOS 27 runner)
+        default: '["macos-15-intel","macos-26"]'
 
 jobs:
   compare:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15-intel, macos-26]
+        os: ${{ fromJSON(inputs.runners || '["macos-15-intel","macos-26"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 40
     steps:
