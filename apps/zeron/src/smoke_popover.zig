@@ -42,7 +42,7 @@ pub fn begin(gpa: std.mem.Allocator, io: std.Io, out: []const u8, win: *Window, 
     // The captures should show the app frontmost (main window active, coloured traffic
     // lights), as when someone clicks the picker.
     activate(win);
-    logWindowState(win, "before");
+    _ = logWindowState(win, "before");
     switch (kind) {
         // The project chip is on the new-session canvas.
         .project => win.dispatchAction(shell_actions.NewSession{}),
