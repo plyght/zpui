@@ -23,6 +23,7 @@ const element = @import("../window/element.zig");
 const arena_mod = @import("../window/arena.zig");
 const div_mod = @import("div.zig");
 const Interactivity = div_mod.Interactivity;
+const system_symbol = @import("../window/system_symbol.zig");
 
 const Bounds = geometry.Bounds(geometry.Pixels);
 const Point = geometry.Point(geometry.Pixels);
@@ -30,6 +31,13 @@ const StyleRefinement = style_mod.StyleRefinement;
 
 pub fn svg() Svg {
     return .{ .d = arena_mod.current().create(SvgData, .{}) };
+}
+
+/// An svg element showing only the system symbol `name` (macOS SF Symbols); it paints
+/// nothing where the platform lacks it. Chain `.source(...)` for an SVG fallback, or check
+/// `zpui.system_symbols.available` first.
+pub fn systemSymbol(name: []const u8, options: system_symbol.Options) Svg {
+    return svg().symbol(name, options);
 }
 
 /// A transformation applied to an svg's rendering only (not its layout or hitbox), about
@@ -83,6 +91,9 @@ pub const SvgData = struct {
     path_: ?[]const u8 = null,
     bytes: ?[]const u8 = null,
     transformation: ?Transformation = null,
+    /// System symbol drawn instead of the SVG when the platform has it (`.symbol`).
+    symbol: ?system_symbol.Symbol = null,
+    symbol_name: [1][]const u8 = .{""},
 };
 
 pub const Svg = SvgImpl(false);
@@ -112,6 +123,20 @@ fn SvgImpl(comptime stateful: bool) type {
         pub fn source(self: Self, name: []const u8, bytes: []const u8) Self {
             self.d.path_ = name;
             self.d.bytes = bytes;
+            return self;
+        }
+        /// Draw the system symbol `name` (macOS SF Symbols, e.g. `"folder"`) at `options`
+        /// instead of the SVG; where the platform lacks it (Linux, an older macOS) the SVG
+        /// source paints as before. The layout box is unchanged. `name` must outlive the
+        /// frame.
+        pub fn symbol(self: Self, name: []const u8, options: system_symbol.Options) Self {
+            self.d.symbol_name[0] = name;
+            self.d.symbol = .{ .names = &self.d.symbol_name, .options = options };
+            return self;
+        }
+        /// `symbol` with fallback names tried in order (static lifetime).
+        pub fn symbols(self: Self, names: []const []const u8, options: system_symbol.Options) Self {
+            self.d.symbol = .{ .names = names, .options = options };
             return self;
         }
         /// Transform the rendering (not layout or hitbox) about the bounds center, as gpui's
@@ -2578,12 +2603,15 @@ pub const SvgElement = struct {
         const scope = it.paintBegin(gid, bounds, hitbox.*, window, cx);
         defer it.paintEnd(&scope, window);
         if (scope.hidden or scope.style.display == .none) return;
-        const p = self.d.path_ orelse return;
+        if (self.d.path_ == null and self.d.symbol == null) return;
         const color = scope.style.text.color orelse window.textStyle().color;
         const m: scene.TransformationMatrix = if (self.d.transformation) |t|
             t.intoMatrix(.{ .x = bounds.origin.x + bounds.size.width / 2, .y = bounds.origin.y + bounds.size.height / 2 }, window.scaleFactor())
         else
             .unit;
+        const sym = self.d.symbol orelse if (self.d.path_) |p| system_symbol.resolve(cx, p, bounds.size) else null;
+        if (sym) |s| if (window.paintSystemSymbol(bounds, s.names, s.options, m, color)) return;
+        const p = self.d.path_ orelse return;
         window.paintSvg(bounds, p, self.d.bytes, m, color);
     }
 };

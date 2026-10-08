@@ -105,7 +105,12 @@ pub const MacPlatform = struct {
         .captureActiveWindow = vCaptureActiveWindow,
         .requestCaptureAccess = vRequestCaptureAccess,
         .foregroundAfterCapture = vForegroundAfterCapture,
+        .renderSystemSymbol = vRenderSystemSymbol,
     };
+
+    fn vRenderSystemSymbol(_: *anyopaque, gpa: std.mem.Allocator, request: pf.SystemSymbolRequest) ?pf.SystemSymbolMask {
+        return @import("system_symbol.zig").render(gpa, request);
+    }
 
     fn vSetGlobalHotkey(_: *anyopaque, hotkey: ?pf.GlobalHotkey, handler: pf.GlobalHotkeyHandler) void {
         window_capture.setHotkey(hotkey, handler);

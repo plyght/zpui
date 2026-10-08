@@ -613,6 +613,11 @@ pub const PlatformCallbacks = struct {
     notification_activated: ?*const fn (ctx: ?*anyopaque, tag: []const u8) void = null,
 };
 
+/// System symbols (SF Symbols): `image/system_symbol.zig`.
+pub const system_symbol = @import("../image/system_symbol.zig");
+pub const SystemSymbolRequest = system_symbol.Request;
+pub const SystemSymbolMask = system_symbol.Mask;
+
 /// gpui `Platform`.
 pub const Platform = struct {
     ptr: *anyopaque,
@@ -679,10 +684,24 @@ pub const Platform = struct {
         // [liquid-glass] The macOS major version whose Liquid Glass design is shown
         // (26 Tahoe, 27 Golden Gate, ...); 0 where `supportsLiquidGlass` is false.
         liquidGlassRevision: ?*const fn (ptr: *anyopaque) u32 = null,
+        /// Render a system symbol (macOS SF Symbols) to a coverage mask allocated with
+        /// `gpa`; null when the symbol does not exist on this OS. Main thread. Null =
+        /// no system symbols (Linux).
+        renderSystemSymbol: ?*const fn (ptr: *anyopaque, gpa: std.mem.Allocator, request: SystemSymbolRequest) ?SystemSymbolMask = null,
     };
 
     pub fn dispatcher(p: Platform) Dispatcher {
         return p.vtable.dispatcher(p.ptr);
+    }
+    /// Whether this backend renders system symbols at all (`renderSystemSymbol`).
+    pub fn supportsSystemSymbols(p: Platform) bool {
+        return p.vtable.renderSystemSymbol != null;
+    }
+    /// A system symbol's coverage mask (caller frees with `gpa`), or null when the
+    /// backend has none or the OS lacks the symbol: fall back to the SVG.
+    pub fn renderSystemSymbol(p: Platform, gpa: std.mem.Allocator, request: SystemSymbolRequest) ?SystemSymbolMask {
+        const f = p.vtable.renderSystemSymbol orelse return null;
+        return f(p.ptr, gpa, request);
     }
     pub fn textSystem(p: Platform) TextSystem {
         return p.vtable.textSystem(p.ptr);

@@ -14,6 +14,7 @@ const window_mod = @import("window.zig");
 const Window = window_mod.Window;
 const image = @import("../image/image.zig");
 const image_glue = @import("image.zig");
+const system_symbol = @import("system_symbol.zig");
 
 const Pixels = geometry.Pixels;
 const ScaledPixels = geometry.ScaledPixels;
@@ -434,6 +435,34 @@ pub fn paintSvg(w: *Window, bounds: Bounds, path: []const u8, bytes: ?[]const u8
         .transformation = transformation,
         .fade = scaledEdgeFade(w),
     }) catch @panic("OOM");
+}
+
+/// Paint a system symbol (macOS SF Symbols, `system_symbol.zig`) tinted with `c`,
+/// centered on `bounds` at its own device-pixel size, through the same monochrome sprite
+/// pipeline as `paintSvg`. Tries `names` in order; returns false, painting nothing, when
+/// the platform has none of them (the caller paints its SVG instead).
+pub fn paintSystemSymbol(w: *Window, bounds: Bounds, names: []const []const u8, options: system_symbol.Options, transformation: scene.TransformationMatrix, c: Hsla) bool {
+    assertPaint(w);
+    if (!w.app.platform.supportsSystemSymbols()) return false;
+    const sb = snapBounds(w, bounds);
+    for (names) |name| {
+        const tile = system_symbol.rasterize(w.app, w.sprite_atlas, .{ .name = name, .options = options, .scale_factor = w.scale_factor }) orelse continue;
+        if (sb.size.width <= 0 or sb.size.height <= 0) return true;
+        const tw: f32 = @floatFromInt(tile.bounds.size.width);
+        const th: f32 = @floatFromInt(tile.bounds.size.height);
+        const cx = sb.origin.x + sb.size.width / 2;
+        const cy = sb.origin.y + sb.size.height / 2;
+        sceneOf(w).insertMonochromeSprite(w.gpa, .{
+            .bounds = .{ .origin = .{ .x = roundHalf(cx - tw / 2), .y = roundHalf(cy - th / 2) }, .size = .{ .width = tw, .height = th } },
+            .content_mask = snappedContentMask(w),
+            .color = c.opacity(w.element_opacity),
+            .tile = tile,
+            .transformation = transformation,
+            .fade = scaledEdgeFade(w),
+        }) catch @panic("OOM");
+        return true;
+    }
+    return false;
 }
 
 /// Paint a decoded image (gpui `paint_image`).

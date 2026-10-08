@@ -6,6 +6,10 @@
 //! ```
 //!
 //! All SVGs paint with `currentColor`; the tint is the element's text color.
+//! On macOS, with Settings → Appearance → Use SF Symbols on (the default), control
+//! icons draw as SF Symbols instead (`symbols`, docs/SF_SYMBOLS.md): every
+//! `icons/*.svg` svg switches through the resolver `installSystemSymbols` registers,
+//! so call sites and layout boxes stay as they are; brand marks and file types stay SVG.
 
 const zpui = @import("zpui");
 const assets = @import("zeron_assets");
@@ -13,6 +17,14 @@ const engine = @import("zeron_engine");
 const theme_mod = @import("theme.zig");
 
 pub const Icon = assets.Icon;
+/// The icon → SF Symbol table and resolver (icon_symbols.zig).
+pub const symbols = @import("icon_symbols.zig");
+
+/// Register the SF Symbols mapping with zpui (once, at launch). Inert off macOS and
+/// while the setting is off.
+pub fn installSystemSymbols(app: *zpui.App) void {
+    zpui.system_symbols.setResolver(app, .{ .resolve = symbols.resolve });
+}
 pub const HarnessId = engine.protocol.HarnessId;
 
 /// A `size`×`size` icon tinted with `color`.

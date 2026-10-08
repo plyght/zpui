@@ -51,6 +51,7 @@ pub const Img = img_mod.Img;
 pub const ImageSource = img_mod.ImageSource;
 pub const ObjectFit = img_mod.ObjectFit;
 pub const svg = svg_mod.svg;
+pub const systemSymbol = svg_mod.systemSymbol;
 pub const Svg = svg_mod.Svg;
 pub const StatefulSvg = svg_mod.StatefulSvg;
 pub const SvgTransformation = svg_mod.Transformation;

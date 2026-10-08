@@ -213,6 +213,14 @@ pub const TestPlatform = struct {
     liquid_glass_supported: bool = true,
     /// [liquid-glass] Reported by `liquidGlassRevision` (the macOS major version).
     liquid_glass_revision: u32 = 26,
+    // -- system symbols (SF Symbols simulation) -----------------------------------------
+    /// Symbol names `renderSystemSymbol` knows (anything else is missing, as on an older
+    /// macOS). Empty by default, so headless tests see SVGs unless they opt in.
+    system_symbols: []const []const u8 = &.{},
+    /// `renderSystemSymbol` calls (hits and misses) and the last request's name.
+    symbol_renders: usize = 0,
+    last_symbol: [64]u8 = undefined,
+    last_symbol_len: usize = 0,
     // -- lifecycle recording (setMenus / appCommand / postNotification / playSound) ------
     menus: []const pf.Menu = &.{},
     menu_sets: usize = 0,
@@ -366,7 +374,32 @@ pub const TestPlatform = struct {
         .captureActiveWindow = vCaptureActiveWindow,
         .requestCaptureAccess = vRequestCaptureAccess,
         .foregroundAfterCapture = vForegroundAfterCapture,
+        .renderSystemSymbol = vRenderSystemSymbol,
     };
+
+    /// The fake symbol: a solid block 1.2 × the point size wide and 1 × tall (before
+    /// `fit`), whose coverage encodes the weight (40 + 20 per step) so tests can tell
+    /// configurations apart.
+    fn vRenderSystemSymbol(ptr: *anyopaque, gpa: Allocator, r: pf.SystemSymbolRequest) ?pf.SystemSymbolMask {
+        const self = cast(ptr);
+        self.symbol_renders += 1;
+        const n = @min(r.name.len, self.last_symbol.len);
+        @memcpy(self.last_symbol[0..n], r.name[0..n]);
+        self.last_symbol_len = n;
+        for (self.system_symbols) |known| {
+            if (!std.mem.eql(u8, known, r.name)) continue;
+            const pt: f64 = r.options.point_size;
+            const w, const h, _ = pf.system_symbol.deviceSize(pt * 1.2, pt, r.options, r.scale_factor);
+            const bytes = gpa.alloc(u8, @as(usize, w) * h) catch return null;
+            @memset(bytes, 40 + 20 * @as(u8, @intFromEnum(r.options.weight)));
+            return .{ .width = w, .height = h, .bytes = bytes };
+        }
+        return null;
+    }
+
+    pub fn lastSymbol(self: *const TestPlatform) []const u8 {
+        return self.last_symbol[0..self.last_symbol_len];
+    }
 
     fn vSetGlobalHotkey(ptr: *anyopaque, hotkey: ?pf.GlobalHotkey, handler: pf.GlobalHotkeyHandler) void {
         const self = cast(ptr);

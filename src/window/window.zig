@@ -2309,6 +2309,7 @@ pub const Window = struct {
     pub const paintGlyphTransformed = paint_mod.paintGlyphTransformed;
     pub const paintEmoji = paint_mod.paintEmoji;
     pub const paintSvg = paint_mod.paintSvg;
+    pub const paintSystemSymbol = paint_mod.paintSystemSymbol;
     pub const paintImage = paint_mod.paintImage;
     pub const paintImageFitted = paint_mod.paintImageFitted;
     pub const pushLayer = paint_mod.pushLayer;

@@ -1,6 +1,8 @@
 name: Build app
 
 # Just the Zeron.app (universal, ReleaseSafe) as the Zeron-macos-app artifact: no tests.
+# Plus `sf-symbols`: the shell and Settings captured with SF Symbols on (the macOS default)
+# and off, as the zeron-macos-sf-symbols artifact.
 # Run from the Actions tab (or `workflow_dispatch` via the API).
 on:
   workflow_dispatch:
@@ -98,3 +100,50 @@ jobs:
           name: Zeron-macos-app
           path: zig-out/Zeron-macos-app.zip
           if-no-files-found: error
+
+  # Settings → Appearance → Use SF Symbols (docs/SF_SYMBOLS.md): the shell and Settings
+  # (Appearance, General) from the reference fixtures with symbols on, dark and light, plus
+  # the same views with symbols off (sf-symbols.json {"enabled":false} through
+  # ZERON_FIXTURE_SETTINGS_DIR) for comparison. On and off must differ, or the symbols
+  # never reached the screen. Intel runner: Apple Silicon runners expose no Metal device.
+  sf-symbols:
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Build zeron (ReleaseSafe)
+        run: zig build zeron -Doptimize=ReleaseSafe --summary all
+      - name: Capture shell and Settings with SF Symbols on and off
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          mkdir -p zig-out/sf-symbols
+          for state in on off; do
+            dir="$RUNNER_TEMP/sf-$state"
+            mkdir -p "$dir"
+            if [ "$state" = on ]; then v=true; else v=false; fi
+            printf '{"enabled":%s}' "$v" > "$dir/sf-symbols.json"
+            for mode in dark light; do
+              ZERON_FIXTURE_SETTINGS_DIR="$dir" ZERON_SMOKE_OUT=zig-out/sf-symbols/shell-$state-$mode.png \
+                ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --$mode 2>&1 | tee -a "$RUNNER_TEMP/sf-$state.log"
+              for page in appearance general; do
+                ZERON_FIXTURE_SETTINGS_DIR="$dir" ZERON_SMOKE_SETTINGS=$page ZERON_SMOKE_OUT=zig-out/sf-symbols/settings-$page-$state-$mode.png \
+                  ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 40 --$mode 2>&1 | tee -a "$RUNNER_TEMP/sf-$state.log"
+              done
+            done
+          done
+          grep -h "SF Symbols: rendered" "$RUNNER_TEMP/sf-on.log" | head -3 || echo "::warning::no 'SF Symbols: rendered' log line (log level?)"
+          if grep -q "SF Symbols: rendered" "$RUNNER_TEMP/sf-off.log"; then echo "FAIL: symbols rendered with the setting off"; exit 1; fi
+          for f in zig-out/sf-symbols/*-on-*.png; do
+            g="${f/-on-/-off-}"
+            if cmp -s "$f" "$g"; then echo "FAIL: $f is identical to $g (symbols not drawn)"; exit 1; fi
+            echo "differs: $(basename "$f") vs $(basename "$g")"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zeron-macos-sf-symbols
+          path: zig-out/sf-symbols/*.png
+          if-no-files-found: warn

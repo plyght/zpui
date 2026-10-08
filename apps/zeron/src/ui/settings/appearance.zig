@@ -164,7 +164,8 @@ pub fn render(v: *SettingsView, t: *const Theme, window: *zpui.Window, cx: *Cont
         .child(swatches))
         .child(w.cardRow(t, false)
         .child(w.textBlock(t, "Match wallpaper colors", &.{.{ .text = "Use wallpaper colors for accents, highlights, and subtle surface tints." }}).minW0())
-        .child(v.toggle(.match_wallpaper, ts.wallpaper_theme_colors, true, t, cx)));
+        .child(v.toggle(.match_wallpaper, ts.wallpaper_theme_colors, true, t, cx)))
+        .when(model.sf_symbols.supported, sfSymbolsRow, .{ v, t, cx });
 
     // Material and background.
     const material = materialCard(v, t, s, cx);
@@ -201,6 +202,13 @@ pub fn render(v: *SettingsView, t: *const Theme, window: *zpui.Window, cx: *Cont
         .child(w.section(t, "Motion", motion))
         .child(library)
         .child(w.section(t, "Fonts and layout", fonts));
+}
+
+/// Appearance → Use SF Symbols (macOS only): control icons as SF Symbols, off = the SVGs.
+fn sfSymbolsRow(card: zpui.Div, v: *SettingsView, t: *const Theme, cx: *Context(SettingsView)) zpui.Div {
+    return card.child(w.cardRow(t, false)
+        .child(w.textBlock(t, "Use SF Symbols", &.{.{ .text = "Draw toolbar and menu icons with Apple's system symbols. Off uses Zeron's icons." }}).minW0())
+        .child(v.toggle(.sf_symbols, model.sf_symbols.current(cx.app), true, t, cx)));
 }
 
 /// Conversation width: a 240px slider with value/reset and range labels

@@ -163,6 +163,12 @@ pub const deferred = elements.deferred;
 pub const anchored = elements.anchored;
 pub const img = elements.img;
 pub const svg = elements.svg;
+/// System symbols (macOS SF Symbols) as tinted icons: `systemSymbol(name, opts)`,
+/// `svg().symbol(name, opts)` with the SVG as fallback, `system_symbols.setResolver`
+/// (src/window/system_symbol.zig).
+pub const systemSymbol = elements.systemSymbol;
+pub const system_symbols = @import("window/system_symbol.zig");
+pub const SystemSymbolOptions = system_symbols.Options;
 pub const Svg = elements.Svg;
 pub const StatefulSvg = elements.StatefulSvg;
 pub const SvgTransformation = elements.SvgTransformation;
@@ -203,6 +209,8 @@ pub const frameAllocator = window.arena_mod.frameAllocator;
 test {
     @import("std").testing.refAllDecls(@This());
     _ = @import("window/tests.zig");
+    _ = @import("window/system_symbol_tests.zig");
+    _ = @import("image/system_symbol.zig");
     _ = @import("window/external_paths.zig");
     _ = @import("a11y.zig");
     _ = @import("window/a11y_tests.zig");

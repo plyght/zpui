@@ -18,10 +18,13 @@ pub const ImageServices = struct {
     gpa: Allocator,
     cache: image.ImageCache,
     svg: image.SvgRenderer,
+    /// System symbol misses + the svg → symbol resolver (`system_symbol.zig`).
+    symbols: @import("system_symbol.zig").State = .{},
 
     pub fn deinit(self: *ImageServices) void {
         self.cache.deinit();
         self.svg.deinit();
+        self.symbols.deinit(self.gpa);
     }
 };
 

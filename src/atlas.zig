@@ -104,6 +104,16 @@ pub const SvgKey = struct {
     size: [2]DevicePixels,
 };
 
+/// A system symbol (`image/system_symbol.zig`): name hash, configuration and device scale.
+pub const SymbolKey = struct {
+    name_hash: u64,
+    point_size_bits: u32,
+    fit_bits: u32,
+    scale_factor_bits: u32,
+    weight: u8,
+    scale: u8,
+};
+
 /// gpui `RenderImageParams`.
 pub const ImageKey = struct {
     image_id: u64,
@@ -115,12 +125,13 @@ pub const AtlasKey = union(enum) {
     glyph: GlyphKey,
     svg: SvgKey,
     image: ImageKey,
+    symbol: SymbolKey,
 
     /// Texture kind the key's tile lives in (gpui `AtlasKey::texture_kind`).
     pub fn textureKind(key: AtlasKey) AtlasTextureKind {
         return switch (key) {
             .glyph => |g| if (g.is_emoji) .polychrome else if (g.subpixel_rendering) .subpixel else .monochrome,
-            .svg => .monochrome,
+            .svg, .symbol => .monochrome,
             .image => .polychrome,
         };
     }

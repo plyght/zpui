@@ -11,8 +11,8 @@
 //! Flags:
 //!   --fixtures <dir>        run without an engine from JSON fixtures (also ZERON_FIXTURES;
 //!                           ZERON_FIXTURE_SETTINGS_DIR=<dir> seeds the in-memory settings
-//!                           from <dir>/ui-settings.json and new-thread-background-fade.json,
-//!                           never written back)
+//!                           from <dir>/ui-settings.json, new-thread-background-fade.json and
+//!                           sf-symbols.json, never written back)
 //!   --frames <n>            quit after n presented frames (scripted screenshots)
 //!   --size <w>x<h>          initial window size
 //!   --light / --dark        appearance override
@@ -116,6 +116,8 @@ fn onLaunch(l: *Launch, app: *App) void {
         return;
     }
     actions.registerAll(app) catch |err| log.err("actions: {t}", .{err});
+    // Control icons as SF Symbols on macOS (ui/components/icon_symbols.zig).
+    ui.icon.installSystemSymbols(app);
 
     // Settings (skipped in fixture mode so screenshots are reproducible).
     var prefs: prefs_mod.Prefs = .{ .gpa = l.gpa };
@@ -129,6 +131,8 @@ fn onLaunch(l: *Launch, app: *App) void {
             model.composer_store.init(app, l.io, dir) catch |err| log.warn("composer defaults: {t}", .{err});
             // Settings → Appearance → Background fade (its own file; Rust drops unknown ui-settings keys).
             model.background_fade.init(app, l.io, dir) catch |err| log.warn("background fade: {t}", .{err});
+            // Settings → Appearance → Use SF Symbols (macOS; its own sf-symbols.json).
+            model.sf_symbols.init(app, l.io, dir) catch |err| log.warn("sf symbols: {t}", .{err});
             // The custom theme library joins the registry before the first theme is built.
             settings_ui.theme_library.init(app, l.io, dir, true);
             if (model.settings_store.current(app)) |s| {
@@ -141,6 +145,7 @@ fn onLaunch(l: *Launch, app: *App) void {
         // Fixture run with a real (read-only) ui-settings.json, e.g. a background image.
         model.settings_store.initMemoryFrom(app, l.io, dir) catch |err| log.warn("settings: {t}", .{err});
         model.background_fade.initMemoryFrom(app, l.io, dir) catch |err| log.warn("background fade: {t}", .{err});
+        model.sf_symbols.initMemoryFrom(app, l.io, dir) catch |err| log.warn("sf symbols: {t}", .{err});
         settings_ui.theme_library.init(app, l.io, dir, false);
     }
     actions.keymap.applyKeymap(app, &keymap_cfg, send) catch |err| log.err("keymap: {t}", .{err});
@@ -457,6 +462,7 @@ test {
     _ = @import("ui/shell/sidebar_sync_parity_test.zig");
     _ = @import("ui/shell/sidebar_sync_test.zig");
     _ = @import("ui/settings/root.zig");
+    _ = @import("ui/components/icon_symbols.zig");
     _ = @import("ui/background/root.zig");
     _ = @import("ui/pickers/root.zig");
     _ = @import("ui/shell/right_pane.zig");

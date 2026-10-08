@@ -99,6 +99,8 @@ pub const Toggle = enum(u8) {
     files_show_all,
     appshots_enabled,
     appshot_sound,
+    /// Appearance → Use SF Symbols (macOS; `model.sf_symbols`, its own file).
+    sf_symbols,
 };
 
 /// The switch's accessible name (zeron's `aria_label` for each settings switch).
@@ -122,6 +124,7 @@ pub fn toggleLabel(t: Toggle) []const u8 {
         .files_show_all => "Show hidden and ignored files",
         .appshots_enabled => "Capture Appshots",
         .appshot_sound => "Capture sound",
+        .sf_symbols => "Use SF Symbols",
     };
 }
 
@@ -485,10 +488,13 @@ pub fn flip(v: *SettingsView, which: Toggle, cx: *Context(SettingsView)) void {
                 .files_show_all => s.filesShowAll = !s.filesShowAll,
                 .appshots_enabled => s.appshotsEnabled = !s.appshotsEnabled,
                 .appshot_sound => s.appshotSoundEnabled = !s.appshotSoundEnabled,
+                .sf_symbols => {},
             }
         }
     };
     _ = v;
+    // Not a ui-settings.json key (Rust drops unknown keys): its own sf-symbols.json.
+    if (which == .sf_symbols) return model.sf_symbols.set(cx.app, !model.sf_symbols.current(cx.app));
     // [dictation] The Dictation switch is `VoiceCard::primary`: it downloads
     // the model first, cancels a download, then toggles dictation.
     if (which == .dictation) if (voice_service.voiceModel(cx.app)) |vm| {
