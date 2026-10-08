@@ -133,6 +133,12 @@ pub fn attach(self: *Shell, cx: *Ctx) !void {
         settings_ui.store.applyKeymap(cx.app);
     }
     shell_ref = .{ .id = cx.entityId() };
+    // `shell::NewSession` at the app root too: the shell root's handler is on the
+    // dispatch path only while something inside the shell holds focus. With nothing
+    // focused, or focus left on an element no longer drawn (a closed explorer,
+    // drawer or tab), dispatch starts at the window's root node above the shell's
+    // div and only global listeners see the action.
+    try cx.app.onAction(shell_actions.NewSession, {}, globalNewSession);
     md.rich_text.registry.handler = onLink;
     md.code_state.fit_hooks = .{ .get = codeFencesFit, .set = setCodeFencesFit };
     background.wallpaper.open_appearance = openAppearance;
@@ -158,6 +164,11 @@ pub fn attach(self: *Shell, cx: *Ctx) !void {
     try self.subs.add(gpa, try cx.subscribe(self.sidebar, onAccountAction));
     try self.subs.add(gpa, try cx.subscribe(self.state.read(cx).engine, onEngineEvent));
     try self.subs.add(gpa, try cx.observe(self.state.read(cx).workspace, onWorkspaceForSync));
+}
+
+fn globalNewSession(_: void, _: *const shell_actions.NewSession, app: *App) void {
+    const weak = shell_ref orelse return;
+    _ = weak.update(app, Shell.newSession, .{});
 }
 
 /// Called from `Shell.deinit`.
@@ -187,6 +198,23 @@ fn overlayOwnsKeyboard(self: *Shell) bool {
     return self.palette != null or self.add_project != null or self.wiring.delete_confirm != null or
         self.wiring.rename_space != null or self.wiring.delete_space != null or project_actions.editorOpen(self) or
         self.wiring.sync_flow.hasVisibleOverlay();
+}
+
+/// `shell::NewSession` from anywhere (`open_new_session`: palette closed,
+/// route = Chat, composer focused): the chat and project dialogs and the
+/// composer's model menu go too, so the new-chat canvas is what shows. The sync
+/// flow's dialogs stay (an account switch in progress is not the chat's).
+pub fn leaveForNewChat(self: *Shell, window: *Window, cx: *Ctx) void {
+    if (self.wiring.delete_confirm != null) cancelDelete(self, cx);
+    if (self.wiring.rename_space != null) closeRenameSpace(self, cx);
+    if (self.wiring.delete_space != null) cancelDeleteSpace(self, cx);
+    if (self.wiring.project_actions) |*c| if (c.editor != null) {
+        c.closeEditor(cx.app);
+        cx.notify();
+    };
+    const composer = self.main.read(cx).slots.composer_view;
+    composer.read(cx).picker.update(cx, composer_mod.ModelPicker.close, .{window});
+    composer.update(cx, composer_mod.ComposerView.focusInput, .{window});
 }
 
 /// Escape on the chat route (`resolve_shell_escape`): with "Escape stops the

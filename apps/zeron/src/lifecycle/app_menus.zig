@@ -54,6 +54,13 @@ fn build(comptime macos: bool) []const Menu {
     };
     const base = &[_]Menu{
         .{ .name = "Zeron", .items = app_items },
+        // Zeron-Zig addition (Rust has no File menu): "New Chat" carries the
+        // `shell::NewSession` key equivalent (⌘N), so AppKit routes ⌘N here
+        // even when a native view (a focused WKWebView, a native text field) or
+        // an open NSMenu takes the key before zpui sees it.
+        .{ .name = "File", .items = &.{
+            MenuItem.action("New Chat", shell.NewSession{}),
+        } },
         // Clipboard verbs tied to the composer's actions via their native selectors, so
         // the OS routes them through the responder chain to native text fields too.
         .{ .name = "Edit", .items = &.{
@@ -193,8 +200,11 @@ test "app menu structure matches Rust app_menus()" {
         try testing.expectEqualStrings("Quit Zeron", last.name);
         try testing.expectEqualStrings(z.Quit.action_name, last.action.name);
         try testing.expectEqual(mac, findAction(menus[0], "Hide Zeron") != null);
+        // File: New Chat (zeron-zig addition, see `build`).
+        try testing.expectEqualStrings("File", menus[1].name);
+        try testing.expectEqualStrings(shell.NewSession.action_name, findAction(menus[1], "New Chat").?.action.name);
         // Edit: composer clipboard verbs with their native selectors.
-        const edit = menus[1];
+        const edit = menus[2];
         try testing.expectEqualStrings("Edit", edit.name);
         var os_count: usize = 0;
         for (edit.items) |it| if (it == .act) if (it.act.os_action) |_| {
@@ -203,10 +213,10 @@ test "app menu structure matches Rust app_menus()" {
         try testing.expectEqual(@as(usize, 4), os_count);
         try testing.expectEqual(zpui.platform.OsAction.select_all, findAction(edit, "Select All").?.os_action.?);
         // View: the three appearance modes.
-        try testing.expectEqualStrings("View", menus[2].name);
-        try testing.expectEqualStrings(z.AppearanceDark.action_name, menus[2].items[2].act.action.name);
-        try testing.expectEqual(@as(usize, if (mac) 4 else 3), menus.len);
-        if (mac) try testing.expectEqualStrings(z.CloseWindow.action_name, findAction(menus[3], "Close Window").?.action.name);
+        try testing.expectEqualStrings("View", menus[3].name);
+        try testing.expectEqualStrings(z.AppearanceDark.action_name, menus[3].items[2].act.action.name);
+        try testing.expectEqual(@as(usize, if (mac) 5 else 4), menus.len);
+        if (mac) try testing.expectEqualStrings(z.CloseWindow.action_name, findAction(menus[4], "Close Window").?.action.name);
     }
 }
 

@@ -109,6 +109,8 @@ const expected_menus = [_]MenuRow{
     .{ .menu = "Zeron", .title = "Hide Others", .key = "h", .mods = "alt-cmd", .always_enabled = true },
     .{ .menu = "Zeron", .title = "Show All", .always_enabled = true },
     .{ .menu = "Zeron", .title = "Quit Zeron", .key = "q", .mods = "cmd", .always_enabled = true },
+    // Zeron-Zig addition (no File menu in Rust): ⌘N as a menu key equivalent.
+    .{ .menu = "File", .title = "New Chat", .key = "n", .mods = "cmd", .always_enabled = true },
     .{ .menu = "Edit", .title = "Undo", .key = "z", .mods = "cmd" },
     .{ .menu = "Edit", .title = "Redo", .key = "z", .mods = "shift-cmd" },
     .{ .menu = "Edit", .title = "Cut", .key = "x", .mods = "cmd" },

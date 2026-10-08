@@ -354,10 +354,26 @@ pub const Shell = struct {
         self.applyNav(cx);
     }
 
-    fn newSession(self: *Shell, cx: *Context(Shell)) void {
+    pub fn newSession(self: *Shell, cx: *Context(Shell)) void {
         const ws = self.state.read(cx).workspace;
         ws.update(cx, model.WorkspaceStore.selectChat, .{@as(?[]const u8, null)});
+        // "A new chat always starts with the terminal hidden" (Rust hides the drawer
+        // before the selection flips): ⌘N from the terminal must not spawn a fresh
+        // shell on the canvas. The source chat's tabs and PTYs stay alive.
+        prefs_mod.mut(cx).terminal_open = false;
         cx.notify();
+        // ⌘N works from Settings, the palette and every overlay: leave them for the
+        // canvas (`open_new_session`: route = Chat, palette closed, composer focused).
+        // Deferred: the trigger may be one of those entities mid-update.
+        cx.deferUpdate(struct {
+            fn f(sh: *Shell, c: *Context(Shell)) void {
+                const w = c.app.windows.items[0] orelse return;
+                if (sh.settings_view != null) sh.closeSettings(w, c);
+                if (sh.palette != null) sh.closePalette(w, c);
+                if (sh.add_project != null) sh.closeAddProject(w, c);
+                wiring_mod.leaveForNewChat(sh, w, c);
+            }
+        }.f);
     }
 
     // ---- pane state -----------------------------------------------------------------

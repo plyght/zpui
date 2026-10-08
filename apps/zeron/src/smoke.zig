@@ -76,6 +76,8 @@ pub const Options = struct {
     settings_stress: ?[]const u8 = null,
     /// ZERON_SMOKE_SHORTCUTS=1: real key events and menu picks (smoke_shortcuts.zig).
     shortcuts: bool = false,
+    /// ZERON_SMOKE_NEW_CHAT=1 (macOS): real cmd-n from each context (smoke_new_chat.zig).
+    new_chat: bool = false,
 };
 
 const shell_mod = @import("ui/shell/shell.zig");
@@ -97,6 +99,7 @@ var state: ?State = null;
 pub fn start(gpa: std.mem.Allocator, io: std.Io, win: *Window, opts: Options) void {
     state = .{ .gpa = gpa, .io = io, .opts = opts };
     if (opts.settings_stress != null) state.?.opts.timeout_s = 3000;
+    if (opts.new_chat) state.?.opts.timeout_s = 300;
     std.debug.print("zeron smoke: rendering {d} frames, then capturing (watchdog {d}s)\n", .{ opts.frames, opts.timeout_s });
     if (std.Thread.spawn(.{}, watchdog, .{ io, state.?.opts.timeout_s, opts.frames })) |t| t.detach() else |err| std.debug.print("WARN: smoke watchdog thread: {t}\n", .{err});
     win.onNextFrame(Tick{ .left = opts.frames }, Tick.tick);
@@ -125,6 +128,7 @@ const Tick = struct {
         if (s.opts.settings_stress) |n| if (self.waited == 0) return SettingsStress.begin(s, win, app, n);
         if (s.opts.shortcuts and self.waited == 0) return smoke_shortcuts.begin(win, app, shortcutsDone);
         if (s.opts.settings) |section| if (self.waited == 0) return openSettings(s, win, app, section);
+        if (s.opts.new_chat and self.waited == 0) return smoke_new_chat.begin(s.io, win, app, s.opts.browser_url, newChatDone);
         if (s.opts.browser_url) |url| return openBrowser(s, win, app, url);
         if (s.opts.menu and self.waited == 0) return MenuProbe.begin(s, win, app);
         if (builtin.os.tag == .macos and s.opts.diag) {
@@ -163,6 +167,15 @@ fn shortcutsDone(_: *Window, _: *App, r: smoke_shortcuts.Result) void {
         s.exit_code = 1;
     }
     s.done.store(true, .release);
+}
+
+const smoke_new_chat = @import("smoke_new_chat.zig");
+
+fn newChatDone(app: *App, ok: bool) void {
+    const s = &state.?;
+    s.exit_code = if (ok) 0 else 1;
+    s.done.store(true, .release);
+    app.quit();
 }
 
 /// ZERON_SMOKE_SETTINGS: open Settings on `section`, let it settle, then capture.

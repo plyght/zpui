@@ -130,6 +130,19 @@ jobs:
           sleep 1
           ZERON_SMOKE_BROWSER_URL=http://127.0.0.1:8765/ ZERON_SMOKE_OUT=zig-out/zeron-macos-browser.png \
             ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
+      # ⌘N starts a new chat from anywhere: real ⌘N NSEvents posted to NSApp (AppKit's
+      # whole key-equivalent path) with the terminal, a file editor, a WKWebView page
+      # (first responder), Settings and the composer holding the keyboard; each must
+      # land on the new-chat canvas (apps/zeron/src/smoke_new_chat.zig).
+      - name: Smoke test zeron cmd-n new chat from every context
+        timeout-minutes: 8
+        run: |
+          mkdir -p "$RUNNER_TEMP/site-n"
+          printf '%s' '<!doctype html><title>cmd-n</title><body><h1>cmd-n smoke</h1><input autofocus></body>' > "$RUNNER_TEMP/site-n/index.html"
+          python3 -m http.server 8766 --bind 127.0.0.1 --directory "$RUNNER_TEMP/site-n" > "$RUNNER_TEMP/http-n.log" 2>&1 &
+          sleep 1
+          ZERON_SMOKE_NEW_CHAT=1 ZERON_SMOKE_BROWSER_URL=http://127.0.0.1:8766/ \
+            ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 30 --dark
       # Frosted menus must blur what is beneath them. ZERON_SMOKE_MENU=1 paints
       # high-contrast stripes, opens a frosted floating card (the real menu chrome,
       # deferred like every menu) over them and compares the stripes' high-frequency

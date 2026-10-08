@@ -229,4 +229,5 @@ test "faded label eases its right-edge fade in with the overflow (zeron label_fa
 test {
     _ = @import("wiring_test.zig");
     _ = @import("shortcuts_test.zig");
+    _ = @import("new_chat_test.zig");
 }
