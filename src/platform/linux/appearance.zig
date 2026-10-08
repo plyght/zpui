@@ -8,6 +8,12 @@
 //! ending in `-dark`) is consulted. With nothing found the appearance stays
 //! light, as gpui (and therefore zeron's Rust build) reports on Linux.
 //!
+//! The same watcher reads the portal's `accent-color` (`(ddd)`, sRGB in 0..1; out of
+//! range = unset; GNOME 47+, Plasma 6) for the drawn native controls
+//! (`platform.DesktopTheme.accent`), falling back to GNOME's named
+//! `org.gnome.desktop.interface accent-color`; an accent change repaints like a theme
+//! flip.
+//!
 //! The D-Bus client is a minimal pure-Zig one: a blocking-then-nonblocking
 //! unix socket to the session bus, SASL `EXTERNAL` auth, and just enough of
 //! the wire format to marshal string-argument method calls and read `u`
@@ -111,12 +117,85 @@ pub fn signalColorScheme(m: Message) ?u32 {
     return variantU32(&r) catch null;
 }
 
+/// An 8-byte aligned double.
+fn readF64(r: *Reader) ParseError!f64 {
+    r.alignTo(8) catch return error.Truncated;
+    if (r.pos + 8 > r.bytes.len) return error.Truncated;
+    defer r.pos += 8;
+    const v = std.mem.bytesToValue(u64, r.bytes[r.pos..][0..8]);
+    return @bitCast(if (r.big) std.mem.bigToNative(u64, v) else std.mem.littleToNative(u64, v));
+}
+
+/// Packs portal accent components (0..1 each) as 0xRRGGBB; null when any is out of
+/// range (the portal's "unset").
+pub fn packAccent(r: f64, g: f64, b: f64) ?u32 {
+    var out: u32 = 0;
+    for ([_]f64{ r, g, b }) |c| {
+        if (!(c >= 0 and c <= 1)) return null;
+        out = (out << 8) | @as(u32, @intFromFloat(@round(c * 255)));
+    }
+    return out;
+}
+
+/// The accent out of a `(ddd)` inside (nested) variants: outer null = no `(ddd)` here,
+/// inner null = the accent is unset.
+fn variantAccent(r: *Reader) ParseError!??u32 {
+    var depth: usize = 0;
+    while (depth < 4) : (depth += 1) {
+        const t = try r.sig();
+        if (std.mem.eql(u8, t, "(ddd)")) {
+            r.alignTo(8) catch return error.Truncated;
+            const red = try readF64(r);
+            const green = try readF64(r);
+            const blue = try readF64(r);
+            return packAccent(red, green, blue);
+        }
+        if (std.mem.eql(u8, t, "v")) continue;
+        return null;
+    }
+    return null;
+}
+
+/// The accent out of a `ReadOne` / `Read` reply (outer null = not an accent value).
+pub fn replyAccent(m: Message) ??u32 {
+    if (m.type != .method_return or !std.mem.eql(u8, m.signature, "v")) return null;
+    var r: Reader = .{ .bytes = m.body, .pos = 0, .big = m.big_endian };
+    return variantAccent(&r) catch null;
+}
+
+/// The accent of a `SettingChanged` signal for `org.freedesktop.appearance` /
+/// `accent-color` (outer null = some other signal).
+pub fn signalAccent(m: Message) ??u32 {
+    if (m.type != .signal) return null;
+    if (!std.mem.eql(u8, m.interface, portal_settings) or !std.mem.eql(u8, m.member, "SettingChanged")) return null;
+    if (!std.mem.eql(u8, m.signature, "ssv")) return null;
+    var r: Reader = .{ .bytes = m.body, .pos = 0, .big = m.big_endian };
+    const ns = r.str() catch return null;
+    const key = r.str() catch return null;
+    if (!std.mem.eql(u8, ns, appearance_ns) or !std.mem.eql(u8, key, accent_key)) return null;
+    return variantAccent(&r) catch null;
+}
+
+/// GNOME 47+ named accents (`org.gnome.desktop.interface accent-color`) as libadwaita
+/// draws them (`--accent-bg-color`).
+pub fn fromAccentName(raw: []const u8) ?u32 {
+    const v = std.mem.trim(u8, raw, " \t\r\n'\"");
+    const table = [_]struct { []const u8, u32 }{
+        .{ "blue", 0x3584e4 },  .{ "teal", 0x2190a4 },   .{ "green", 0x3a944a },
+        .{ "yellow", 0xc88800 }, .{ "orange", 0xed5b00 }, .{ "red", 0xe62d42 },
+        .{ "pink", 0xd56199 },  .{ "purple", 0x9141ac }, .{ "slate", 0x6f8396 },
+    };
+    for (table) |e| if (std.mem.eql(u8, v, e[0])) return e[1];
+    return null;
+}
+
 const portal_dest = "org.freedesktop.portal.Desktop";
 const portal_path = "/org/freedesktop/portal/desktop";
 const portal_settings = "org.freedesktop.portal.Settings";
 const appearance_ns = "org.freedesktop.appearance";
 const color_scheme_key = "color-scheme";
-const match_rule = "type='signal',interface='org.freedesktop.portal.Settings',member='SettingChanged',arg0='org.freedesktop.appearance',arg1='color-scheme'";
+const accent_key = "accent-color";
+const match_rule = "type='signal',interface='org.freedesktop.portal.Settings',member='SettingChanged',arg0='org.freedesktop.appearance'";
 
 // ---------------------------------------------------------------------------------------
 // GSettings fallback
@@ -160,6 +239,13 @@ fn gsettingsGet(schema: [*:0]const u8, key: [*:0]const u8, out: []u8) ?[]const u
     return std.mem.trim(u8, out[0..got], " \t\r\n");
 }
 
+/// GNOME's named accent color, or null when gsettings is unavailable / has none.
+pub fn readGSettingsAccent() ?u32 {
+    var a: [64]u8 = undefined;
+    const name = gsettingsGet("org.gnome.desktop.interface", "accent-color", &a) orelse return null;
+    return fromAccentName(name);
+}
+
 /// GNOME's interface settings, or null when gsettings is unavailable.
 pub fn readGSettings() ?WindowAppearance {
     var a: [128]u8 = undefined;
@@ -183,6 +269,9 @@ pub const Watcher = struct {
     next_serial: u32 = 1,
     read_one_serial: u32 = 0,
     read_serial: u32 = 0,
+    accent_serial: u32 = 0,
+    /// System accent (0xRRGGBB), null when unset / unknown.
+    accent: ?u32 = null,
     /// Last known appearance (light until something answers).
     current: WindowAppearance = .light,
     /// Whether the portal (or gsettings) gave an answer.
@@ -208,10 +297,13 @@ pub const Watcher = struct {
     }
 
     /// Never fails: without a bus the watcher is null and `fallback` is used.
-    pub fn start(gpa: Allocator, loop: *event_loop.EventLoop, env: Env, on_change: event_loop.Handler(WindowAppearance)) struct { watcher: ?*Watcher, appearance: WindowAppearance } {
+    pub const Started = struct { watcher: ?*Watcher, appearance: WindowAppearance, accent: ?u32 = null };
+
+    pub fn start(gpa: Allocator, loop: *event_loop.EventLoop, env: Env, on_change: event_loop.Handler(WindowAppearance)) Started {
         const fd = connectBus(env.bus_address, env.runtime_dir) orelse {
             const v = if (env.gsettings_fallback) readGSettings() else null;
-            return .{ .watcher = null, .appearance = v orelse .light };
+            const accent = if (env.gsettings_fallback) readGSettingsAccent() else null;
+            return .{ .watcher = null, .appearance = v orelse .light, .accent = accent };
         };
         const self = gpa.create(Watcher) catch {
             _ = linux.close(fd);
@@ -224,12 +316,14 @@ pub const Watcher = struct {
         if (!sent or self.read_one_serial == 0) {
             self.destroy();
             const v = if (env.gsettings_fallback) readGSettings() else null;
-            return .{ .watcher = null, .appearance = v orelse .light };
+            const accent = if (env.gsettings_fallback) readGSettingsAccent() else null;
+            return .{ .watcher = null, .appearance = v orelse .light, .accent = accent };
         }
+        self.accent_serial = self.call(portal_dest, portal_path, portal_settings, "ReadOne", &.{ appearance_ns, accent_key });
         // Give the portal a moment to answer before the first frame.
         var budget = env.initial_wait_ms;
         const start_ns = event_loop.monotonicNow();
-        while (!self.resolved and (self.read_one_serial != 0 or self.read_serial != 0)) {
+        while ((!self.resolved and (self.read_one_serial != 0 or self.read_serial != 0)) or self.accent_serial != 0) {
             if (budget <= 0 or !waitReadable(self.fd, budget)) break;
             if (!self.pump(false)) break;
             const spent: i32 = @intCast((event_loop.monotonicNow() - start_ns) / std.time.ns_per_ms);
@@ -241,14 +335,16 @@ pub const Watcher = struct {
                 self.current = v;
                 self.resolved = true;
             }
+            if (self.accent == null) self.accent = readGSettingsAccent();
         }
         self.source = loop.addFd(self.fd, linux.EPOLL.IN, .{ .ctx = self, .func = onReadable }) catch null;
         if (self.source == null) {
             const v = self.current;
+            const accent = self.accent;
             self.destroy();
-            return .{ .watcher = null, .appearance = v };
+            return .{ .watcher = null, .appearance = v, .accent = accent };
         }
-        return .{ .watcher = self, .appearance = self.current };
+        return .{ .watcher = self, .appearance = self.current, .accent = self.accent };
     }
 
     pub fn destroy(self: *Watcher) void {
@@ -326,9 +422,22 @@ pub const Watcher = struct {
                 if (replyColorScheme(m)) |v| self.set(fromColorScheme(v), notify);
                 return;
             }
+            if (rs == self.accent_serial) {
+                self.accent_serial = 0;
+                if (replyAccent(m)) |v| self.setAccent(v, notify);
+                return;
+            }
             return;
         }
-        if (signalColorScheme(m)) |v| self.set(fromColorScheme(v), notify);
+        if (signalColorScheme(m)) |v| return self.set(fromColorScheme(v), notify);
+        if (signalAccent(m)) |v| self.setAccent(v, notify);
+    }
+
+    fn setAccent(self: *Watcher, v: ?u32, notify: bool) void {
+        if (v == self.accent) return;
+        self.accent = v;
+        // Same path as a theme flip: windows re-read the theme and repaint.
+        if (notify) self.on_change.call(self.current);
     }
 
     fn set(self: *Watcher, v: WindowAppearance, notify: bool) void {
@@ -454,4 +563,41 @@ test "ReadOne / Read replies and SettingChanged signals" {
     const e = try testMessage(gpa, .err, 3, "", "", "s", &.{ 0, 0, 0, 0, 0 });
     defer gpa.free(e);
     try testing.expectEqual(@as(?u32, null), replyColorScheme(try parseMessage(e)));
+}
+
+test "accent-color replies, signals and GNOME names" {
+    const gpa = testing.allocator;
+    try testing.expectEqual(@as(?u32, 0x3584e4), packAccent(0x35.0 / 255.0, 0x84.0 / 255.0, 0xe4.0 / 255.0));
+    try testing.expectEqual(@as(?u32, null), packAccent(-1, 0, 0));
+    try testing.expectEqual(@as(?u32, 0xed5b00), fromAccentName("'orange'\n"));
+    try testing.expectEqual(@as(?u32, null), fromAccentName("'mauve'"));
+
+    // ReadOne → v((ddd)): sig "(ddd)", padded to 8, three doubles.
+    var body: Builder = .{ .gpa = gpa };
+    defer body.buf.deinit(gpa);
+    try body.sig("(ddd)");
+    try body.pad(8);
+    for ([_]f64{ 1, 0.5, 0 }) |d| try body.buf.appendSlice(gpa, std.mem.asBytes(&d));
+    const reply = try testMessage(gpa, .method_return, 5, "", "", "v", body.buf.items);
+    defer gpa.free(reply);
+    const got = replyAccent(try parseMessage(reply)) orelse return error.NoAccent;
+    try testing.expectEqual(@as(?u32, 0xff8000), got);
+    // A color-scheme reply is not an accent.
+    const scheme = try testMessage(gpa, .method_return, 3, "", "", "v", &.{ 1, 'u', 0, 0, 1, 0, 0, 0 });
+    defer gpa.free(scheme);
+    try testing.expect(replyAccent(try parseMessage(scheme)) == null);
+
+    // SettingChanged(ssv) for accent-color, with an out-of-range (unset) value.
+    var sig_body: Builder = .{ .gpa = gpa };
+    defer sig_body.buf.deinit(gpa);
+    try sig_body.str(appearance_ns);
+    try sig_body.str(accent_key);
+    try sig_body.sig("(ddd)");
+    try sig_body.pad(8);
+    for ([_]f64{ -1, -1, -1 }) |d| try sig_body.buf.appendSlice(gpa, std.mem.asBytes(&d));
+    const changed = try testMessage(gpa, .signal, null, portal_settings, "SettingChanged", "ssv", sig_body.buf.items);
+    defer gpa.free(changed);
+    const unset = signalAccent(try parseMessage(changed)) orelse return error.NotAccentSignal;
+    try testing.expectEqual(@as(?u32, null), unset);
+    try testing.expect(signalColorScheme(try parseMessage(changed)) == null);
 }

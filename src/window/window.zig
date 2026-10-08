@@ -515,6 +515,9 @@ pub const Window = struct {
     liquid_glass: liquid_glass_mod.Pool = .{},
     /// Native form controls of this window (native_controls.zig).
     native_controls: native_controls_mod.Pool = .{},
+    /// Overrides the platform's `desktopTheme` (drawn controls, preference pages):
+    /// `setDesktopTheme` (tests, a "look" setting, demos).
+    desktop_theme_override: ?platform.DesktopTheme = null,
     /// Native popover windows this window owns (native_popover.zig).
     native_popovers: native_popover_mod.Pool = .{},
     /// Set when this window is itself a native popover (sized to its content).
@@ -2233,6 +2236,19 @@ pub const Window = struct {
     pub fn setNativeControlsEnabled(self: *Window, enabled: bool) void {
         if (self.native_controls.disabled == !enabled) return;
         self.native_controls.disabled = !enabled;
+        self.refresh();
+    }
+
+    /// The desktop look `native*` controls are drawn in where the platform has no
+    /// embeddable controls (Linux: libadwaita / Breeze; src/elements/desktop_controls.zig).
+    pub fn desktopTheme(self: *const Window) platform.DesktopTheme {
+        return self.desktop_theme_override orelse self.app.platform.desktopTheme();
+    }
+
+    /// Force (or with null, stop forcing) the drawn controls' desktop look and accent.
+    pub fn setDesktopTheme(self: *Window, theme: ?platform.DesktopTheme) void {
+        if (std.meta.eql(self.desktop_theme_override, theme)) return;
+        self.desktop_theme_override = theme;
         self.refresh();
     }
 

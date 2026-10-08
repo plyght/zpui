@@ -689,6 +689,25 @@ pub const NativeControlState = struct {
     selected: ?u32 = null,
 };
 
+/// The toolkit look zpui-drawn native controls imitate where the platform has no
+/// embeddable controls (src/elements/desktop_controls.zig).
+pub const DesktopStyle = enum(u8) {
+    /// No drawn controls: `native*` elements show their fallbacks.
+    none,
+    /// GNOME / libadwaita (GTK 4).
+    adwaita,
+    /// KDE Plasma / Breeze (Qt 6).
+    breeze,
+};
+
+/// `Platform.desktopTheme`: which desktop the drawn controls imitate and the system accent.
+pub const DesktopTheme = struct {
+    style: DesktopStyle = .none,
+    /// System accent color as 0xRRGGBB (XDG settings portal `accent-color`); null = the
+    /// toolkit default (Adwaita blue #3584e4, Breeze #3daee9).
+    accent: ?u32 = null,
+};
+
 /// A user change reported by a native control (`WindowCallbacks.native_control`).
 pub const NativeControlEvent = struct {
     kind: NativeControlKind,
@@ -853,6 +872,10 @@ pub const Platform = struct {
         /// Fires on the main thread whenever the foreground app changes.
         setForegroundAppCallback: ?*const fn (ptr: *anyopaque, cb: Callback(void, void)) void = null,
         setLaunchAtLogin: ?*const fn (ptr: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void = null,
+        /// The desktop whose look zpui-drawn native controls imitate (Linux: GNOME /
+        /// libadwaita or KDE Plasma / Breeze) and its accent color. Null = none (the
+        /// controls are real platform widgets, or the elements show their fallbacks).
+        desktopTheme: ?*const fn (ptr: *anyopaque) DesktopTheme = null,
     };
 
     /// See `VTable.startGlobalInputMonitor`.
@@ -887,6 +910,13 @@ pub const Platform = struct {
     pub fn setLaunchAtLogin(p: Platform, app_id: []const u8, exe_path: []const u8, on: bool) !void {
         const f = p.vtable.setLaunchAtLogin orelse return error.Unsupported;
         return f(p.ptr, app_id, exe_path, on);
+    }
+
+    /// The desktop look for drawn native controls (`DesktopTheme.style == .none` when the
+    /// backend has none).
+    pub fn desktopTheme(p: Platform) DesktopTheme {
+        const f = p.vtable.desktopTheme orelse return .{};
+        return f(p.ptr);
     }
 
     /// Whether this backend hosts native popover containers (`WindowParams.popover`).

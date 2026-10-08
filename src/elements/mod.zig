@@ -17,6 +17,7 @@ pub const native_view_mod = @import("native_view.zig");
 pub const nativeView = native_view_mod.nativeView;
 pub const nativeViewWith = native_view_mod.nativeViewWith;
 pub const native_control = @import("native_control.zig");
+pub const desktop_theme = @import("desktop_theme.zig");
 pub const native_popover = @import("native_popover.zig");
 pub const nativePopover = native_popover.nativePopover;
 pub const NativePopover = native_popover.NativePopover;
@@ -107,6 +108,7 @@ test {
     _ = scrollbar_mod;
     _ = effects;
     _ = liquid_glass;
+    _ = desktop_theme;
     _ = @import("liquid_glass_tests.zig"); // [liquid-glass]
     _ = @import("native_control_tests.zig");
     _ = @import("list_tests.zig");

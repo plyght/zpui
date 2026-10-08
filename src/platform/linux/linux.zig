@@ -29,6 +29,7 @@ pub const atspi = @import("atspi.zig");
 pub const window_capture = @import("window_capture.zig");
 pub const global_input = @import("global_input.zig");
 pub const tray = @import("tray.zig");
+pub const desktop_style = @import("desktop_style.zig");
 const text_mod = @import("../../text/text.zig");
 
 pub const BackendKind = enum { wayland, x11 };
@@ -60,6 +61,10 @@ pub const LinuxPlatform = struct {
     /// System light/dark (settings portal / gsettings; light when unknown).
     appearance: platform.WindowAppearance = .light,
     appearance_watcher: ?*appearance.Watcher = null,
+    /// Drawn native controls: desktop look (desktop_style.zig) and the accent when no
+    /// portal watcher keeps it current.
+    desktop_style: platform.DesktopStyle = .adwaita,
+    accent: ?u32 = null,
     /// Desktop banners (notifications.zig), created on the first `postNotification`.
     notifier: ?*notifications.Notifier = null,
     /// AT-SPI2 accessibility bridge (atspi.zig); null without a session bus or when
@@ -115,6 +120,7 @@ pub const LinuxPlatform = struct {
         .foregroundApp = foregroundApp,
         .setForegroundAppCallback = setForegroundAppCallback,
         .setLaunchAtLogin = setLaunchAtLogin,
+        .desktopTheme = desktopTheme,
     };
 
     // -- desktop companion features (docs/DESKTOP_OVERLAY.md) --------------------------
@@ -182,6 +188,12 @@ pub const LinuxPlatform = struct {
         var path_buf: [4096]u8 = undefined;
         const path = try platform.desktop.autostartPath(&path_buf, env.get("XDG_CONFIG_HOME"), env.get("HOME"), app_id);
         try writeOrRemove(path, if (on) .{ .app_id = app_id, .exe_path = exe_path } else null);
+    }
+
+    fn desktopTheme(ptr: *anyopaque) platform.DesktopTheme {
+        const self = cast(ptr);
+        const accent = if (self.appearance_watcher) |w| w.accent else self.accent;
+        return .{ .style = self.desktop_style, .accent = accent };
     }
 
     fn captureService(self: *LinuxPlatform) ?*window_capture.Service {
@@ -414,7 +426,9 @@ pub fn create(gpa: Allocator, options: Options) !platform.Platform {
         const started = appearance.Watcher.start(gpa, &self.loop, appearance.Watcher.envFromProcess(), .{ .ctx = self, .func = LinuxPlatform.onAppearanceChanged });
         self.appearance = started.appearance;
         self.appearance_watcher = started.watcher;
+        self.accent = started.accent;
     }
+    self.desktop_style = desktop_style.fromProcess();
     self.atspi = atspi.Bridge.create(gpa, &self.loop, .fromProcess());
     return self.platformInterface();
 }
