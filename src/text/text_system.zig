@@ -7,6 +7,7 @@
 const std = @import("std");
 const types = @import("types.zig");
 const geometry = @import("../geometry.zig");
+const color = @import("../color.zig");
 const platform = @import("../platform/platform.zig");
 const atlas_mod = @import("../atlas.zig");
 const line_layout = @import("line_layout.zig");
@@ -205,6 +206,13 @@ pub const TextSystem = struct {
         };
     }
 
+    /// Font smoothing level for glyphs filled with `c` (0 where the backend has none).
+    pub fn glyphDilation(self: *TextSystem, c: color.Hsla) u8 {
+        const f = self.platform.vtable.glyphDilationForColor orelse return 0;
+        const rgba = c.toRgba();
+        return f(.{ rgba.r, rgba.g, rgba.b });
+    }
+
     /// Rasterized bounds of a glyph relative to its integer device origin (cached).
     pub fn rasterBounds(self: *TextSystem, params: RenderGlyphParams) !geometry.Bounds(DevicePixels) {
         if (self.raster_bounds.get(params)) |b| return b;
@@ -268,6 +276,7 @@ pub fn atlasKey(p: RenderGlyphParams) atlas_mod.AtlasKey {
     k.subpixel_variant = .{ p.subpixel_variant_x, p.subpixel_variant_y };
     k.is_emoji = p.is_emoji;
     k.subpixel_rendering = p.subpixel_rendering;
+    k.dilation = p.dilation;
     return .{ .glyph = k };
 }
 
@@ -552,4 +561,13 @@ fn decorationRuns(gpa: Allocator, runs: []const TextRun) ![]DecorationRun {
         });
     }
     return out.toOwnedSlice(gpa);
+}
+
+test "glyph atlas keys separate smoothed (dilated) rasters" {
+    var p: RenderGlyphParams = .{ .font_id = @enumFromInt(0), .glyph_id = 7, .font_size = 13, .subpixel_variant_x = 0, .subpixel_variant_y = 0, .is_emoji = false, .subpixel_rendering = false, .scale_factor = 2 };
+    const plain = atlasKey(p);
+    p.dilation = 4;
+    const smoothed = atlasKey(p);
+    try std.testing.expect(!std.meta.eql(plain, smoothed));
+    try std.testing.expectEqual(@as(u8, 4), smoothed.glyph.dilation);
 }

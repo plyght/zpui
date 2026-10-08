@@ -96,7 +96,8 @@ pub fn themeFor(s: *const UiSettings, appearance: zt.Appearance) zt.Theme {
     theme.font_terminal = terminal_family.familyName();
     theme.code_font_size = t.code_font_size;
     theme.terminal_font_size = t.terminal_font_size;
-    if (ui_family == .system) theme.font_sans = zt.typography.system_sans;
+    // The system font renders as itself (".SystemUIFont": SF Pro with its optical sizes on
+    // macOS), as in Rust; `system_sans` (Helvetica) is only the fallback family.
     if (code_family == .system) theme.font_mono = zt.typography.system_mono;
     if (terminal_family == .system) theme.font_terminal = zt.typography.system_mono;
     return theme;
@@ -151,9 +152,16 @@ pub fn themeWithGlass(app: *App, s: *const UiSettings, appearance: zt.Appearance
 pub fn applyTheme(app: *App) void {
     const s = current(app);
     ui.theme.set(app, themeWithGlass(app, s, effectiveAppearance(app))); // [liquid-glass] was themeFor
-    const rem = s.theme.ui_font_size.normalized().pixels();
+    const rem = effectiveUiFontSize(app, s).pixels();
     for (app.windows.items) |w| if (w) |win| win.setRemSize(rem);
     @import("motion.zig").applyAll(app); // reduce motion / pause in background
+}
+
+/// The interface base size that renders (`typography.effectiveUiFontSize`): 14 px for the
+/// system font while the size was never chosen (`model.ui_font_size_choice`).
+pub fn effectiveUiFontSize(app: *App, s: *const UiSettings) zt.typography.UiFontSize {
+    const family = @import("fonts.zig").effective(.ui, s.theme.ui_font_family);
+    return zt.typography.effectiveUiFontSize(s.theme.ui_font_size, family, model.ui_font_size_choice.current(app));
 }
 
 /// Re-apply the app keymap from the settings (shortcut edits, send key).

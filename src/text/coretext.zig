@@ -16,10 +16,14 @@
 //! * Rasterization: `CTFontDrawGlyphs` into an A8 bitmap (or RGBA for color
 //!   emoji, converted to BGRA with straight alpha as zui's
 //!   `swap_rgba_pa_to_bgra` does, which the polychrome sprite shader expects),
-//!   with subpixel-positioned origins. Font smoothing (stroke dilation) is
-//!   used only when `glyphDilationForColor` says so; `RenderGlyphParams` has no
-//!   dilation field yet, so rasterization runs with dilation 0 (unsmoothed),
-//!   which is zui's behavior for dark text and for users who disabled smoothing.
+//!   with subpixel-positioned origins. Font smoothing (stroke dilation) follows
+//!   `RenderGlyphParams.dilation`, which the painters set from the fill color
+//!   (`glyphDilationForColor`, zui).
+//! * The system font (".SystemUIFont" → ".AppleSystemUIFont") needs no special
+//!   casing: CoreText re-resolves the optical size (`opsz`) when a face is copied
+//!   to the layout size, and `CTLine` applies the size-specific tracking, so
+//!   widths and glyph positions match `NSFont.systemFont(ofSize:weight:)` exactly
+//!   (tools/font-compare, macOS 15 and 26).
 //!
 //! Thread-safe: every entry point takes an `os_unfair_lock`.
 
@@ -114,6 +118,7 @@ pub const CoreTextSystem = struct {
         .glyphRasterBounds = vGlyphRasterBounds,
         .rasterizeGlyph = vRasterizeGlyph,
         .layoutLine = vLayoutLine,
+        .glyphDilationForColor = glyphDilationForColor,
     };
 
     fn cast(ptr: *anyopaque) *CoreTextSystem {
@@ -352,7 +357,7 @@ pub const CoreTextSystem = struct {
         const self = cast(ptr);
         self.lock.lock();
         defer self.lock.unlock();
-        return self.rasterize(gpa, params, bounds, 0);
+        return self.rasterize(gpa, params, bounds, if (params.is_emoji) 0 else params.dilation);
     }
 
     /// zui `rasterize_glyph`. `dilation` (0..4, see `glyphDilationForColor`) enables font smoothing.
@@ -374,7 +379,10 @@ pub const CoreTextSystem = struct {
                 defer cf.CGColorSpaceRelease(space);
                 break :blk cf.CGBitmapContextCreate(bytes.ptr, w, h, 8, w * 4, space, cf.kCGImageAlphaPremultipliedLast);
             }
-            break :blk cf.CGBitmapContextCreate(bytes.ptr, w, h, 8, w, null, cf.kCGImageAlphaOnly);
+            // Device gray like zui: font smoothing (dilation) keys off the gray fill color.
+            const gray = cf.CGColorSpaceCreateDeviceGray() orelse return error.ColorSpaceFailed;
+            defer cf.CGColorSpaceRelease(gray);
+            break :blk cf.CGBitmapContextCreate(bytes.ptr, w, h, 8, w, gray, cf.kCGImageAlphaOnly);
         } orelse return error.BitmapContextFailed;
         defer cf.CGContextRelease(ctx);
 
@@ -624,8 +632,12 @@ fn faceProps(font: cf.CTFontRef) Props {
     return .{ .weight = coreTextWeightToCss(@floatCast(ct_weight)), .style = style, .width = @floatCast(width) };
 }
 
-/// font-kit's piecewise-linear map between CoreText weights (-1..1) and CSS weights (0..1000).
-const ct_weights = [_]f32{ -1.0, -0.7, -0.5, -0.23, 0.0, 0.2, 0.3, 0.4, 0.6, 0.8, 1.0 };
+/// Piecewise-linear map between CoreText weight traits (-1..1) and CSS weights (0..1000),
+/// at Apple's `NSFont.Weight` / `kCTFontWeight*` stops (ultraLight -0.8 ... medium 0.23,
+/// semibold 0.3, bold 0.4, heavy 0.56, black 0.62), which is what CoreText reports for
+/// usWeightClass 100..900. font-kit's table (zui) puts 500 at 0.2, so a Medium face (0.23)
+/// read as CSS 530 and a 500 request fell back to Regular (SF Pro Medium never rendered).
+const ct_weights = [_]f32{ -1.0, -0.8, -0.6, -0.4, 0.0, 0.23, 0.3, 0.4, 0.56, 0.62, 1.0 };
 
 fn coreTextWeightToCss(w: f32) f32 {
     if (w <= ct_weights[0]) return 0;
@@ -823,6 +835,24 @@ test "css weight mapping round trips" {
     try std.testing.expectApproxEqAbs(@as(f32, 400), coreTextWeightToCss(0), 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 700), coreTextWeightToCss(0.4), 0.01);
     try std.testing.expectApproxEqAbs(@as(f32, 0.4), cssWeightToCoreText(700), 0.001);
+    // Apple's stops: SF Pro Medium / Semibold report 0.23 / 0.3 (NSFont.Weight.medium/.semibold).
+    try std.testing.expectApproxEqAbs(@as(f32, 500), coreTextWeightToCss(0.23), 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 600), coreTextWeightToCss(0.3), 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 300), coreTextWeightToCss(-0.4), 0.01);
+    try std.testing.expectApproxEqAbs(@as(f32, 900), coreTextWeightToCss(0.62), 0.01);
+    for ([_]f32{ 100, 250, 400, 500, 550, 600, 800, 900 }) |w| try std.testing.expectApproxEqAbs(w, coreTextWeightToCss(cssWeightToCoreText(w)), 0.01);
+}
+
+test "a 500 request picks the Medium face (CoreText trait 0.23), not Regular" {
+    const cands = [_]Props{
+        .{ .weight = coreTextWeightToCss(0), .style = .normal },
+        .{ .weight = coreTextWeightToCss(0.23), .style = .normal },
+        .{ .weight = coreTextWeightToCss(0.3), .style = .normal },
+        .{ .weight = coreTextWeightToCss(0.4), .style = .normal },
+    };
+    try std.testing.expectEqual(@as(usize, 1), bestMatch(&cands, .{ .weight = 500, .style = .normal }));
+    try std.testing.expectEqual(@as(usize, 2), bestMatch(&cands, .{ .weight = 600, .style = .normal }));
+    try std.testing.expectEqual(@as(usize, 0), bestMatch(&cands, .{ .weight = 400, .style = .normal }));
 }
 
 test "best match prefers style then CSS weight order" {
@@ -938,4 +968,51 @@ test "CoreText end to end (macOS only)" {
         while (i < ebytes.len) : (i += 4) alpha += ebytes[i];
         try std.testing.expect(alpha > 0);
     };
+}
+/// CTLine width of `text` in `font` (test helper).
+fn testLineWidth(font: cf.CTFontRef, text: []const u8) !f32 {
+    const astr = cf.CFAttributedStringCreateMutable(null, 0) orelse return error.OutOfMemory;
+    defer cf.CFRelease(astr);
+    const s = cf.string(text) orelse return error.OutOfMemory;
+    defer cf.CFRelease(s);
+    cf.CFAttributedStringReplaceString(astr, .{ .location = 0, .length = 0 }, s);
+    cf.CFAttributedStringSetAttribute(astr, .{ .location = 0, .length = cf.CFAttributedStringGetLength(astr) }, cf.kCTFontAttributeName, font);
+    const line = cf.CTLineCreateWithAttributedString(@ptrCast(astr)) orelse return error.ShapingFailed;
+    defer cf.CFRelease(line);
+    return @floatCast(cf.CTLineGetTypographicBounds(line, null, null, null));
+}
+
+test "the system font lays out like AppKit's at every size and weight (optical size + tracking; macOS only)" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const ts = try create(gpa);
+    defer destroy(ts);
+    const v = ts.vtable;
+    const sample = "Hamburgefonstiv quick brown fox 0123456789";
+    var arena_state = std.heap.ArenaAllocator.init(gpa);
+    defer arena_state.deinit();
+    // AppKit's `NSFont.systemFont(ofSize:weight:)` descriptors.
+    const weights = [_]struct { css: f32, usage: []const u8 }{
+        .{ .css = 400, .usage = "CTFontRegularUsage" },
+        .{ .css = 500, .usage = "CTFontMediumUsage" },
+        .{ .css = 600, .usage = "CTFontDemiUsage" },
+        .{ .css = 700, .usage = "CTFontBoldUsage" },
+    };
+    const key = cf.string("NSCTFontUIUsageAttribute") orelse return error.OutOfMemory;
+    defer cf.CFRelease(key);
+    for (weights) |wt| {
+        const id = try v.fontId(ts.ptr, .{ .family = ".SystemUIFont", .weight = wt.css });
+        const value = cf.string(wt.usage) orelse return error.OutOfMemory;
+        defer cf.CFRelease(value);
+        const dict = cf.dictionary(&.{key}, &.{value}) orelse return error.OutOfMemory;
+        defer cf.CFRelease(dict);
+        const desc = cf.CTFontDescriptorCreateWithAttributes(dict) orelse return error.NoSystemFont;
+        defer cf.CFRelease(desc);
+        for ([_]f32{ 11, 13, 20, 28 }) |size| {
+            const layout = try v.layoutLine(ts.ptr, arena_state.allocator(), sample, size, &.{.{ .len = sample.len, .font_id = id }});
+            const native = cf.CTFontCreateWithFontDescriptor(desc, size, null) orelse return error.NoSystemFont;
+            defer cf.CFRelease(native);
+            try std.testing.expectApproxEqAbs(try testLineWidth(native, sample), layout.width, 0.5);
+        }
+    }
 }

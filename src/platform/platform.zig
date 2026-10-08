@@ -1169,5 +1169,8 @@ pub const TextSystem = struct {
         rasterizeGlyph: *const fn (ptr: *anyopaque, gpa: std.mem.Allocator, params: text.RenderGlyphParams, bounds: geometry.Bounds(DevicePixels)) anyerror![]u8,
         /// Shape one line of text with per-run fonts; result allocated in `arena`.
         layoutLine: *const fn (ptr: *anyopaque, arena: std.mem.Allocator, str: []const u8, font_size: Pixels, runs: []const text.FontRun) anyerror!text.LineLayout,
+        /// Font smoothing level (0..4) for a glyph fill color, carried in
+        /// `RenderGlyphParams.dilation` (CoreText); null = no smoothing.
+        glyphDilationForColor: ?*const fn (rgb: [3]f32) u8 = null,
     };
 };

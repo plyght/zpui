@@ -133,6 +133,7 @@ fn onLaunch(l: *Launch, app: *App) void {
             model.background_fade.init(app, l.io, dir) catch |err| log.warn("background fade: {t}", .{err});
             // Settings → Appearance → Use SF Symbols (macOS; its own sf-symbols.json).
             model.sf_symbols.init(app, l.io, dir) catch |err| log.warn("sf symbols: {t}", .{err});
+            model.ui_font_size_choice.init(app, l.io, dir) catch |err| log.warn("ui font size choice: {t}", .{err});
             // The custom theme library joins the registry before the first theme is built.
             settings_ui.theme_library.init(app, l.io, dir, true);
             if (model.settings_store.current(app)) |s| {
@@ -146,6 +147,7 @@ fn onLaunch(l: *Launch, app: *App) void {
         model.settings_store.initMemoryFrom(app, l.io, dir) catch |err| log.warn("settings: {t}", .{err});
         model.background_fade.initMemoryFrom(app, l.io, dir) catch |err| log.warn("background fade: {t}", .{err});
         model.sf_symbols.initMemoryFrom(app, l.io, dir) catch |err| log.warn("sf symbols: {t}", .{err});
+        model.ui_font_size_choice.initMemoryFrom(app, l.io, dir) catch |err| log.warn("ui font size choice: {t}", .{err});
         settings_ui.theme_library.init(app, l.io, dir, false);
     }
     actions.keymap.applyKeymap(app, &keymap_cfg, send) catch |err| log.err("keymap: {t}", .{err});
@@ -303,7 +305,8 @@ fn openMainWindow(ctx: *anyopaque, app: *App, restored: ?lifecycle.window_state.
         return null;
     };
     const w = handle.window(app) orelse return null;
-    w.setRemSize(16);
+    // The settings' base size (14 px for an untouched system font; `applyTheme` keeps it current).
+    w.setRemSize(settings_ui.store.effectiveUiFontSize(app, settings_ui.store.current(app)).pixels());
     // Dev/testing knob (Rust parity): `ZERON_OPEN_ROUTE=settings[/<section>]`
     // boots straight into a settings section (headless captures can't click there).
     if (l.environ.get("ZERON_OPEN_ROUTE")) |route| if (settingsRoute(route, settings_ui.store.current(app).settingsSection)) |section| {

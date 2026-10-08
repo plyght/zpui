@@ -34,6 +34,8 @@ pub const background_fade = @import("background_fade.zig");
 pub const native_menus = @import("native_menus.zig");
 /// Settings → Appearance → Use SF Symbols (macOS; its own sf-symbols.json).
 pub const sf_symbols = @import("sf_symbols.zig");
+/// Whether the interface font size was ever chosen (`ui-font-size-chosen.json`).
+pub const ui_font_size_choice = @import("ui_font_size_choice.zig");
 pub const types = @import("types.zig");
 pub const engine_state = @import("engine_state.zig");
 pub const workspace = @import("workspace.zig");
