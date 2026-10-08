@@ -382,6 +382,12 @@ pub const Window = struct {
         const clear = if (self.background == .opaque_ and !self.isOverlay()) self.opaqueClear() else color.transparent_black;
         try r.drawScene(scene, .{ .width = dev.width, .height = dev.height }, self.scale, clear);
         self.presented = true;
+        // Native child controls paint on WM_PAINT, which the queue only yields once no
+        // posted message is pending. While zpui animates and a frame takes longer than a
+        // vblank (software adapters, loaded GPUs) the next WM_APP_VSYNC is always queued
+        // already, so flush the children's pending paints here (validates only what is
+        // invalid; a no-op when nothing changed).
+        if (self.natives.entries.items.len != 0) _ = w.RedrawWindow(self.hwnd, null, null, w.RDW_UPDATENOW | w.RDW_ALLCHILDREN);
         self.applyPendingRect();
     }
 
