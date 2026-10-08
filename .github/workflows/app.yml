@@ -147,3 +147,57 @@ jobs:
           name: zeron-macos-sf-symbols
           path: zig-out/sf-symbols/*.png
           if-no-files-found: warn
+
+  # [native-popover] Rich popovers in native popover containers (zpui.nativePopover) on
+  # macOS 26 with Liquid Glass (the default there): the model picker, the new-session
+  # project picker and a native tooltip, dark and light, from the reference fixtures.
+  # Each run writes the screen area around the window and the popover, plus the popover
+  # window alone (`-popover.png`), as the zeron-macos26-native-popovers artifact.
+  native-popovers:
+    runs-on: macos-26-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: macOS version
+        run: sw_vers
+      - name: Native popover unit tests (zpui)
+        run: zig build zpui-test -Dtest-filter=popover -Dtest-filter=place --summary all
+      - name: Build zeron (ReleaseSafe)
+        run: zig build zeron -Doptimize=ReleaseSafe --summary all
+      # CI images run with Reduce Transparency on (glass and materials draw solid); try
+      # to switch it off for the captures. Never fails the job.
+      - name: Try to disable Reduce Transparency for the captures
+        continue-on-error: true
+        shell: bash
+        run: |
+          defaults write com.apple.universalaccess reduceTransparency -bool false 2>&1 || true
+          defaults -currentHost write com.apple.universalaccess reduceTransparency -bool false 2>&1 || true
+          sudo defaults write com.apple.universalaccess reduceTransparency -bool false 2>&1 || true
+          killall cfprefsd 2>/dev/null || true
+          sleep 2
+      - name: Capture the model picker, project picker and a tooltip in native containers
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          mkdir -p zig-out/native-popovers
+          status=0
+          for kind in model project tooltip; do
+            for mode in dark light; do
+              ZERON_SMOKE_POPOVER=$kind ZERON_SMOKE_OUT=zig-out/native-popovers/$kind-$mode.png \
+                ./zig-out/bin/zeron --fixtures apps/zeron/fixtures/reference --smoke-frames 60 --$mode 2>&1 | tee "zig-out/native-popovers/$kind-$mode.log" || status=1
+              grep -q "zeron smoke: native popover $kind: frame" "zig-out/native-popovers/$kind-$mode.log" \
+                || { echo "FAIL: no native popover for $kind ($mode)"; status=1; }
+              grep -h "liquid glass on (macOS\|liquid glass forced" "zig-out/native-popovers/$kind-$mode.log" | head -1 || true
+            done
+          done
+          exit $status
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: zeron-macos26-native-popovers
+          path: |
+            zig-out/native-popovers/*.png
+            zig-out/native-popovers/*.log
+          if-no-files-found: warn

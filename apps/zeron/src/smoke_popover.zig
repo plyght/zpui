@@ -140,8 +140,8 @@ fn capture(c: *const Ctx, win: *Window) !void {
         if (e.window != null and e.window.? == pw.id) break e;
     } else return error.PopoverEntryGone;
     std.debug.print("zeron smoke: native popover {t}: frame {d:.0}x{d:.0} at ({d:.0}, {d:.0}) in the window, edge {t}, material {t}, liquid glass {}, key {}\n", .{
-        c.kind,                      e.frame.?.size.width, e.frame.?.size.height,     e.frame.?.origin.x, e.frame.?.origin.y, e.edge,
-        e.options.material,          e.options.liquid_glass, e.options.key,
+        c.kind,             e.frame.?.size.width,   e.frame.?.size.height, e.frame.?.origin.x, e.frame.?.origin.y, e.edge,
+        e.options.material, e.options.liquid_glass, e.options.key,
     });
 
     const composite = try smoke.captureMacImage(c.gpa, rect, cf.kCGWindowListOptionOnScreenOnly, cf.kCGNullWindowID, cf.kCGWindowImageBestResolution);
