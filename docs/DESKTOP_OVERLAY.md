@@ -285,7 +285,8 @@ fixed), drag the blob to move it, input region = blob + handle, tray with Hide /
 `ZPUI_SMOKE_FRAMES=N` renders N frames, does 60 anchored resizes and a hide / show, measures 2 s of
 idle (exit 1 if any frame is drawn), writes `zig-out/overlay-demo.png` (the scene through an
 offscreen renderer with alpha) and exits; `ZPUI_SMOKE_INPUT_WAIT_MS=ms` waits for injected input
-first and prints how many global events arrived. `zig build mac-check -Dtarget=aarch64-macos` also
+first and prints how many global events arrived. `zig build overlay-demo-build` only installs
+`zig-out/bin/overlay-demo` (for scripted runs that inject input, e.g. `xdotool` under Xvfb). `zig build mac-check -Dtarget=aarch64-macos` also
 compiles the demo against the macOS backend.
 
 Unit tests: `src/platform/desktop.zig` (anchor geometry incl. y-up and resize, aspect resize,
