@@ -6,7 +6,7 @@
 //!   <out>/zpui-s{1,2}.png   offscreen renders at 1x and 2x
 //!   <out>/zpui.json         per case: line width, glyph ids and x positions
 //!
-//! `zig build font-compare -- tools/font-compare/cases.json zig-out/font-compare`
+//! `zig build font-compare -- tools/font-compare/cases.json zig-out/font-compare [--family NAME]`
 
 const std = @import("std");
 const zpui = @import("zpui");
@@ -84,8 +84,19 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
     const arena = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(arena);
-    const cases_path = if (argv.len > 1) argv[1] else "tools/font-compare/cases.json";
-    const out_dir = if (argv.len > 2) argv[2] else "zig-out/font-compare";
+    // Positional: cases.json, out dir. `--family NAME` renders another family (the app
+    // rendered its "system" choice as Helvetica before the fix; see font-compare.yml).
+    var family: []const u8 = ".SystemUIFont";
+    var positional: std.ArrayList([]const u8) = .empty;
+    var ai: usize = 1;
+    while (ai < argv.len) : (ai += 1) {
+        if (std.mem.eql(u8, argv[ai], "--family") and ai + 1 < argv.len) {
+            ai += 1;
+            family = argv[ai];
+        } else try positional.append(arena, argv[ai]);
+    }
+    const cases_path = if (positional.items.len > 0) positional.items[0] else "tools/font-compare/cases.json";
+    const out_dir = if (positional.items.len > 1) positional.items[1] else "zig-out/font-compare";
 
     const cwd = std.Io.Dir.cwd();
     const bytes = try cwd.readFileAlloc(io, cases_path, arena, .limited(1 << 20));
@@ -106,7 +117,7 @@ pub fn main(init: std.process.Init) !void {
     var json: std.ArrayList(u8) = .empty;
     try json.appendSlice(arena, "{\"cases\":[");
     for (spec.cases, 0..) |c, ci| {
-        const runs = [_]text.TextRun{.{ .len = c.text.len, .font = .{ .family = ".SystemUIFont", .weight = c.weight }, .color = parseColor(c.fg) }};
+        const runs = [_]text.TextRun{.{ .len = c.text.len, .font = .{ .family = family, .weight = c.weight }, .color = parseColor(c.fg) }};
         const line = try wts.shapeLine(c.text, c.size, &runs, null);
         defer line.deinit(gpa);
         const layout = line.lineLayout();
@@ -159,7 +170,7 @@ pub fn main(init: std.process.Init) !void {
                 .background = color.solidBackground(parseColor(c.bg)),
             });
             const fg = parseColor(c.fg);
-            const runs = [_]text.TextRun{.{ .len = c.text.len, .font = .{ .family = ".SystemUIFont", .weight = c.weight }, .color = fg }};
+            const runs = [_]text.TextRun{.{ .len = c.text.len, .font = .{ .family = family, .weight = c.weight }, .color = fg }};
             const line = try wts.shapeLine(c.text, c.size, &runs, null);
             defer line.deinit(gpa);
             const by = y + baseline(c);
