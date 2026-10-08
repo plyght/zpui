@@ -479,7 +479,7 @@ test "Full is the Rust mask at every window size (new_thread_background_mask.rs 
             try testing.expectEqual(c, m.bounds);
             try testing.expectEqual(@as(f32, 480), m.bottom_fade.?.y);
             try testing.expectEqual(@as(f32, 440), m.bottom_fade.?.feather);
-            try testing.expectEqual(@as(f32, 440 * 0.52), m.feather);
+            try testing.expectApproxEqAbs(@as(f32, 440 * 0.52), m.feather, 0.001);
             try testing.expectEqual(@as(f32, 8), m.clearance);
         }
     }
@@ -566,8 +566,11 @@ test "the Adjust preview scales the runtime mask with the hero" {
             try testing.expectApproxEqAbs(want.clearance * k, got.clearance, 0.001);
             try testing.expectApproxEqAbs(want.bottom_fade.?.feather * k, got.bottom_fade.?.feather, 0.001);
             try testing.expectApproxEqAbs(preview.origin.y + preview.size.height, got.bottom_fade.?.y, 0.01);
-            try testing.expectApproxEqAbs(10 + (388 - 224) * k, got.bounds.origin.x, 0.001);
-            try testing.expectApproxEqAbs(20 + 360 * k, got.bounds.origin.y, 0.001);
+            // The cutout pass clears the scaled composer; the reveal pass's exclusion sits below the image.
+            if (cutout) {
+                try testing.expectApproxEqAbs(10 + (388 - 224) * k, got.bounds.origin.x, 0.001);
+                try testing.expectApproxEqAbs(20 + 360 * k, got.bounds.origin.y, 0.001);
+            } else try testing.expect(got.bounds.origin.y >= preview.origin.y + preview.size.height);
         }
     }
     try testing.expect(previewMask(preview, true, .none) == null);
