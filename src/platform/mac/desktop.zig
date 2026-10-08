@@ -69,7 +69,6 @@ const kCGKeyboardEventAutorepeat: u32 = 8;
 const kCGKeyboardEventKeycode: u32 = 9;
 
 const CounterFn = *const fn (state: i32, event_type: u32) callconv(.c) u32;
-const SecondsSinceFn = *const fn (state: i32, event_type: u32) callconv(.c) f64;
 const KeyStateFn = *const fn (state: i32, key: u16) callconv(.c) bool;
 
 /// ANSI keycodes sampled with `CGEventSourceKeyState` (letters, digits, space, return,
@@ -112,7 +111,6 @@ pub const InputMonitor = struct {
     decoder: desktop.CounterDecoder = .{},
     sampler: desktop.KeySampler = .{},
     counter_fn: ?CounterFn = null,
-    since_fn: ?SecondsSinceFn = null,
     key_state_fn: ?KeyStateFn = null,
     mouse_monitor: ?id = null,
 
@@ -194,7 +192,6 @@ pub const InputMonitor = struct {
         const counter = sym(CounterFn, "CGEventSourceCounterForEventType") orelse return .unsupported;
         const src = ak.dispatch_source_create(@ptrCast(&_dispatch_source_type_timer), 0, 0, ak.mainQueue()) orelse return .unsupported;
         self.counter_fn = counter;
-        self.since_fn = sym(SecondsSinceFn, "CGEventSourceSecondsSinceLastEventType");
         self.key_state_fn = sym(KeyStateFn, "CGEventSourceKeyState");
         self.decoder.reset(counter(kCGEventSourceStateHIDSystemState, ev_key_down));
         // Keep a probe verdict across restarts (it only gets more certain).
@@ -241,12 +238,9 @@ pub const InputMonitor = struct {
     fn poll(self: *InputMonitor) void {
         const now = nowNs();
         const counter = self.counter_fn orelse return;
-        // Idle gate: no key-down since well before the previous tick and no key held
-        // (one cheap call instead of the counter + key sampling).
-        if (self.decoder.owed_ups == 0 and !self.sampler.any_down) if (self.since_fn) |since| {
-            const idle_s = since(kCGEventSourceStateHIDSystemState, ev_key_down);
-            if (idle_s * std.time.ns_per_s > @as(f64, @floatFromInt(self.interval_ns)) * 1.5) return;
-        };
+        // The counter itself is the idle check (one call per tick). No
+        // `CGEventSourceSecondsSinceLastEventType` gate: it need not move for posted
+        // events, and a tick delayed past its window would drop the key-downs.
         const value = counter(kCGEventSourceStateHIDSystemState, ev_key_down);
         const counted = value -% self.decoder.count;
         var known: []const desktop.KeyInfo = &.{};
