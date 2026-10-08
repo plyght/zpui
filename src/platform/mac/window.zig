@@ -373,6 +373,10 @@ pub const MacWindow = struct {
                 native_window.msg(void, "setAcceptsMouseMovedEvents:", .{YES});
                 native_window.msg(void, "setAnimationBehavior:", .{@as(NSInteger, 2)}); // NSWindowAnimationBehaviorNone
                 self.overlay = .{ .anchor = params.anchor, .anchor_display = params.display_id, .hidden = !params.show };
+                // A third drawable: each anchored resize presents a new-size frame inside
+                // its transaction; with two, the next resize waits in `nextDrawable` for
+                // the compositor to show the last one (overlays are small).
+                if (self.renderer.layer()) |layer| @as(id, @ptrCast(layer)).msg(void, "setMaximumDrawableCount:", .{@as(NSUInteger, 3)});
                 overlay_count += 1;
                 if (params.show) visible_overlay_count += 1;
                 if (params.mouse_passthrough) self.overlay.?.passthrough = true;
@@ -1042,6 +1046,9 @@ const Overlay = struct {
     move_monitor: ?id = null,
     /// Coalesced `resize` (one setFrame per main-queue turn).
     pending_size: ?Size = null,
+    /// The frame `applyResize` already presented inside this turn's Core Animation
+    /// transaction: the `displayLayer:` the bounds change schedules is skipped.
+    presented: platform.desktop.PresentedFrame = .{},
 
     fn deinit(o: *Overlay, w: *MacWindow) void {
         o.stopMonitor();
@@ -1123,7 +1130,15 @@ const Overlay = struct {
         const frame_rect: NSRect = .{ .origin = origin, .size = .{ .width = size.width, .height = size.height } };
         w.renderer.setPresentsWithTransaction(true);
         w.native_window.msg(void, "setFrame:display:", .{ frame_rect, NO });
-        if (!ov.hidden) w.requestFrameCallback(true);
+        if (!ov.hidden) {
+            // The resize callback (inside setFrame:) typically requests a frame: the
+            // one drawn here satisfies it; a request made while drawing (animation)
+            // stays pending. No second, display-link frame per resize.
+            w.frame_requested = false;
+            w.requestFrameCallback(true);
+            const ds = w.drawableSize();
+            ov.presented.mark(ds.width, ds.height);
+        }
         w.renderer.setPresentsWithTransaction(w.natives.enabled());
         ov.applyIgnore(w);
     }
@@ -1383,6 +1398,19 @@ fn setFrameSize(this: id, _: SEL, size: NSSize) callconv(.c) void {
 
 fn displayLayer(this: id, _: SEL, _: id) callconv(.c) void {
     const w = state(this) orelse return;
+    if (w.overlay) |*o| {
+        // An overlay resize already presented the new size in this transaction: a
+        // second synchronous frame here would wait for a drawable that only frees
+        // once this very transaction commits (the ~1 s per resize stall), and
+        // restart the display link.
+        const ds = w.drawableSize();
+        if (o.presented.take(ds.width, ds.height)) return;
+        if (o.hidden) return;
+        w.renderer.setPresentsWithTransaction(true);
+        w.requestFrameCallback(true);
+        w.renderer.setPresentsWithTransaction(w.natives.enabled());
+        return;
+    }
     w.synchronousFrame();
 }
 

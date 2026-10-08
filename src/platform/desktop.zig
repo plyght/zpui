@@ -269,14 +269,26 @@ pub const KeySampler = struct {
 
     probe: Probe = .unknown,
     misses: u8 = 0,
+    /// Counted polls since the last retry while `.broken`.
+    retry: u8 = 0,
     down: [128]bool = @splat(false),
     new_down: [8]KeyInfo = undefined,
     new_len: usize = 0,
     any_down: bool = false,
 
-    /// Whether the next poll should read key states (`counted` = key-downs this poll).
-    pub fn shouldSample(s: *const KeySampler, counted: bool) bool {
-        return s.probe != .broken and (counted or s.any_down);
+    /// A `.broken` probe still samples one counted poll in `retry_every`: synthetic or
+    /// very short key presses (down and up between two polls) can fail the probe even
+    /// where key states are real, and one held key then turns it into `.works`.
+    pub const retry_every = 16;
+
+    /// Whether this poll should read key states (`counted` = key-downs this poll).
+    pub fn shouldSample(s: *KeySampler, counted: bool) bool {
+        if (s.probe != .broken) return counted or s.any_down;
+        if (!counted) return false;
+        s.retry += 1;
+        if (s.retry < retry_every) return false;
+        s.retry = 0;
+        return true;
     }
 
     pub fn begin(s: *KeySampler) void {
@@ -308,6 +320,25 @@ pub const KeySampler = struct {
             if (s.misses >= probe_polls) s.probe = .broken;
         }
         return s.new_down[0..s.new_len];
+    }
+};
+
+/// The drawable size an overlay resize presented inside the current Core Animation
+/// transaction (macOS): the redisplay the bounds change schedules for that same
+/// transaction is skipped instead of drawing a second frame, which would block on a
+/// drawable that only frees once the transaction commits.
+pub const PresentedFrame = struct {
+    size: ?[2]i32 = null,
+
+    pub fn mark(p: *PresentedFrame, width: i32, height: i32) void {
+        p.size = .{ width, height };
+    }
+
+    /// Consumes the mark: true when a frame of exactly this size was presented.
+    pub fn take(p: *PresentedFrame, width: i32, height: i32) bool {
+        const s = p.size orelse return false;
+        p.size = null;
+        return s[0] == width and s[1] == height;
     }
 };
 
@@ -627,4 +658,46 @@ test "KeySampler reports presses and releases and probes whether sampling works"
     }
     try testing.expectEqual(KeySampler.Probe.broken, b.probe);
     try testing.expect(!b.shouldSample(true));
+    try testing.expect(!b.shouldSample(false));
+    // ...but retries every `retry_every` counted polls; a held key revives it.
+    i = 1;
+    while (i < KeySampler.retry_every - 1) : (i += 1) try testing.expect(!b.shouldSample(true));
+    try testing.expect(b.shouldSample(true));
+    try testing.expect(!b.shouldSample(true));
+    b.begin();
+    b.observe(&q, 2, true, 9); // D held
+    const revived = b.end(1);
+    try testing.expectEqual(KeySampler.Probe.works, b.probe);
+    try testing.expectEqual(@as(usize, 1), revived.len);
+    try testing.expectEqual(macKey(2).x, revived[0].x);
+    try testing.expect(b.shouldSample(false));
+}
+
+test "KeySampler positions: left-hand keys left of right-hand keys" {
+    var q: InputQueue = .{};
+    var s: KeySampler = .{};
+    s.begin();
+    s.observe(&q, 0, true, 1); // A
+    s.observe(&q, 37, true, 1); // L
+    const known = s.end(2);
+    try testing.expectEqual(@as(usize, 2), known.len);
+    try testing.expect(known[0].x < 0.5 and known[1].x > 0.5);
+    // The decoder hands those positions to the key-downs (paws), no alternation.
+    var d: CounterDecoder = .{};
+    d.reset(10);
+    try testing.expectEqual(@as(u32, 2), d.poll(&q, 12, known, 2));
+    try testing.expect(q.pop().?.key_x < 0.5);
+    try testing.expect(q.pop().?.key_x > 0.5);
+    try testing.expectEqual(@as(u32, 0), d.owed_ups);
+}
+
+test "PresentedFrame skips only the matching redisplay, once" {
+    var p: PresentedFrame = .{};
+    try testing.expect(!p.take(10, 10));
+    p.mark(320, 320);
+    try testing.expect(p.take(320, 320));
+    try testing.expect(!p.take(320, 320));
+    p.mark(320, 320);
+    try testing.expect(!p.take(322, 322)); // size changed since: draw
+    try testing.expect(!p.take(320, 320));
 }

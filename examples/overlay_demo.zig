@@ -67,6 +67,7 @@ const Demo = struct {
     smoke_phase: enum { off, warmup, resizing, idle, done } = .off,
     resize_step: u32 = 0,
     resize_start_ns: u64 = 0,
+    warmup_start_ns: u64 = 0,
     idle_start_frames: u64 = 0,
     idle_start_cpu_ns: u64 = 0,
     input_wait_ns: u64 = 0,
@@ -289,6 +290,7 @@ const Demo = struct {
 
         if (d.smoke_frames != null) {
             d.smoke_phase = .warmup;
+            d.warmup_start_ns = d.now();
             d.pulse = 1;
             d.plat.dispatcher().dispatchAfter(watchdog_ns, .{ .ctx = d, .run = onWatchdog });
             d.plat.dispatcher().dispatchAfter(50 * std.time.ns_per_ms, .{ .ctx = d, .run = onSmokeTick });
@@ -303,7 +305,8 @@ const Demo = struct {
         const disp = d.plat.dispatcher();
         switch (d.smoke_phase) {
             .warmup => if (d.frames >= d.smoke_frames.?) {
-                std.debug.print("rendered {d} frames; resizing\n", .{d.frames});
+                const secs = @as(f64, @floatFromInt(d.now() - d.warmup_start_ns)) / std.time.ns_per_s;
+                std.debug.print("rendered {d} frames in {d:.2} s; resizing\n", .{ d.frames, secs });
                 d.smoke_phase = .resizing;
             },
             .resizing => {
