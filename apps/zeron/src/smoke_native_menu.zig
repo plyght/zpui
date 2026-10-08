@@ -165,8 +165,25 @@ const Mac = if (builtin.os.tag == .macos) struct {
             const ev = ak.class("NSEvent").msg(?id, "mouseEventWithType:location:modifierFlags:timestamp:windowNumber:context:eventNumber:clickCount:pressure:", .{
                 ty, pt, @as(NSUInteger, 0), now + @as(f64, @floatFromInt(i)) * 0.05, num, @as(?id, null), @as(NSInteger, 0), @as(NSInteger, 1), @as(f32, if (ty == 3 or ty == 1) 1 else 0),
             }) orelse return;
-            ak.sharedApp().msg(void, "postEvent:atStart:", .{ ev, objc.NO });
+            ak.sharedApp().msg(void, "postEvent:atStart:", .{ withButton(ev, if (ty == 3 or ty == 4) 1 else 0), objc.NO });
         }
+    }
+
+    extern "c" fn CGEventCreateCopy(event: ?*anyopaque) ?*anyopaque;
+    extern "c" fn CGEventSetIntegerValueField(event: ?*anyopaque, field: u32, value: i64) void;
+    extern "c" fn CFRelease(cf: ?*anyopaque) void;
+    /// kCGMouseEventButtonNumber.
+    const button_number_field: u32 = 3;
+
+    /// `mouseEventWithType:` leaves `buttonNumber` at 0, which the window reads as the
+    /// left button (a real right click carries 1): set it through the event's CGEvent.
+    fn withButton(ev: id, button: i64) id {
+        if (button == 0) return ev;
+        const cg = ev.msg(?*anyopaque, "CGEvent", .{}) orelse return ev;
+        const copy = CGEventCreateCopy(cg) orelse return ev;
+        defer CFRelease(copy);
+        CGEventSetIntegerValueField(copy, button_number_field, button);
+        return ak.class("NSEvent").msg(?id, "eventWithCGEvent:", .{copy}) orelse ev;
     }
 } else struct {
     fn activate(_: *Window) void {}
