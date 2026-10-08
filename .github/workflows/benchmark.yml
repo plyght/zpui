@@ -129,7 +129,7 @@ jobs:
       - name: Zig client, clean ReleaseFast + ReleaseSafe builds (timed)
         run: |
           zb() { # <optimize> <prefix> <cache>
-            zig build zeron -Doptimize="$1" --prefix "$2" --cache-dir "$RUNNER_TEMP/$3" --global-cache-dir "$RUNNER_TEMP/$3-global" --summary none
+            ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/$3-global" zig build zeron -Doptimize="$1" --prefix "$2" --cache-dir "$RUNNER_TEMP/$3" --summary none
           }
           t0=$(date +%s); zb ReleaseFast zig-out/fast zc-fast; t1=$(date +%s)
           echo "// bench: incremental rebuild touch" >> apps/zeron/src/bench.zig
@@ -147,8 +147,8 @@ jobs:
         run: |
           set -x
           if [ "$(uname)" = Darwin ]; then
-            ZERON_ENGINE="$PWD/zig-out/zeron-engine" zig build zeron-app-bundle -Doptimize=ReleaseSafe --prefix zig-out/bundle \
-              --cache-dir "$RUNNER_TEMP/zc-safe" --global-cache-dir "$RUNNER_TEMP/zc-safe-global" --summary none
+            ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/zc-safe-global" ZERON_ENGINE="$PWD/zig-out/zeron-engine" zig build zeron-app-bundle -Doptimize=ReleaseSafe --prefix zig-out/bundle \
+              --cache-dir "$RUNNER_TEMP/zc-safe" --summary none
             # Rust: scripts/package-macos.sh's Zeron.app layout, without the dmg.
             app=zig-out/rust-bundle/Zeron.app; src=zeron-src
             mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/licenses/fonts"
@@ -168,8 +168,8 @@ jobs:
             echo "ZIG_BUNDLE=$PWD/zig-out/bundle/Zeron.app" >> "$GITHUB_ENV"
             echo "ZIG_BUNDLE_ENGINE=Contents/Helpers/zeron-engine" >> "$GITHUB_ENV"
           else
-            ZERON_ENGINE="$PWD/zig-out/zeron-engine" zig build zeron-dist -Doptimize=ReleaseSafe --prefix zig-out/bundle \
-              --cache-dir "$RUNNER_TEMP/zc-safe" --global-cache-dir "$RUNNER_TEMP/zc-safe-global" --summary none
+            ZIG_GLOBAL_CACHE_DIR="$RUNNER_TEMP/zc-safe-global" ZERON_ENGINE="$PWD/zig-out/zeron-engine" zig build zeron-dist -Doptimize=ReleaseSafe --prefix zig-out/bundle \
+              --cache-dir "$RUNNER_TEMP/zc-safe" --summary none
             mkdir -p zig-out/zig-dist && tar -xzf zig-out/bundle/zeron-*-linux-*.tar.gz -C zig-out/zig-dist
             zdir=$(ls -d zig-out/zig-dist/*/)
             # Rust: scripts/package-linux.sh's stage, without install.sh.
