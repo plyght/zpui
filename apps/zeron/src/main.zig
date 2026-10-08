@@ -460,6 +460,7 @@ test {
     _ = @import("glass_lab.zig");
     _ = @import("engine_bin.zig");
     _ = @import("ui/shell/shell_test.zig");
+    _ = @import("ui/shell/native_popover_test.zig");
     _ = @import("ui/shell/harness_updates_test.zig");
     _ = @import("ui/shell/sidebar_sync_parity_test.zig");
     _ = @import("ui/shell/sidebar_sync_test.zig");

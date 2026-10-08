@@ -31,6 +31,7 @@ const engine = @import("zeron_engine");
 const zt = @import("zeron_theme");
 const ui = @import("../components/root.zig");
 const prefs_mod = @import("prefs.zig");
+const native_popover = @import("../components/native_popover.zig");
 
 const Allocator = std.mem.Allocator;
 const App = zpui.App;
@@ -733,6 +734,52 @@ pub const HarnessUpdateIsland = struct {
         return stack;
     }
 
+    /// The per-agent rows (the expanded list's scroll column).
+    fn rowsColumn(self: *HarnessUpdateIsland, list: []const UpdateRow, theme: *const Theme, devices: usize, row_reveal: f32, interactive: bool, cx: *Context(HarnessUpdateIsland)) zpui.StatefulDiv {
+        const a = zpui.window.arena_mod.frameAllocator();
+        var rows_col = div().id("home-harness-update-list").sizeFull().overflowYScroll().trackScroll(self.scroll).flex().flexCol();
+        for (list, 0..) |row, ix| {
+            const st = row.status;
+            const mark, const tint = ui.icon.harnessMark(st.harness);
+            const label = if (row.connected) (detail(a, st) catch "") else "Disconnected · reconnect to update";
+            const extra = if (st.@"error") |e| e.message else st.manualCommand orelse label;
+            var text_col = div().flex1().minW0().flex().flexCol().gap(px(1))
+                .child(div().textSize(rems(12)).lineHeight(rems(16)).fontWeight(500).truncate().child(agentName(st.harness)));
+            if (devices > 1) text_col = text_col.child(div().textSize(rems(11)).lineHeight(rems(14)).textColor(theme.text_muted).truncate().child(row.device_name));
+            text_col = text_col.child(div().textSize(rems(11)).lineHeight(rems(14))
+                .textColor(if (st.phase == .failed) theme.danger else theme.text_muted).truncate().child(label));
+            var r = div().id(.{ "harness-update-row", ix }).relative().top(px(3 * (1 - row_reveal))).opacity(row_reveal)
+                .h(px(row_height)).flexNone().px(px(12)).flex().itemsCenter().gap(px(10));
+            if (ix > 0) r = r.child(div().absolute().top0().left(px(42)).right(px(12)).h(px(1)).bg(rowDivider(theme)));
+            r = r.child(ui.icon.of(mark, 20, tint orelse theme.text_muted)).child(text_col);
+            if (st.phase == .updated) r = r.child(ui.icon.of(.check, 14, theme.success));
+            if (self.actionButton(ix, row, interactive, theme, cx)) |b| r = r.child(b);
+            r = r.tooltipWith(zpui.fmt("{s} · {s}\n{s}", .{ agentName(st.harness), row.device_name, extra }), ui.tooltip.build);
+            rows_col = rows_col.child(r);
+        }
+        return rows_col;
+    }
+
+    /// [native-popover] The expanded list in its native popover (list geometry, no
+    /// surface of its own: the container's material is the card).
+    fn nativeList(self: *HarnessUpdateIsland, window: *Window, cx: *Context(HarnessUpdateIsland)) zpui.AnyElement {
+        const a = zpui.window.arena_mod.frameAllocator();
+        const list = self.rows(a, cx);
+        if (list.len < 2 or !self.expanded) return zpui.empty();
+        const theme_v = ui.theme.get(cx).forSettingsSurface();
+        const theme = zpui.window.arena_mod.current().create(Theme, theme_v);
+        const title_text = (title(a, list) catch null) orelse "";
+        const g = geometry(list, textWidth(self.gpa, window, title_text, 12, theme), 0, self.main_width, self.viewport_height);
+        const rows_col = self.rowsColumn(list, theme, deviceCount(list), 1, true, cx);
+        return zpui.intoAnyElement(div().w(px(g.list_width)).h(px(@max(g.list_height - chip_height, row_height)))
+            .fontFamily(theme.font_sans).textColor(theme.text)
+            .child(ui.effects.edgeFaded(rows_col, .{ .band = list_fade_band, .top = true, .bottom = true, .scroll = self.scroll })));
+    }
+
+    fn dismissNative(self: *HarnessUpdateIsland, _: *Window, cx: *Context(HarnessUpdateIsland)) void {
+        self.setExpanded(false, cx);
+    }
+
     pub fn render(self: *HarnessUpdateIsland, window: *Window, cx: *Context(HarnessUpdateIsland)) zpui.AnyElement {
         self.refresh(cx);
         self.reduced_motion = window.prefersReducedMotion();
@@ -752,8 +799,11 @@ pub const HarnessUpdateIsland = struct {
             self.transition = null;
         }
         const expanded = self.expanded;
+        // [native-popover] The expanded list opens in a native popover above the chip
+        // (macOS); the island itself stays compact.
+        const native = multiple and native_popover.enabled(cx);
         const t_now = now(cx);
-        const reveal = self.tweenValue(self.transition, if (expanded) 1 else 0, t_now);
+        const reveal = if (native) 0 else self.tweenValue(self.transition, if (expanded) 1 else 0, t_now);
         const theme_v = ui.theme.get(cx).forSettingsSurface();
         const theme = &theme_v;
         const title_text = (title(a, list) catch null) orelse {
@@ -763,7 +813,7 @@ pub const HarnessUpdateIsland = struct {
         const act = if (multiple) null else action(row0.status);
         const action_w = if (act) |x| textWidth(self.gpa, window, x.label, 11.5, theme) else 0;
         const g = geometry(list, textWidth(self.gpa, window, title_text, 12, theme), action_w, self.main_width, self.viewport_height);
-        const targets: [2]f32 = if (expanded) .{ g.list_width, g.list_height } else .{ g.compact_width, chip_height };
+        const targets: [2]f32 = if (expanded and !native) .{ g.list_width, g.list_height } else .{ g.compact_width, chip_height };
         var size = targets;
         for (targets, 0..) |target, axis| {
             const old = self.geometry[axis];
@@ -802,14 +852,19 @@ pub const HarnessUpdateIsland = struct {
         };
         if (multiple) summary = summary.child(div().relative().size(px(24)).flexNone().ml(px(8))
             .child(div().absolute().left(px(5)).top(px(5)).size(px(14))
-            .child(ui.icon.of(.alt_arrow_down, 14, theme.text_muted).withTransformation(.rotate(std.math.pi * (1 - reveal))))));
+            .child(ui.icon.of(.alt_arrow_down, 14, theme.text_muted).withTransformation(.rotate(std.math.pi * (1 - (if (native) @as(f32, if (expanded) 1 else 0) else reveal)))))));
 
         // ---- card ----
         var card = div().id("home-harness-update-card").relative().w(px(size[0])).h(px(size[1]))
             .rounded(px(radius)).overflowHidden().border1().borderColor(theme.border.opacity(0.7))
             .fontFamily(theme.font_sans).textColor(theme.text).bg(ui.popover.surfaceBg(theme));
         if (!theme.isFrost()) card = card.shadowLg();
-        if (expanded) card = card.onMouseDownOut(cx.listener(onOutside));
+        if (expanded and !native) card = card.onMouseDownOut(cx.listener(onOutside));
+        if (expanded and native) card = card.child(zpui.nativePopover(
+            .trigger("harness-updates-native"),
+            native_popover.options(theme, .above, .center, null),
+            zpui.popoverContent(cx.entity(), nativeList, dismissNative),
+        ));
         if (!multiple) {
             const tip: ?[]const u8 = if (row0.status.@"error") |e| e.message else row0.status.manualCommand;
             if (tip) |t| card = card.tooltipWith(zpui.fmt("{s}", .{t}), ui.tooltip.buildAbove);
@@ -821,26 +876,7 @@ pub const HarnessUpdateIsland = struct {
             // Reveal after the surface has made room; the same reversible
             // progress drives the exit (never a replayed mount animation).
             const row_reveal = stage(reveal, 0.42, 0.9);
-            var rows_col = div().id("home-harness-update-list").sizeFull().overflowYScroll().trackScroll(self.scroll).flex().flexCol();
-            for (list, 0..) |row, ix| {
-                const st = row.status;
-                const mark, const tint = ui.icon.harnessMark(st.harness);
-                const label = if (row.connected) (detail(a, st) catch "") else "Disconnected · reconnect to update";
-                const extra = if (st.@"error") |e| e.message else st.manualCommand orelse label;
-                var text_col = div().flex1().minW0().flex().flexCol().gap(px(1))
-                    .child(div().textSize(rems(12)).lineHeight(rems(16)).fontWeight(500).truncate().child(agentName(st.harness)));
-                if (devices > 1) text_col = text_col.child(div().textSize(rems(11)).lineHeight(rems(14)).textColor(theme.text_muted).truncate().child(row.device_name));
-                text_col = text_col.child(div().textSize(rems(11)).lineHeight(rems(14))
-                    .textColor(if (st.phase == .failed) theme.danger else theme.text_muted).truncate().child(label));
-                var r = div().id(.{ "harness-update-row", ix }).relative().top(px(3 * (1 - row_reveal))).opacity(row_reveal)
-                    .h(px(row_height)).flexNone().px(px(12)).flex().itemsCenter().gap(px(10));
-                if (ix > 0) r = r.child(div().absolute().top0().left(px(42)).right(px(12)).h(px(1)).bg(rowDivider(theme)));
-                r = r.child(ui.icon.of(mark, 20, tint orelse theme.text_muted)).child(text_col);
-                if (st.phase == .updated) r = r.child(ui.icon.of(.check, 14, theme.success));
-                if (self.actionButton(ix, row, expanded and row_reveal >= 0.95, theme, cx)) |b| r = r.child(b);
-                r = r.tooltipWith(zpui.fmt("{s} · {s}\n{s}", .{ agentName(st.harness), row.device_name, extra }), ui.tooltip.build);
-                rows_col = rows_col.child(r);
-            }
+            var rows_col = self.rowsColumn(list, theme, devices, row_reveal, expanded and row_reveal >= 0.95, cx);
             // The fading list is inert while collapsing or before its reveal:
             // it must not intercept a click through clipped rows.
             if (!expanded or reveal < 0.85) rows_col = rows_col.child(div().absolute().inset0().occlude());

@@ -22,6 +22,7 @@ const model = @import("zeron_model");
 const engine = @import("zeron_engine");
 const zt = @import("zeron_theme");
 const chrome = @import("chrome.zig");
+const native_popover = @import("native_popover.zig");
 
 const Allocator = std.mem.Allocator;
 const json = std.json;
@@ -375,6 +376,15 @@ pub const AccountUsage = struct {
         cx.notify();
     }
 
+    fn nativeCard(self: *AccountUsage, _: *Window, cx: *Context(AccountUsage)) zpui.Div {
+        return native_popover.bare(self.card(cx));
+    }
+
+    fn onNativeDismiss(self: *AccountUsage, _: *Window, cx: *Context(AccountUsage)) void {
+        self.open = false;
+        cx.notify();
+    }
+
     fn onOutside(self: *AccountUsage, _: *const zpui.input.MouseDownEvent, _: *Window, cx: *Context(AccountUsage)) void {
         self.open = false;
         cx.notify();
@@ -469,7 +479,14 @@ pub const AccountUsage = struct {
             .onClick(cx.listener(onToggle))
             .child(chrome.ring(f, usageColor(level, theme), theme.text_faint.opacity(0.25)))
             .child(zpui.fmt("{d}%", .{@as(u32, @intFromFloat(@round(f * 100)))}));
-        if (self.open) chip = chip.bg(theme.ink(0.05)).child(anchoredAboveEnd(chrome.frosted(theme, chrome.card_radius, chrome.menu_blur, self.card(cx))));
+        if (self.open and native_popover.enabled(cx)) {
+            // [native-popover] The accounts card in a native popover container (macOS).
+            chip = chip.bg(theme.ink(0.05)).child(zpui.nativePopover(
+                .trigger("account-usage-native"),
+                native_popover.options(theme, .above, .end, null),
+                zpui.popoverContent(cx.entity(), nativeCard, onNativeDismiss),
+            ));
+        } else if (self.open) chip = chip.bg(theme.ink(0.05)).child(anchoredAboveEnd(chrome.frosted(theme, chrome.card_radius, chrome.menu_blur, self.card(cx))));
         return div().flex().itemsCenter().child(chip);
     }
 };

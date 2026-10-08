@@ -18,6 +18,7 @@ const model = @import("zeron_model");
 const engine = @import("zeron_engine");
 const zt = @import("zeron_theme");
 const ui = @import("../components/root.zig");
+const native_popover = @import("../components/native_popover.zig");
 const crb = @import("../components/change_request_badge.zig"); // [pr-status]
 const prefs_mod = @import("../shell/prefs.zig");
 const app_update = @import("../../lifecycle/app_update.zig"); // [lifecycle]
@@ -1862,6 +1863,45 @@ pub const Sidebar = struct {
         cx.notify();
     }
 
+    /// The account menu card (identity line + the sync / sign-out action).
+    fn userMenuCard(_: *Sidebar, theme: *const Theme, identity: []const u8, menu_action: ?sync_flow.AccountMenuAction, cx: *Context(Sidebar)) zpui.Div {
+        const prefs = prefs_mod.get(cx);
+        var menu = ui.popover.card(theme).w(px(prefs.sidebar_width - 2 * zt.layout.space_sm))
+            .onMouseDownOut(cx.listener(Sidebar.onCloseMenus))
+            .child(div().px(px(8)).pt(px(6)).pb(px(4)).textSize(rems(11)).textColor(theme.text_muted).truncate().child(identity));
+        if (menu_action) |action| {
+            const base = ui.popover.menuRow(theme, false);
+            const row = switch (action) {
+                .enable_sync => base.id("user-menu-enable-sync").child(icon.of(.global, 16, theme.text_muted)).child("Enable sync"),
+                .sync_in_progress => base.id("user-menu-sync-progress").opacity(0.6).cursorDefault().child(icon.of(.global, 16, theme.text_muted)).child("Sync setup in progress"),
+                .restart_pending => base.id("user-menu-sync-restart").child(icon.of(.restart, 16, theme.text_muted)).child("Finish sync setup"),
+                .sign_out => base.id("user-menu-signout").child(icon.of(.logout_2, 16, theme.text_muted)).child("Sign out"),
+            };
+            menu = menu.child(row.role(.menu_item).ariaDisabled(action == .sync_in_progress).onClick(cx.listenerWith(action, Sidebar.onAccountAction)));
+        }
+        if (@import("builtin").os.tag != .macos) {
+            menu = menu.child(ui.popover.menuRow(theme, false).id("user-menu-check-updates").role(.menu_item)
+                .onClick(cx.listener(Sidebar.onCheckUpdates)) // [lifecycle]
+                .child(icon.of(.refresh, 16, theme.text_muted)).child("Check for updates"));
+        }
+        return menu;
+    }
+
+    /// [native-popover] `userMenuCard` on the container's material.
+    fn nativeUserMenu(self: *Sidebar, _: *Window, cx: *Context(Sidebar)) zpui.Div {
+        const theme = zpui.window.arena_mod.current().create(Theme, ui.theme.get(cx).forPopup());
+        const app_state = self.state.read(cx);
+        const scope = app_state.engine.read(cx).workspaceScope() orelse app_state.workspace.read(cx).workspace_scope;
+        const flow = sync_flow.current(cx.app);
+        _, const identity = sync_flow.identity(scope, flow, app_state.auth.read(cx).user());
+        return native_popover.bare(self.userMenuCard(theme, identity, sync_flow.accountMenuAction(scope, flow), cx));
+    }
+
+    fn dismissUserMenu(self: *Sidebar, _: *Window, cx: *Context(Sidebar)) void {
+        self.shutMenu(&self.user_menu_open, &self.user_menu_exit, cx);
+        cx.notify();
+    }
+
     fn renderFooter(self: *Sidebar, theme_in: *const Theme, cx: *Context(Sidebar)) zpui.Div {
         const theme = &zpui.window.arena_mod.current().create(Theme, theme_in.forPopup()).*;
         const app_state = self.state.read(cx);
@@ -1892,27 +1932,15 @@ pub const Sidebar = struct {
                 .child(div().wFull().textCenter().child(initial)))
             .child(div().minW0().flex().lineHeight(px(17)).child(ui.effects.fadedText(user_line, .{})));
         const user_exit = menuExit(self.user_menu_open, &self.user_menu_exit, cx.app.executor.now());
-        if (self.user_menu_open or user_exit != null) {
-            const prefs = prefs_mod.get(cx);
-            var menu = ui.popover.card(theme).w(px(prefs.sidebar_width - 2 * zt.layout.space_sm))
-                .onMouseDownOut(cx.listener(Sidebar.onCloseMenus))
-                .child(div().px(px(8)).pt(px(6)).pb(px(4)).textSize(rems(11)).textColor(theme.text_muted).truncate().child(identity));
-            if (menu_action) |action| {
-                const base = ui.popover.menuRow(theme, false);
-                const row = switch (action) {
-                    .enable_sync => base.id("user-menu-enable-sync").child(icon.of(.global, 16, theme.text_muted)).child("Enable sync"),
-                    .sync_in_progress => base.id("user-menu-sync-progress").opacity(0.6).cursorDefault().child(icon.of(.global, 16, theme.text_muted)).child("Sync setup in progress"),
-                    .restart_pending => base.id("user-menu-sync-restart").child(icon.of(.restart, 16, theme.text_muted)).child("Finish sync setup"),
-                    .sign_out => base.id("user-menu-signout").child(icon.of(.logout_2, 16, theme.text_muted)).child("Sign out"),
-                };
-                menu = menu.child(row.role(.menu_item).ariaDisabled(action == .sync_in_progress).onClick(cx.listenerWith(action, Sidebar.onAccountAction)));
-            }
-            if (@import("builtin").os.tag != .macos) {
-                menu = menu.child(ui.popover.menuRow(theme, false).id("user-menu-check-updates").role(.menu_item)
-                    .onClick(cx.listener(Sidebar.onCheckUpdates)) // [lifecycle]
-                    .child(icon.of(.refresh, 16, theme.text_muted)).child("Check for updates"));
-            }
-            trigger = trigger.child(ui.popover.anchoredAboveExit(menu, user_exit));
+        if (self.user_menu_open and native_popover.enabled(cx)) {
+            // [native-popover] The account / sync menu in a native popover container (macOS).
+            trigger = trigger.child(zpui.nativePopover(
+                .trigger("user-menu-native"),
+                native_popover.options(theme, .above, .start, null),
+                zpui.popoverContent(cx.entity(), nativeUserMenu, dismissUserMenu),
+            ));
+        } else if (self.user_menu_open or user_exit != null) {
+            trigger = trigger.child(ui.popover.anchoredAboveExit(self.userMenuCard(theme, identity, menu_action, cx), user_exit));
         }
         const mac = @import("builtin").os.tag == .macos;
         return div().wFull().flex().itemsCenter().justifyBetween().gap(px(4))

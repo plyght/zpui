@@ -31,6 +31,7 @@ const zt = @import("zeron_theme");
 const input = @import("zeron_input");
 const ui = @import("../components/root.zig");
 const menu = @import("menu.zig");
+const native_popover = @import("../components/native_popover.zig");
 const fixtures_mod = @import("../shell/fixtures.zig");
 const shell_actions = @import("zeron_actions").shell;
 
@@ -932,6 +933,7 @@ pub const Pickers = struct {
 
     /// Below-left (branch / checkout on the canvas) or above-left.
     fn overlayStart(self: *Pickers, kind: Kind, cx: *Context(Pickers)) zpui.Div {
+        if (native_popover.enabled(cx)) return self.nativeOverlay(kind, .start, cx);
         const exit = self.exitFor(kind, cx);
         const card = self.content(kind, cx);
         return if (self.geometry[@intFromEnum(kind)].below) ui.popover.anchoredBelowExit(card, exit) else ui.popover.anchoredAboveExit(card, exit);
@@ -939,6 +941,7 @@ pub const Pickers = struct {
 
     /// Right-aligned to the trigger: above (default) or below when flipped.
     fn overlayEnd(self: *Pickers, kind: Kind, cx: *Context(Pickers)) zpui.Div {
+        if (native_popover.enabled(cx)) return self.nativeOverlay(kind, .end, cx);
         const exit = self.exitFor(kind, cx);
         const card = self.content(kind, cx);
         const framed = ui.popover.frostedCardExit(card, exit);
@@ -953,6 +956,30 @@ pub const Pickers = struct {
             zpui.anchored().anchorCorner(.bottom_right).snapToWindowWithMargin(.all(8))
                 .child(ui.popover.menuMotion("picker-above-end", exit, div().occlude().pb(px(6)).child(framed), 4)),
         ).withPriority(1));
+    }
+
+    // ---- [native-popover] the same cards in a native popover container (macOS) --------
+
+    /// The open picker as a native popover over the trigger chip (no exit motion: the
+    /// container plays the system hide animation).
+    fn nativeOverlay(self: *Pickers, kind: Kind, alignment: zpui.native_popover.Align, cx: *Context(Pickers)) zpui.Div {
+        if (self.open != kind) return div();
+        const g = self.geometry[@intFromEnum(kind)];
+        const focus = if (kind == .checkout) self.focus else self.search.read(cx).focusHandle();
+        return div().absolute().inset0().child(zpui.nativePopover(
+            .trigger("picker-native-popover"),
+            native_popover.options(ui.theme.get(cx), if (g.below) .below else .above, alignment, focus),
+            zpui.popoverContent(cx.entity(), nativeCard, dismissNative),
+        ));
+    }
+
+    fn nativeCard(self: *Pickers, _: *Window, cx: *Context(Pickers)) zpui.AnyElement {
+        const kind = self.open orelse return zpui.empty();
+        return zpui.intoAnyElement(native_popover.bare(self.content(kind, cx)));
+    }
+
+    fn dismissNative(self: *Pickers, window: *Window, cx: *Context(Pickers)) void {
+        self.close(window, cx);
     }
 
     /// `search_input_frame`: full width, 4px under, ink 0.04, radius 7.

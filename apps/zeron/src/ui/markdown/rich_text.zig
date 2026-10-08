@@ -668,7 +668,8 @@ pub const Destination = struct {
 
     pub fn render(self: *Destination, window: *Window, _: *zpui.Context(Destination)) zpui.AnyElement {
         const theme = &(card_theme orelse return zpui.empty());
-        const vp = window.viewportSize();
+        // A native tooltip window sizes to this card: limit by a typical window instead.
+        const vp: @TypeOf(window.viewportSize()) = if (window.isNativePopover()) .{ .width = 1000, .height = 800 } else window.viewportSize();
         const limits = viewportLimits(vp.width, vp.height);
         // Short URLs stay on one line despite the break points: size from
         // the shaped natural width.
@@ -679,9 +680,14 @@ pub const Destination = struct {
         } else |_| limits[0];
         const width = @min(@ceil(natural) + 14, limits[0]);
         const px = zpui.px;
-        return zpui.intoAnyElement(zpui.div().id("web-destination-card").relative()
+        // [native-popover] In a native tooltip window the material is the card.
+        const native = window.isNativePopover();
+        const clear = zpui.hsla(0, 0, 0, 0);
+        var card = zpui.div().id("web-destination-card").relative()
             .w(px(width)).maxW(px(width)).px(px(6)).py(px(4)).rounded(px(4))
-            .border1().borderColor(theme.border_strong).bg(theme.surface_raised).shadowSm()
+            .border1().borderColor(if (native) clear else theme.border_strong).bg(if (native) clear else theme.surface_raised);
+        if (!native) card = card.shadowSm();
+        return zpui.intoAnyElement(card
             .fontFamily(theme.font_sans).textSize(px(11)).lineHeight(px(14)).textColor(theme.text)
             .flex().flexCol()
             .child(zpui.div().id("web-destination-scroll").maxH(px(limits[1])).overflowYScroll().child(self.text)));

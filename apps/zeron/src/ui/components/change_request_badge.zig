@@ -53,12 +53,14 @@ pub const Tooltip = struct {
         self.gpa.free(self.title);
     }
 
-    pub fn render(self: *Tooltip, _: *zpui.Window, cx: *zpui.Context(Tooltip)) zpui.AnyElement {
+    pub fn render(self: *Tooltip, window: *zpui.Window, cx: *zpui.Context(Tooltip)) zpui.AnyElement {
         const theme = theme_mod.get(cx);
         var card = div().maxW(px(320)).px(px(9)).py(px(7)).flex().flexCol().gap(px(3)).rounded(px(6))
-            .border1().borderColor(theme.border_strong).bg(popover.surfaceBg(theme))
             .child(div().textSize(px(11)).fontWeight(500).textColor(toneColor(self.tone, theme)).child(self.heading))
             .child(div().minW0().truncate().whitespaceNowrap().textSize(px(11)).textColor(theme.text_muted).child(self.title));
+        // [native-popover] In a native tooltip window the material is the card.
+        if (window.isNativePopover()) return zpui.intoAnyElement(card);
+        card = card.border1().borderColor(theme.border_strong).bg(popover.surfaceBg(theme));
         if (!theme.isFrost()) card = card.shadowMd();
         return zpui.intoAnyElement(effects.frosted(6, theme_mod.layout.menu_blur, card));
     }

@@ -824,6 +824,7 @@ pub const Shell = struct {
         }
         // [liquid-glass] Glass material follows zeron's theme, not the OS appearance.
         window.glass_dark = ui.theme.get(cx).appearance == .dark;
+        @import("../components/native_popover.zig").syncWindow(window, ui.theme.get(cx), cx); // [native-popover] tooltips
         syncWindowBackground(window, cx);
         // Reduce motion / pause in background (settings × OS × focus).
         settings_ui.motion.sync(window, cx.app);

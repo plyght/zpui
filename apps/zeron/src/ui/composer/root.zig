@@ -28,6 +28,7 @@ pub const completions = @import("completions.zig");
 pub const extras = @import("extras.zig");
 pub const account_usage = @import("account_usage.zig"); // plan-usage ring + account switcher
 pub const dock = @import("dock.zig"); // [motion] composer route choreography (composer_dock.rs)
+pub const native_popover = @import("native_popover.zig"); // [native-popover] macOS containers
 
 pub const ComposerView = composer.ComposerView;
 pub const ComposerEvent = composer.ComposerEvent;

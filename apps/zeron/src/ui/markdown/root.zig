@@ -779,10 +779,13 @@ const CodeTooltip = struct {
     buf: [480]u8 = undefined,
     len: usize = 0,
 
-    pub fn render(self: *CodeTooltip, _: *Window, _: *zpui.Context(CodeTooltip)) AnyElement {
+    pub fn render(self: *CodeTooltip, window: *Window, _: *zpui.Context(CodeTooltip)) AnyElement {
         const theme = &(tooltip_theme orelse return zpui.empty());
+        // [native-popover] No card fill in a native tooltip window (the material is it).
+        const native = window.isNativePopover();
+        const fill = if (native) zpui.hsla(0, 0, 0, 0) else theme.bg;
         return zpui.intoAnyElement(div().maxW(px(320)).px(px(9)).py(px(6)).rounded(px(6))
-            .border1().borderColor(theme.border).bg(theme.bg)
+            .border1().borderColor(if (native) fill else theme.border).bg(fill)
             .fontFamily(theme.font_sans).textSize(px(11)).lineHeight(px(17.8)).textColor(theme.text_muted)
             .child(@as([]const u8, self.buf[0..self.len])));
     }

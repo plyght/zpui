@@ -19,8 +19,15 @@ pub const TextTooltip = struct {
     text: []const u8,
     above: bool = false,
 
-    pub fn render(self: *TextTooltip, _: *zpui.Window, cx: *zpui.Context(TextTooltip)) zpui.AnyElement {
+    pub fn render(self: *TextTooltip, window: *zpui.Window, cx: *zpui.Context(TextTooltip)) zpui.AnyElement {
         const theme = theme_mod.get(cx);
+        // [native-popover] In a native tooltip window the system material is the chip.
+        if (window.isNativePopover()) return zpui.intoAnyElement(div()
+            .maxW(px(320)).px(px(8)).py(px(4))
+            .fontFamily(theme.font_sans)
+            .textSize(px(11)).lineHeight(px(15)).textColor(theme.text)
+            .whitespaceNowrap()
+            .child(self.text));
         const card = div()
             .maxW(px(320)).px(px(9)).py(px(6)).rounded(px(6))
             .border1().borderColor(theme.onGlassBorder(theme.border)) // [liquid-glass]

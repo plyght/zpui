@@ -119,8 +119,15 @@ pub const BadgeCard = struct {
                 .child(div().minW0().textSize(px(text_size)).lineHeight(px(16)).textColor(theme.text).child(d.body)));
     }
 
-    pub fn render(self: *BadgeCard, _: *zpui.Window, cx: *zpui.Context(BadgeCard)) zpui.AnyElement {
+    pub fn render(self: *BadgeCard, window: *zpui.Window, cx: *zpui.Context(BadgeCard)) zpui.AnyElement {
         const theme = zpui.window.arena_mod.current().create(Theme, @import("view.zig").themeOf(cx.app).forPopup());
+        // [native-popover] In a native tooltip window the material is the card.
+        if (window.isNativePopover()) {
+            var bare = div().overflowHidden().fontFamily(theme.font_sans).textSize(px(13)).textColor(theme.text)
+                .w(px(card_width)).p(px(6)).flex().flexCol().gap(px(4));
+            for (self.details) |d| bare = bare.child(row(d, theme));
+            return zpui.intoAnyElement(bare);
+        }
         // `popover::popover_card` (12px radius, 4px inset) at 320px.
         var card = div().border1().borderColor(theme.onGlassBorder(theme.border)).rounded(px(card_radius))
             .bg(popoverBg(theme)).overflowHidden().fontFamily(theme.font_sans).textSize(px(13)).textColor(theme.text)

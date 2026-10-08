@@ -30,6 +30,7 @@ const model = @import("zeron_model");
 const engine = @import("zeron_engine");
 const input_mod = @import("zeron_input");
 const chrome = @import("chrome.zig");
+const native_popover = @import("native_popover.zig");
 const rc = @import("run_config.zig");
 const composer_store = model.composer_store;
 const metrics = @import("metrics.zig");
@@ -698,7 +699,14 @@ pub const ModelPicker = struct {
         }
 
         var root = div().relative().flex().flexRow().itemsCenter().minW0().gap(px(4)).child(chip);
-        if (self.open) {
+        if (self.open and native_popover.enabled(cx)) {
+            // [native-popover] The same card in a native popover container (macOS).
+            root = root.child(zpui.nativePopover(
+                .trigger("model-popover-native"),
+                native_popover.options(theme, .above, .end, self.focus),
+                zpui.popoverContent(cx.entity(), nativePopoverCard, dismissNative),
+            ));
+        } else if (self.open) {
             root = root.child(div().absolute().bottomFull().right0().child(
                 zpui.deferred(div().occlude().pb(px(6)).child(self.renderPopover(cx))).withPriority(1),
             ));
@@ -730,6 +738,19 @@ pub const ModelPicker = struct {
     }
 
     fn renderPopover(self: *ModelPicker, cx: *Context(ModelPicker)) chrome.Frosted {
+        return chrome.frosted(&self.theme, chrome.card_radius, chrome.menu_blur, self.popoverCard(cx));
+    }
+
+    /// [native-popover] The card on the container's material (no fill / hairline / shadow).
+    fn nativePopoverCard(self: *ModelPicker, _: *Window, cx: *Context(ModelPicker)) zpui.StatefulDiv {
+        return native_popover.bare(self.popoverCard(cx));
+    }
+
+    fn dismissNative(self: *ModelPicker, window: *Window, cx: *Context(ModelPicker)) void {
+        self.close(window, cx);
+    }
+
+    fn popoverCard(self: *ModelPicker, cx: *Context(ModelPicker)) zpui.StatefulDiv {
         const base = self.theme;
         const theme = base.forPopup();
         const content = switch (self.page) {
@@ -743,7 +764,7 @@ pub const ModelPicker = struct {
             .onKeyDown(cx.listener(ModelPicker.onFrameKey))
             .onMouseDownOut(cx.listener(ModelPicker.onOutside))
             .child(content);
-        return chrome.frosted(&base, chrome.card_radius, chrome.menu_blur, card);
+        return card;
     }
 
     /// `compact_model_back_header`: back to the panel, then the providers

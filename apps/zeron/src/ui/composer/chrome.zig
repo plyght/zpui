@@ -180,8 +180,15 @@ pub const TextTooltip = struct {
     text: []const u8,
     theme: Theme,
 
-    pub fn render(self: *TextTooltip, _: *Window, _: *zpui.Context(TextTooltip)) Frosted {
+    pub fn render(self: *TextTooltip, window: *Window, _: *zpui.Context(TextTooltip)) Frosted {
         const theme = &self.theme;
+        // [native-popover] A native tooltip window: the system material is the chip.
+        if (window.isNativePopover()) return .{ .radius = 6, .blur = 0, .enabled = false, .child = zpui.intoAnyElement(div()
+            .maxW(px(320)).px(px(8)).py(px(4))
+            .fontFamily(theme.font_sans)
+            .textSize(px(11)).lineHeight(px(15)).textColor(theme.text)
+            .whitespaceNowrap()
+            .child(self.text)) };
         const c = div()
             .maxW(px(320)).px(px(9)).py(px(6)).rounded(px(6))
             .border1().borderColor(theme.border)

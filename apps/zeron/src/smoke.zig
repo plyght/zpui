@@ -35,6 +35,9 @@
 //! open Settings on that page, render 30 more frames and capture it (on macOS the
 //! page's switches, pop-ups and sliders are native AppKit controls).
 //!
+//! `ZERON_SMOKE_POPOVER=model|project|tooltip` (macOS): after the frames, open that
+//! rich popover in its native popover container and capture it (smoke_popover.zig).
+//!
 //! `ZERON_SMOKE_SHORTCUTS=1`: the menu bar and every app shortcut through real AppKit
 //! key events and menu picks, ending with ⌘Q (smoke_shortcuts.zig).
 //!
@@ -128,6 +131,11 @@ const Tick = struct {
         if (s.opts.settings_stress) |n| if (self.waited == 0) return SettingsStress.begin(s, win, app, n);
         if (s.opts.shortcuts and self.waited == 0) return smoke_shortcuts.begin(win, app, shortcutsDone);
         if (s.opts.settings) |section| if (self.waited == 0) return openSettings(s, win, app, section);
+        if (std.c.getenv("ZERON_SMOKE_POPOVER")) |k| if (self.waited == 0) { // [native-popover]
+            var buf: [64]u8 = undefined;
+            const out = s.opts.out orelse (std.fmt.bufPrint(&buf, "zig-out/zeron-{s}-popover-{s}.png", .{ os_name, std.mem.span(k) }) catch "zig-out/zeron-popover.png");
+            return smoke_popover.begin(s.gpa, s.io, s.gpa.dupe(u8, out) catch out, win, app, std.mem.span(k), popoverDone);
+        };
         if (s.opts.new_chat and self.waited == 0) return smoke_new_chat.begin(s.io, win, app, s.opts.browser_url, newChatDone);
         if (s.opts.browser_url) |url| return openBrowser(s, win, app, url);
         if (s.opts.menu and self.waited == 0) return MenuProbe.begin(s, win, app);
@@ -170,6 +178,14 @@ fn shortcutsDone(_: *Window, _: *App, r: smoke_shortcuts.Result) void {
 }
 
 const smoke_new_chat = @import("smoke_new_chat.zig");
+const smoke_popover = @import("smoke_popover.zig");
+
+fn popoverDone(app: *App, ok: bool) void {
+    const s = &state.?;
+    s.exit_code = if (ok) 0 else 1;
+    s.done.store(true, .release);
+    app.quit();
+}
 
 fn newChatDone(app: *App, ok: bool) void {
     const s = &state.?;
@@ -996,6 +1012,11 @@ fn writeChunk(w: *std.Io.Writer, kind: *const [4]u8, data: []const u8) !void {
     crc.update(kind);
     crc.update(data);
     try w.writeInt(u32, crc.final(), .big);
+}
+
+test {
+    _ = smoke_popover; // [native-popover]
+    _ = &Tick.tick;
 }
 
 test "ppm parse + blank detection" {
