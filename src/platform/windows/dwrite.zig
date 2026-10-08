@@ -75,6 +75,9 @@ pub const DWRITE_GLYPH_RUN = extern struct {
     bidiLevel: u32 = 0,
 };
 
+/// x' = x * m11 + y * m21 + dx, y' = x * m12 + y * m22 + dy (y down, after the em scaling).
+pub const DWRITE_MATRIX = extern struct { m11: f32 = 1, m12: f32 = 0, m21: f32 = 0, m22: f32 = 1, dx: f32 = 0, dy: f32 = 0 };
+
 pub const DWRITE_COLOR_F = extern struct { r: f32, g: f32, b: f32, a: f32 };
 
 pub const DWRITE_COLOR_GLYPH_RUN = extern struct {

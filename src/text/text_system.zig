@@ -277,6 +277,8 @@ pub fn atlasKey(p: RenderGlyphParams) atlas_mod.AtlasKey {
     k.is_emoji = p.is_emoji;
     k.subpixel_rendering = p.subpixel_rendering;
     k.dilation = p.dilation;
+    const t = p.raster_transform;
+    k.raster_transform_bits = .{ @bitCast(t.a), @bitCast(t.b), @bitCast(t.c), @bitCast(t.d) };
     return .{ .glyph = k };
 }
 
@@ -570,4 +572,28 @@ test "glyph atlas keys separate smoothed (dilated) rasters" {
     const smoothed = atlasKey(p);
     try std.testing.expect(!std.meta.eql(plain, smoothed));
     try std.testing.expectEqual(@as(u8, 4), smoothed.glyph.dilation);
+}
+
+test "glyph atlas keys and raster-bounds cache separate raster transforms" {
+    const base: RenderGlyphParams = .{ .font_id = @enumFromInt(0), .glyph_id = 7, .font_size = 13, .subpixel_variant_x = 0, .subpixel_variant_y = 0, .is_emoji = false, .subpixel_rendering = false, .scale_factor = 2 };
+    // The default transform is the identity and keys exactly like the pre-transform key.
+    var legacy = atlas_mod.GlyphKey.init(0, 7, 13, 2);
+    try std.testing.expect(std.meta.eql(atlas_mod.AtlasKey{ .glyph = legacy }, atlasKey(base)));
+    var sheared = base;
+    sheared.raster_transform = types.RasterTransform.fromBasis(.{ 1, 0 }, .{ 0.4, -0.8 });
+    const k = atlasKey(sheared);
+    try std.testing.expect(!std.meta.eql(atlasKey(base), k));
+    legacy.raster_transform_bits = .{ @bitCast(@as(f32, 1)), 0, @bitCast(@as(f32, -0.4)), @bitCast(@as(f32, 0.8)) };
+    try std.testing.expect(std.meta.eql(atlas_mod.AtlasKey{ .glyph = legacy }, k));
+
+    const ctx: ParamsContext = .{};
+    try std.testing.expect(!ctx.eql(base, sheared));
+    try std.testing.expect(ctx.hash(base) != ctx.hash(sheared));
+    var same = base;
+    same.raster_transform = types.RasterTransform.identity;
+    try std.testing.expect(ctx.eql(base, same));
+    try std.testing.expectEqual(ctx.hash(base), ctx.hash(same));
+    var other = sheared;
+    other.raster_transform.c = -0.41;
+    try std.testing.expect(!ctx.eql(sheared, other));
 }

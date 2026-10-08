@@ -378,6 +378,75 @@ pub fn paintGlyphTransformed(
     }) catch @panic("OOM");
 }
 
+/// Paint a monochrome glyph whose outline is mapped through `transform` by the OS rasterizer
+/// (CoreText CTM, FreeType `FT_Set_Transform`), about its baseline `origin` (logical px).
+/// Unlike `paintGlyphTransformed`, which stretches an upright bitmap at composite time, the
+/// rasterizer sees the sheared / foreshortened outline, so the glyph stays crisp and
+/// correctly antialiased at any size: e.g. a keycap legend on a keyboard in 3/4 view
+/// (`RasterTransform.fromBasis(along_row, up_the_key)`).
+///
+/// Each distinct transform is its own atlas tile (it is part of `RenderGlyphParams`), so keep
+/// the matrix stable across frames (animate positions, not the matrix). The identity is
+/// exactly `paintGlyph`. A backend without raster transforms
+/// (`platform.TextSystem.VTable.raster_transforms` false) falls back to the composited
+/// `paintGlyphTransformed` with the same matrix.
+pub fn paintGlyphRasterTransformed(
+    w: *Window,
+    origin: Point,
+    font_id: text_mod.FontId,
+    glyph_id: text_mod.GlyphId,
+    font_size: Pixels,
+    c: Hsla,
+    transform: text_mod.RasterTransform,
+) void {
+    if (transform.isIdentity()) return paintGlyph(w, origin, font_id, glyph_id, font_size, c);
+    const ts = w.text_system.text_system;
+    if (!ts.platform.vtable.raster_transforms) {
+        const o: Point = .{ .x = origin.x * w.scale_factor, .y = origin.y * w.scale_factor };
+        return paintGlyphTransformed(w, origin, font_id, glyph_id, font_size, c, compositeMatrix(transform, o), 0);
+    }
+    // Grayscale only: an LCD mask has no meaning once the outline is rotated or sheared.
+    var g = text_mod.line.glyphRenderParams(font_id, glyph_id, font_size, origin, w.scale_factor, false);
+    g.params.dilation = ts.glyphDilation(c);
+    g.params.raster_transform = transform.canonical();
+    insertGlyph(w, g.params, g.origin, c);
+}
+
+/// `transform` about the device point `o`, as a composite-time `TransformationMatrix`.
+pub fn compositeMatrix(transform: text_mod.RasterTransform, o: Point) scene.TransformationMatrix {
+    const m: scene.TransformationMatrix = .{ .rotation_scale = .{ .{ transform.a, transform.c }, .{ transform.b, transform.d } } };
+    return scene.TransformationMatrix.unit.translate(o).compose(m).translate(.{ .x = -o.x, .y = -o.y });
+}
+
+/// Paint one shaped run (glyphs of one font, positions from `LineLayout`) laid out along
+/// `transform`: glyph `i` goes to `origin + transform(position_i)` (so advances follow the
+/// transformed x axis) and is rasterized through `transform` (`paintGlyphRasterTransformed`).
+/// `origin` is the run's baseline origin, logical px. Color emoji are drawn upright at their
+/// transformed positions.
+pub fn paintTextRunRasterTransformed(
+    w: *Window,
+    origin: Point,
+    run: text_mod.ShapedRun,
+    font_size: Pixels,
+    transform: text_mod.RasterTransform,
+    c: Hsla,
+) void {
+    for (run.glyphs) |glyph| {
+        const d = transform.apply(glyph.position);
+        const at: Point = .{ .x = origin.x + d.x, .y = origin.y + d.y };
+        if (glyph.is_emoji)
+            paintEmoji(w, at, run.font_id, glyph.id, font_size)
+        else
+            paintGlyphRasterTransformed(w, at, run.font_id, glyph.id, font_size, c, transform);
+    }
+}
+
+/// Every run of a shaped line (`ShapedLine.lineLayout()`, `TextSystem.layoutLine`) along
+/// `transform` from the baseline `origin` (see `paintTextRunRasterTransformed`).
+pub fn paintLineRasterTransformed(w: *Window, origin: Point, layout: *const text_mod.LineLayout, transform: text_mod.RasterTransform, c: Hsla) void {
+    for (layout.runs) |run| paintTextRunRasterTransformed(w, origin, run, layout.font_size, transform, c);
+}
+
 /// Paint a color emoji glyph (gpui `paint_emoji`).
 pub fn paintEmoji(w: *Window, origin: Point, font_id: text_mod.FontId, glyph_id: text_mod.GlyphId, font_size: Pixels) void {
     const s = w.scale_factor;

@@ -164,6 +164,7 @@ pub const FreeTypeTextSystem = struct {
         .glyphRasterBounds = vtGlyphRasterBounds,
         .rasterizeGlyph = vtRasterizeGlyph,
         .layoutLine = vtLayoutLine,
+        .raster_transforms = true,
     };
 
     fn face(self: *FreeTypeTextSystem, id: FontId) *Face {
@@ -698,10 +699,16 @@ pub const FreeTypeTextSystem = struct {
             .x = @divTrunc(@as(c.FT_Pos, params.subpixel_variant_x) * 64, types.subpixel_variants_x),
             .y = 0,
         };
-        c.FT_Set_Transform(ft, null, &delta);
+        // Raster transform (outline glyphs only; FreeType leaves bitmap strikes untouched).
+        // Identity keeps the exact untransformed call below.
+        const transformed = !params.is_emoji and !params.raster_transform.isIdentity();
+        var matrix: c.FT_Matrix = if (transformed) ftMatrix(params.raster_transform) else undefined;
+        c.FT_Set_Transform(ft, if (transformed) &matrix else null, &delta);
         defer c.FT_Set_Transform(ft, null, null);
 
-        const load_flags: i32 = if (params.is_emoji) c.FT_LOAD_COLOR else c.FT_LOAD_TARGET_LIGHT;
+        // FreeType hints in the untransformed grid and ignores most of it under a transform,
+        // so transformed outlines load unhinted (and stay consistent across matrices).
+        const load_flags: i32 = if (params.is_emoji) c.FT_LOAD_COLOR else if (transformed) c.FT_LOAD_NO_HINTING else c.FT_LOAD_TARGET_LIGHT;
         if (c.FT_Load_Glyph(ft, params.glyph_id, load_flags) != 0) return error.GlyphLoadFailed;
         const slot = ft.*.glyph;
         const mode: c_uint = if (params.subpixel_rendering and !params.is_emoji) c.FT_RENDER_MODE_LCD else c.FT_RENDER_MODE_NORMAL;
@@ -721,6 +728,17 @@ pub const FreeTypeTextSystem = struct {
         }
         if (params.is_emoji) unpremultiply(img.data);
         return img;
+    }
+
+    /// `RasterTransform` (y down) as FreeType's 16.16 `FT_Matrix` (y up): conjugating by the
+    /// y flip negates the off-diagonal terms.
+    fn ftMatrix(t: types.RasterTransform) c.FT_Matrix {
+        const fixed = struct {
+            fn f(v: f32) c.FT_Fixed {
+                return @intFromFloat(@round(@as(f64, v) * 65536.0));
+            }
+        }.f;
+        return .{ .xx = fixed(t.a), .xy = fixed(-t.c), .yx = fixed(-t.b), .yy = fixed(t.d) };
     }
 
     fn pickStrike(ft: c.FT_Face, ppem: f32) c_int {
@@ -960,4 +978,93 @@ fn scaleImage(gpa: Allocator, src: FreeTypeTextSystem.Image, scale: f32, bpp: us
         }
     }
     return .{ .left = left, .top = top, .width = @intCast(dw), .height = @intCast(dh), .data = out };
+}
+
+test "freetype raster transforms: sheared 'A' covers its transformed outline; identity is byte-identical" {
+    const gpa = std.testing.allocator;
+    const fts = try FreeTypeTextSystem.create(gpa);
+    defer fts.destroy();
+    const ts = fts.textSystem();
+    try std.testing.expect(ts.vtable.raster_transforms);
+    const id = fts.fontId(.{ .family = "Inter" }) catch fts.fontId(.{ .family = "DejaVu Sans" }) catch return error.SkipZigTest;
+    const glyph = c.FT_Get_Char_Index(fts.face(id).ft, 'A');
+    if (glyph == 0) return error.SkipZigTest;
+    const plain: types.RenderGlyphParams = .{ .font_id = id, .glyph_id = glyph, .font_size = 24, .subpixel_variant_x = 0, .subpixel_variant_y = 0, .is_emoji = false, .subpixel_rendering = false, .scale_factor = 2 };
+
+    const ref_bounds = try fts.glyphRasterBounds(plain);
+    const ref = try fts.rasterizeGlyph(gpa, plain, ref_bounds);
+    defer gpa.free(ref);
+
+    // Identity (explicit, with signed zeros) is the untransformed path, byte for byte.
+    var ident = plain;
+    ident.raster_transform = .{ .a = 1, .b = -0.0, .c = -0.0, .d = 1 };
+    for ([_]u8{ 0, 2 }) |variant| {
+        var p0 = plain;
+        p0.subpixel_variant_x = variant;
+        var p1 = ident;
+        p1.subpixel_variant_x = variant;
+        const b0 = try fts.glyphRasterBounds(p0);
+        try std.testing.expectEqual(b0, try fts.glyphRasterBounds(p1));
+        const bm0 = try fts.rasterizeGlyph(gpa, p0, b0);
+        defer gpa.free(bm0);
+        const bm1 = try fts.rasterizeGlyph(gpa, p1, b0);
+        defer gpa.free(bm1);
+        try std.testing.expectEqualSlices(u8, bm0, bm1);
+    }
+
+    // The upright outline at the same size (unhinted, no transform), in y-down device px.
+    _ = try fts.glyphRasterBounds(plain); // sets the char size
+    const ft = fts.face(id).ft;
+    if (c.FT_Load_Glyph(ft, glyph, c.FT_LOAD_NO_HINTING | c.FT_LOAD_NO_BITMAP) != 0) return error.GlyphLoadFailed;
+    const outline = ft.*.glyph.*.outline;
+    try std.testing.expect(outline.n_points > 0);
+    // Copy: the glyph slot is reused by the renders below.
+    const points = try gpa.dupe(c.FT_Vector, outline.points[0..@intCast(outline.n_points)]);
+    defer gpa.free(points);
+
+    const cases = [_]types.RasterTransform{
+        // Up leans right by 0.5 per unit.
+        types.RasterTransform.fromBasis(.{ 1, 0 }, .{ 0.5, -1 }),
+        // A keyboard plane in 3/4 view: rows slope down to the right, keys foreshortened.
+        types.RasterTransform.fromBasis(.{ 0.95, 0.18 }, .{ 0.42, -0.62 }),
+        // Rotated 90 degrees clockwise.
+        .{ .a = 0, .b = 1, .c = -1, .d = 0 },
+    };
+    for (cases) |t| {
+        var p = plain;
+        p.raster_transform = t;
+        const b = try fts.glyphRasterBounds(p);
+        const bm = try fts.rasterizeGlyph(gpa, p, b);
+        defer gpa.free(bm);
+        const w: usize = @intCast(b.size.width);
+        const h: usize = @intCast(b.size.height);
+        try std.testing.expectEqual(w * h, bm.len);
+        // Ink bbox, device px relative to the glyph origin.
+        var ink: [4]i32 = .{ std.math.maxInt(i32), std.math.maxInt(i32), std.math.minInt(i32), std.math.minInt(i32) };
+        for (0..h) |y| for (0..w) |x| if (bm[y * w + x] > 0) {
+            const dx = b.origin.x + @as(i32, @intCast(x));
+            const dy = b.origin.y + @as(i32, @intCast(y));
+            ink = .{ @min(ink[0], dx), @min(ink[1], dy), @max(ink[2], dx + 1), @max(ink[3], dy + 1) };
+        };
+        // Transformed outline bbox ('A' is straight segments: the points' box is the outline's).
+        var ob: [4]f32 = .{ std.math.inf(f32), std.math.inf(f32), -std.math.inf(f32), -std.math.inf(f32) };
+        for (points) |pt| {
+            const q = t.apply(.{ .x = @as(f32, @floatFromInt(pt.x)) / 64, .y = -@as(f32, @floatFromInt(pt.y)) / 64 });
+            ob = .{ @min(ob[0], q.x), @min(ob[1], q.y), @max(ob[2], q.x), @max(ob[3], q.y) };
+        }
+        const expect: [4]i32 = .{ @intFromFloat(@floor(ob[0])), @intFromFloat(@floor(ob[1])), @intFromFloat(@ceil(ob[2])), @intFromFloat(@ceil(ob[3])) };
+        for (ink, expect) |got, want| {
+            if (@abs(got - want) > 1) {
+                std.debug.print("transform {any}: ink bbox {any}, outline bbox {any}\n", .{ t, ink, expect });
+                return error.TestUnexpectedResult;
+            }
+        }
+        // The bounds the atlas allocates hold all the ink.
+        try std.testing.expect(ink[0] >= b.origin.x and ink[1] >= b.origin.y and ink[2] <= b.origin.x + b.size.width and ink[3] <= b.origin.y + b.size.height);
+    }
+    // The transform is restored: a plain render after transformed ones matches the first.
+    try std.testing.expectEqual(ref_bounds, try fts.glyphRasterBounds(plain));
+    const again = try fts.rasterizeGlyph(gpa, plain, ref_bounds);
+    defer gpa.free(again);
+    try std.testing.expectEqualSlices(u8, ref, again);
 }

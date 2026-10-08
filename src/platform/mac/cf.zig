@@ -155,6 +155,9 @@ pub extern "c" fn CGBitmapContextCreate(data: ?*anyopaque, width: usize, height:
 pub extern "c" fn CGContextRelease(c: CGContextRef) void;
 pub extern "c" fn CGContextTranslateCTM(c: CGContextRef, tx: CGFloat, ty: CGFloat) void;
 pub extern "c" fn CGContextScaleCTM(c: CGContextRef, sx: CGFloat, sy: CGFloat) void;
+/// x' = a*x + c*y + tx, y' = b*x + d*y + ty.
+pub const CGAffineTransform = extern struct { a: CGFloat, b: CGFloat, c: CGFloat, d: CGFloat, tx: CGFloat, ty: CGFloat };
+pub extern "c" fn CGContextConcatCTM(c: CGContextRef, transform: CGAffineTransform) void;
 pub extern "c" fn CGContextSetTextDrawingMode(c: CGContextRef, mode: i32) void;
 pub extern "c" fn CGContextSetAllowsAntialiasing(c: CGContextRef, allows: bool) void;
 pub extern "c" fn CGContextSetShouldAntialias(c: CGContextRef, should: bool) void;

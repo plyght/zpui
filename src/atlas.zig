@@ -87,6 +87,8 @@ pub const GlyphKey = struct {
     is_emoji: bool = false,
     subpixel_rendering: bool = false,
     dilation: u8 = 0,
+    /// `RenderGlyphParams.raster_transform` (a, b, c, d) as bit patterns; identity by default.
+    raster_transform_bits: [4]u32 = .{ @bitCast(@as(f32, 1)), 0, 0, @bitCast(@as(f32, 1)) },
 
     pub fn init(font_id: u32, glyph_id: u32, font_size: f32, scale_factor: f32) GlyphKey {
         return .{

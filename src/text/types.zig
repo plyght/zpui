@@ -91,6 +91,75 @@ pub const LineLayout = struct {
 pub const subpixel_variants_x: u8 = 4;
 pub const subpixel_variants_y: u8 = 1;
 
+/// A 2x2 linear map applied to a glyph's outline when the backend rasterizes it (no
+/// translation: the glyph's baseline origin is the fixed point). Device space, y down:
+/// a glyph-space vector `(x, y)` (x right, y down, in pixels) lands at
+/// `(a*x + c*y, b*x + d*y)`, the column-vector convention of `CGAffineTransform`.
+/// Unlike a composite-time `scene.TransformationMatrix`, the rasterizer sees the
+/// transformed outline, so sheared or squashed glyphs stay crisp and correctly
+/// antialiased at any size. Part of `RenderGlyphParams` (and so of the atlas key).
+pub const RasterTransform = extern struct {
+    a: f32 = 1,
+    b: f32 = 0,
+    c: f32 = 0,
+    d: f32 = 1,
+
+    pub const identity: RasterTransform = .{};
+
+    /// The transform taking glyph +x to `u` and glyph "up" (toward the ascender) to `v`,
+    /// both in y-down device space: e.g. a keycap plane seen at an angle, where `u` runs
+    /// along the key row and `v` points from a legend's baseline toward its top.
+    pub fn fromBasis(u: [2]f32, v: [2]f32) RasterTransform {
+        // Glyph "up" is (0, -1) in y-down space, so the y column is -v.
+        return canonical(.{ .a = u[0], .b = u[1], .c = -v[0], .d = -v[1] });
+    }
+
+    /// Exactly the identity (the backends' unchanged fast path).
+    pub fn isIdentity(t: RasterTransform) bool {
+        return t.a == 1 and t.b == 0 and t.c == 0 and t.d == 1;
+    }
+
+    /// Same map with -0 folded to +0, so equal maps hash (byte-wise) to one atlas key.
+    pub fn canonical(t: RasterTransform) RasterTransform {
+        return .{ .a = t.a + 0, .b = t.b + 0, .c = t.c + 0, .d = t.d + 0 };
+    }
+
+    pub fn determinant(t: RasterTransform) f32 {
+        return t.a * t.d - t.b * t.c;
+    }
+
+    pub fn apply(t: RasterTransform, p: geometry.Point(f32)) geometry.Point(f32) {
+        return .{ .x = t.a * p.x + t.c * p.y, .y = t.b * p.x + t.d * p.y };
+    }
+
+    /// `t` applied after `u` (`t.compose(u).apply(p) == t.apply(u.apply(p))`).
+    pub fn compose(t: RasterTransform, u: RasterTransform) RasterTransform {
+        return .{
+            .a = t.a * u.a + t.c * u.b,
+            .b = t.b * u.a + t.d * u.b,
+            .c = t.a * u.c + t.c * u.d,
+            .d = t.b * u.c + t.d * u.d,
+        };
+    }
+
+    /// Axis-aligned bounding box of the rectangle `[x0, x1] x [y0, y1]` (y down) after `t`:
+    /// `.{ min_x, min_y, max_x, max_y }`. A linear map sends a box's corners to the corners
+    /// of a parallelogram, so their extremes bound the transformed box exactly.
+    pub fn mapRect(t: RasterTransform, x0: f64, y0: f64, x1: f64, y1: f64) [4]f64 {
+        const corners = [4][2]f64{ .{ x0, y0 }, .{ x1, y0 }, .{ x0, y1 }, .{ x1, y1 } };
+        var out: [4]f64 = .{ std.math.inf(f64), std.math.inf(f64), -std.math.inf(f64), -std.math.inf(f64) };
+        for (corners) |p| {
+            const x = @as(f64, t.a) * p[0] + @as(f64, t.c) * p[1];
+            const y = @as(f64, t.b) * p[0] + @as(f64, t.d) * p[1];
+            out[0] = @min(out[0], x);
+            out[1] = @min(out[1], y);
+            out[2] = @max(out[2], x);
+            out[3] = @max(out[3], y);
+        }
+        return out;
+    }
+};
+
 /// gpui `RenderGlyphParams`: everything that determines a glyph's rasterized bitmap.
 /// Also the atlas key for glyph tiles.
 pub const RenderGlyphParams = extern struct {
@@ -108,6 +177,9 @@ pub const RenderGlyphParams = extern struct {
     dilation: u8 = 0,
     /// Explicit padding: params are hashed and compared as bytes.
     _pad: [3]u8 = .{ 0, 0, 0 },
+    /// Outline transform applied by the rasterizer (`RasterTransform`); identity takes each
+    /// backend's unchanged path, so ordinary text is bit-identical with or without it.
+    raster_transform: RasterTransform = .identity,
 };
 
 /// gpui `TextRun`: styling for `len` UTF-8 bytes of a styled text.
@@ -135,4 +207,36 @@ test "RenderGlyphParams has no implicit padding (hashed and compared as bytes)" 
     var sum: usize = 0;
     inline for (@typeInfo(RenderGlyphParams).@"struct".field_types) |T| sum += @sizeOf(T);
     try std.testing.expectEqual(sum, @sizeOf(RenderGlyphParams));
+    try std.testing.expectEqual(@as(usize, 16), @sizeOf(RasterTransform));
+    try std.testing.expectEqual(@as(usize, 24), @offsetOf(RenderGlyphParams, "raster_transform"));
+    try std.testing.expectEqual(@as(usize, 40), @sizeOf(RenderGlyphParams));
+}
+
+test "RasterTransform basis, identity, canonical zeros and rect mapping" {
+    const t = std.testing;
+    try t.expect(RasterTransform.identity.isIdentity());
+    // Glyph x -> u, glyph up -> v: the upright basis is the identity.
+    try t.expect(RasterTransform.fromBasis(.{ 1, 0 }, .{ 0, -1 }).isIdentity());
+    // -0 folds to +0 so byte-wise keys agree.
+    const neg: RasterTransform = .{ .a = 1, .b = -0.0, .c = -0.0, .d = 1 };
+    try t.expect(neg.isIdentity());
+    try t.expectEqualSlices(u8, std.mem.asBytes(&RasterTransform.identity), std.mem.asBytes(&neg.canonical()));
+    // Shear: up leans right by 0.5 per unit.
+    const shear = RasterTransform.fromBasis(.{ 1, 0 }, .{ 0.5, -1 });
+    const top = shear.apply(.{ .x = 0, .y = -10 }); // 10px above the baseline
+    try t.expectApproxEqAbs(@as(f32, 5), top.x, 1e-6);
+    try t.expectApproxEqAbs(@as(f32, -10), top.y, 1e-6);
+    // Box [0,8]x[-10,0] -> x spans [0, 8 + 5], y unchanged.
+    const r = shear.mapRect(0, -10, 8, 0);
+    try t.expectApproxEqAbs(@as(f64, 0), r[0], 1e-9);
+    try t.expectApproxEqAbs(@as(f64, -10), r[1], 1e-9);
+    try t.expectApproxEqAbs(@as(f64, 13), r[2], 1e-9);
+    try t.expectApproxEqAbs(@as(f64, 0), r[3], 1e-9);
+    // Composition order.
+    const rot: RasterTransform = .{ .a = 0, .b = 1, .c = -1, .d = 0 }; // 90 degrees clockwise (y down)
+    const p = rot.compose(shear).apply(.{ .x = 2, .y = -4 });
+    const q = rot.apply(shear.apply(.{ .x = 2, .y = -4 }));
+    try t.expectApproxEqAbs(q.x, p.x, 1e-6);
+    try t.expectApproxEqAbs(q.y, p.y, 1e-6);
+    try t.expectApproxEqAbs(@as(f32, 1), shear.determinant(), 1e-6);
 }

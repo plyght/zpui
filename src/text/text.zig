@@ -29,6 +29,7 @@ pub const ShapedGlyph = types.ShapedGlyph;
 pub const ShapedRun = types.ShapedRun;
 pub const LineLayout = types.LineLayout;
 pub const RenderGlyphParams = types.RenderGlyphParams;
+pub const RasterTransform = types.RasterTransform;
 pub const TextRun = types.TextRun;
 pub const UnderlineStyle = types.UnderlineStyle;
 pub const StrikethroughStyle = types.StrikethroughStyle;

@@ -1490,3 +1490,130 @@ test "paintGlyphTransformed inflates the quad by 3 sigma and carries the matrix 
     try testing.expectEqual(crisp.bounds.size.width + 6 * sigma, fx.bounds.size.width);
     try testing.expectEqual(crisp.bounds.size.height + 6 * sigma, fx.bounds.size.height);
 }
+
+const RasterXfView = struct {
+    /// Paint as if the backend had no raster transforms (composite fallback).
+    no_backend_support: bool = false,
+
+    const font: @import("../text/types.zig").FontId = @enumFromInt(0);
+    const RasterTransform = @import("../text/types.zig").RasterTransform;
+    const shear = RasterTransform.fromBasis(.{ 1, 0 }, .{ 0.5, -1 });
+
+    fn paintGlyphs(self: *RasterXfView, _: Bounds, window: *Window, _: *App) void {
+        const ts = window.text_system.text_system;
+        const saved = ts.platform.vtable;
+        var unsupported = saved.*;
+        unsupported.raster_transforms = false;
+        if (self.no_backend_support) ts.platform.vtable = &unsupported;
+        defer ts.platform.vtable = saved;
+
+        window.paintGlyph(.{ .x = 10, .y = 30 }, font, 'a', px(16), color.black); // 0
+        window.paintGlyphRasterTransformed(.{ .x = 10, .y = 30 }, font, 'a', px(16), color.black, .identity); // 1
+        window.paintGlyphRasterTransformed(.{ .x = 10, .y = 30 }, font, 'a', px(16), color.black, shear); // 2
+        window.paintGlyphRasterTransformed(.{ .x = 50, .y = 30 }, font, 'a', px(16), color.black, shear); // 3
+        window.paintGlyphRasterTransformed(.{ .x = 50, .y = 30 }, font, ' ', px(16), color.black, shear); // empty: none
+        // A run along a sloped baseline: x advances map to (10, 5) per 10 px.
+        var glyphs = [_]@import("../text/types.zig").ShapedGlyph{
+            .{ .id = 'b', .position = .{ .x = 0, .y = 0 }, .index = 0, .is_emoji = false },
+            .{ .id = 'c', .position = .{ .x = 10, .y = 0 }, .index = 1, .is_emoji = false },
+        };
+        const slope = RasterTransform.fromBasis(.{ 1, 0.5 }, .{ 0, -1 });
+        window.paintTextRunRasterTransformed(.{ .x = 20, .y = 60 }, .{ .font_id = font, .glyphs = &glyphs }, px(16), slope, color.black); // 4, 5
+    }
+    pub fn render(self: *RasterXfView, _: *Window, _: *Context(RasterXfView)) elements.Div {
+        return div().size(px(100)).child(elements.canvas(self, RasterXfView.paintGlyphs).size(px(100)));
+    }
+};
+
+fn initRasterXf(_: *Window, _: *Context(RasterXfView)) RasterXfView {
+    return .{};
+}
+
+fn initRasterXfFallback(_: *Window, _: *Context(RasterXfView)) RasterXfView {
+    return .{ .no_backend_support = true };
+}
+
+/// Sprites are sorted by draw order at `finish`, not paint order: pick them by shape.
+fn spritesWhere(sprites: []const zpui_scene.MonochromeSprite, out: []zpui_scene.MonochromeSprite, width: f32, transformed: bool) []zpui_scene.MonochromeSprite {
+    var n: usize = 0;
+    for (sprites) |sp| if (sp.bounds.size.width == width and sp.transformation.eql(.unit) != transformed) {
+        out[n] = sp;
+        n += 1;
+    };
+    std.mem.sort(zpui_scene.MonochromeSprite, out[0..n], {}, struct {
+        fn lt(_: void, a: zpui_scene.MonochromeSprite, b: zpui_scene.MonochromeSprite) bool {
+            return a.bounds.origin.x < b.bounds.origin.x;
+        }
+    }.lt);
+    return out[0..n];
+}
+
+test "paintGlyphRasterTransformed rasterizes the transform (own tile, transformed bounds); identity is paintGlyph" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, RasterXfView, initRasterXf, .{});
+    const w = handle.window(app).?;
+    const s = w.scale_factor;
+    const sprites = w.rendered_frame.scene.monochrome_sprites.items;
+    try testing.expectEqual(@as(usize, 6), sprites.len);
+    var buf: [6]zpui_scene.MonochromeSprite = undefined;
+    // Identity: the same sprite as paintGlyph (8x10 fake glyph box at the same place).
+    const plain = spritesWhere(sprites, &buf, 8 * s, false);
+    try testing.expectEqual(@as(usize, 4), plain.len); // 2 upright 'a' + the 2 run glyphs (sloped baseline only shears y)
+    var upright: [2]zpui_scene.MonochromeSprite = undefined;
+    var n: usize = 0;
+    for (plain) |sp| if (sp.bounds.size.height == 10 * s) {
+        upright[n] = sp;
+        n += 1;
+    };
+    try testing.expectEqual(@as(usize, 2), n);
+    try testing.expect(std.meta.eql(upright[0].tile, upright[1].tile));
+    try testing.expect(std.meta.eql(upright[0].bounds, upright[1].bounds));
+    // Shear: a separate tile, untransformed at composite time, sized to the sheared box.
+    // Fake glyph box x [0, 8] y [-10, 0] (device px); x' = x - 0.5 y -> [0, 13].
+    var buf2: [6]zpui_scene.MonochromeSprite = undefined;
+    const sheared = spritesWhere(sprites, &buf2, 13, false);
+    try testing.expectEqual(@as(usize, 2), sheared.len);
+    try testing.expect(!std.meta.eql(sheared[0].tile, upright[0].tile));
+    try testing.expectEqual(@as(f32, 10), sheared[0].bounds.size.height);
+    try testing.expectEqual(@as(f32, 10 * s), sheared[0].bounds.origin.x);
+    try testing.expectEqual(@as(f32, 30 * s - 10), sheared[0].bounds.origin.y);
+    // Same transform elsewhere: the tile is reused.
+    try testing.expect(std.meta.eql(sheared[0].tile, sheared[1].tile));
+    try testing.expectEqual(@as(f32, 50 * s), sheared[1].bounds.origin.x);
+    // The run: y' = y + 0.5 x makes each glyph 14 tall, and the second glyph sits 10 px
+    // along and 5 px down the sloped baseline.
+    var run: [2]zpui_scene.MonochromeSprite = undefined;
+    n = 0;
+    for (plain) |sp| if (sp.bounds.size.height == 14) {
+        run[n] = sp;
+        n += 1;
+    };
+    try testing.expectEqual(@as(usize, 2), n);
+    try testing.expectEqual(@as(f32, 10 * s), run[1].bounds.origin.x - run[0].bounds.origin.x);
+    try testing.expectEqual(@as(f32, 5 * s), run[1].bounds.origin.y - run[0].bounds.origin.y);
+}
+
+test "paintGlyphRasterTransformed falls back to a composite transform when the backend lacks raster transforms" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, RasterXfView, initRasterXfFallback, .{});
+    const w = handle.window(app).?;
+    const s = w.scale_factor;
+    const sprites = w.rendered_frame.scene.monochrome_sprites.items;
+    try testing.expectEqual(@as(usize, 6), sprites.len);
+    var buf: [6]zpui_scene.MonochromeSprite = undefined;
+    const upright = spritesWhere(sprites, &buf, 8 * s, false);
+    try testing.expectEqual(@as(usize, 2), upright.len); // paintGlyph + identity
+    var buf2: [6]zpui_scene.MonochromeSprite = undefined;
+    const stretched = spritesWhere(sprites, &buf2, 8 * s, true);
+    try testing.expectEqual(@as(usize, 4), stretched.len);
+    // The upright tile at the upright place, stretched by the matrix about the baseline origin.
+    const sh = stretched[0];
+    try testing.expect(std.meta.eql(sh.tile, upright[0].tile));
+    try testing.expect(std.meta.eql(sh.bounds, upright[0].bounds));
+    try testing.expectEqual([2][2]f32{ .{ 1, -0.5 }, .{ 0, 1 } }, sh.transformation.rotation_scale); // x' = x - 0.5 y
+    const o = sh.transformation.apply(.{ .x = 10 * s, .y = 30 * s });
+    try testing.expectApproxEqAbs(@as(f32, 10 * s), o.x, 1e-4);
+    try testing.expectApproxEqAbs(@as(f32, 30 * s), o.y, 1e-4);
+}

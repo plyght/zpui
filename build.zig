@@ -37,6 +37,7 @@ pub fn build(b: *std.Build) void {
     addZeronApp(b, target, optimize, zpui, test_step);
     addListDemo(b, target, optimize, zpui);
     addPrefsDemo(b, target, optimize, zpui);
+    addGlyphTransformDemo(b, target, optimize, zpui);
     addZeronRightPane(b, target, optimize, zpui, test_step);
     addZeronPackaging(b, target);
     addZeronFiles(b, target, optimize, zpui, test_step);
@@ -1033,6 +1034,48 @@ fn addListDemo(
     run.addPassthruArgs();
     const step = b.step("list-demo", "Run the virtualized list demo (examples/list_demo.zig)");
     step.dependOn(&run.step);
+}
+
+/// `zig build glyph-transform-demo`: examples/glyph_transform_demo.zig — keycap legends on a
+/// sheared keyboard plane, composited vs raster-transformed glyphs side by side
+/// (`ZPUI_SMOKE_FRAMES=N` writes zig-out/glyph-transform-demo.png and exits). Linux, Windows
+/// (cross builds install the exe) and native macOS; cross-compiled macOS targets compile it
+/// into `mac-check` instead.
+fn addGlyphTransformDemo(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    const os = target.result.os.tag;
+    if (os != .linux and os != .macos and os != .windows) return;
+    const assets = b.modules.get("zeron_assets") orelse return;
+    const root = b.createModule(.{
+        .root_source_file = b.path("examples/glyph_transform_demo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zpui", .module = zpui },
+            .{ .name = "zeron_assets", .module = assets },
+        },
+    });
+    if (os == .macos and @import("builtin").os.tag != .macos) {
+        // No SDK to link against: object-only compile, part of `mac-check`.
+        const obj = b.addObject(.{ .name = "glyph-transform-demo-check", .root_module = root });
+        const install = b.addInstallFile(obj.getEmittedBin(), "glyph-transform-demo-check.o");
+        if (b.top_level_steps.get("mac-check")) |tls| tls.step.dependOn(&install.step);
+        return;
+    }
+    const exe = b.addExecutable(.{ .name = "glyph-transform-demo", .root_module = root });
+    if (os == .windows) exe.win32_manifest = windowsManifest(b);
+    const install = b.addInstallArtifact(exe, .{});
+    const run = b.addRunArtifact(exe);
+    run.step.dependOn(&install.step);
+    run.setCwd(b.path("."));
+    run.addPassthruArgs();
+    const step = b.step("glyph-transform-demo", "Keycap legends on a sheared plane: composited vs raster-transformed glyphs (ZPUI_SMOKE_FRAMES=N writes zig-out/glyph-transform-demo.png)");
+    // Cross-compiled Windows builds can only install the exe.
+    if (os == .windows and @import("builtin").os.tag != .windows) step.dependOn(&install.step) else step.dependOn(&run.step);
 }
 
 /// zeron right-pane Changes (diff) + Git History surfaces (apps/zeron/src/ui/changes,

@@ -124,6 +124,7 @@ pub const CoreTextSystem = struct {
         .rasterizeGlyph = vRasterizeGlyph,
         .layoutLine = vLayoutLine,
         .glyphDilationForColor = glyphDilationForColor,
+        .raster_transforms = true,
     };
 
     fn cast(ptr: *anyopaque) *CoreTextSystem {
@@ -335,13 +336,15 @@ pub const CoreTextSystem = struct {
     }
 
     /// font-kit `raster_bounds` (y-down, device pixels, rounded out) dilated by 1px
-    /// on every side to leave CoreGraphics room for antialiasing (zui).
+    /// on every side to leave CoreGraphics room for antialiasing (zui). Under a raster
+    /// transform, the bounding box of the transformed glyph box (`transformedRasterBounds`).
     fn rasterBounds(self: *CoreTextSystem, params: types.RenderGlyphParams) !geometry.Bounds(DevicePixels) {
         const sized = cf.CTFontCreateCopyWithAttributes(self.entry(params.font_id).font, params.font_size, null, null) orelse
             return error.FontCreationFailed;
         defer cf.CFRelease(sized);
         const g: cf.CGGlyph = @truncate(params.glyph_id);
         const r = cf.CTFontGetBoundingRectsForGlyphs(sized, cf.kCTFontOrientationDefault, @ptrCast(&g), null, 1);
+        if (rasterTransformed(params)) return transformedRasterBounds(params, r);
         const s: f64 = params.scale_factor;
         const x0 = @floor(r.origin.x * s);
         const y0 = @floor(-(r.origin.y + r.size.height) * s);
@@ -393,7 +396,8 @@ pub const CoreTextSystem = struct {
 
         // Origin at the bitmap's bottom-left, matching the y-down raster bounds.
         cf.CGContextTranslateCTM(ctx, @floatFromInt(-bounds.origin.x), @floatFromInt(bounds.origin.y + bounds.size.height));
-        cf.CGContextScaleCTM(ctx, params.scale_factor, params.scale_factor);
+        const transformed = rasterTransformed(params);
+        if (!transformed) cf.CGContextScaleCTM(ctx, params.scale_factor, params.scale_factor);
 
         cf.CGContextSetTextDrawingMode(ctx, cf.kCGTextFill);
         cf.CGContextSetAllowsAntialiasing(ctx, true);
@@ -418,8 +422,19 @@ pub const CoreTextSystem = struct {
         const shift_x = @as(f32, @floatFromInt(params.subpixel_variant_x)) / variants;
         const shift_y = @as(f32, @floatFromInt(params.subpixel_variant_y)) / variants;
         const g: cf.CGGlyph = @truncate(params.glyph_id);
-        const pos: cf.CGPoint = .{ .x = shift_x / params.scale_factor, .y = shift_y / params.scale_factor };
-        cf.CTFontDrawGlyphs(sized, @ptrCast(&g), @ptrCast(&pos), 1, ctx);
+        if (transformed) {
+            // Bitmap origin, then the device-space subpixel shift (so the variant still moves
+            // the glyph by a fraction of a device pixel), then the outline transform
+            // (conjugated into CoreGraphics' y-up space), then the logical -> device scale.
+            cf.CGContextTranslateCTM(ctx, shift_x, shift_y);
+            cf.CGContextConcatCTM(ctx, cgTransform(params.raster_transform));
+            cf.CGContextScaleCTM(ctx, params.scale_factor, params.scale_factor);
+            const origin: cf.CGPoint = .{ .x = 0, .y = 0 };
+            cf.CTFontDrawGlyphs(sized, @ptrCast(&g), @ptrCast(&origin), 1, ctx);
+        } else {
+            const pos: cf.CGPoint = .{ .x = shift_x / params.scale_factor, .y = shift_y / params.scale_factor };
+            cf.CTFontDrawGlyphs(sized, @ptrCast(&g), @ptrCast(&pos), 1, ctx);
+        }
 
         if (params.is_emoji) swapRgbaPremultipliedToBgraStraight(bytes);
         return bytes;
@@ -549,6 +564,66 @@ pub const CoreTextSystem = struct {
         };
     }
 };
+
+/// A non-identity `raster_transform` on a monochrome glyph (emoji always draw upright).
+fn rasterTransformed(params: types.RenderGlyphParams) bool {
+    return !params.is_emoji and !params.raster_transform.isIdentity();
+}
+
+/// `RasterTransform` (y down) as a CoreGraphics CTM (y up): conjugating by the y flip
+/// negates the off-diagonal terms.
+fn cgTransform(t: types.RasterTransform) cf.CGAffineTransform {
+    return .{ .a = t.a, .b = -t.b, .c = -t.c, .d = t.d, .tx = 0, .ty = 0 };
+}
+
+/// Raster bounds of a transformed glyph whose CoreText bounding rect (y up, logical px) is
+/// `r`: the device-pixel bounding box of the transformed rect, rounded out, plus the same
+/// 1px antialiasing margin and subpixel-shift pixel as the untransformed path. A rect's
+/// image under a linear map is a parallelogram, so this always covers the drawn outline.
+fn transformedRasterBounds(params: types.RenderGlyphParams, r: cf.CGRect) geometry.Bounds(DevicePixels) {
+    const s: f64 = params.scale_factor;
+    const box = params.raster_transform.mapRect(
+        r.origin.x * s,
+        -(r.origin.y + r.size.height) * s,
+        (r.origin.x + r.size.width) * s,
+        -r.origin.y * s,
+    );
+    const x0 = @floor(box[0]);
+    const y0 = @floor(box[1]);
+    const x1 = @ceil(box[2]);
+    const y1 = @ceil(box[3]);
+    const extra_x: DevicePixels = if (params.subpixel_variant_x > 0) 1 else 0;
+    const extra_y: DevicePixels = if (params.subpixel_variant_y > 0) 1 else 0;
+    return .{
+        .origin = .{ .x = @as(DevicePixels, @intFromFloat(x0)) - 1, .y = @as(DevicePixels, @intFromFloat(y0)) - 1 },
+        .size = .{ .width = @as(DevicePixels, @intFromFloat(x1 - x0)) + 2 + extra_x, .height = @as(DevicePixels, @intFromFloat(y1 - y0)) + 2 + extra_y },
+    };
+}
+
+test "transformed CoreText raster bounds cover the sheared glyph box" {
+    const r: cf.CGRect = .{ .origin = .{ .x = 0.5, .y = -2 }, .size = .{ .width = 8, .height = 12 } }; // y up
+    var p: types.RenderGlyphParams = .{ .font_id = @enumFromInt(0), .glyph_id = 1, .font_size = 16, .subpixel_variant_x = 0, .subpixel_variant_y = 0, .is_emoji = false, .subpixel_rendering = false, .scale_factor = 2 };
+    try std.testing.expect(!rasterTransformed(p));
+    // Up leans right by half its height (glyph top at y = -20 device px moves +10 in x).
+    p.raster_transform = types.RasterTransform.fromBasis(.{ 1, 0 }, .{ 0.5, -1 });
+    try std.testing.expect(rasterTransformed(p));
+    const b = transformedRasterBounds(p, r);
+    // Device box (y down): x [1, 17], y [-20, 4]. x' = x - 0.5 * y -> [1 - 2, 17 + 10] = [-1, 27].
+    try std.testing.expectEqual(@as(DevicePixels, -2), b.origin.x);
+    try std.testing.expectEqual(@as(DevicePixels, 28 + 2), b.size.width);
+    try std.testing.expectEqual(@as(DevicePixels, -21), b.origin.y);
+    try std.testing.expectEqual(@as(DevicePixels, 24 + 2), b.size.height);
+    // The subpixel-shifted variant keeps its extra column.
+    p.subpixel_variant_x = 2;
+    try std.testing.expectEqual(b.size.width + 1, transformedRasterBounds(p, r).size.width);
+    // Emoji never transform.
+    p.is_emoji = true;
+    try std.testing.expect(!rasterTransformed(p));
+    // y-up conjugation: glyph up (0, 1 in CG) leans right.
+    const m = cgTransform(types.RasterTransform.fromBasis(.{ 1, 0 }, .{ 0.5, -1 }));
+    try std.testing.expectEqual(@as(f64, 0.5), m.c);
+    try std.testing.expectEqual(@as(f64, 1), m.d);
+}
 
 /// zui `glyph_dilation_for_color`: CoreGraphics' smoothing thickens strokes by
 /// an amount picked from the fill luminance; 0 when the user disabled smoothing.
@@ -990,6 +1065,60 @@ test "CoreText end to end (macOS only)" {
         try std.testing.expect(alpha > 0);
     };
 }
+test "CoreText raster transforms: identity unchanged, shear widens and stays in bounds (macOS only)" {
+    if (builtin.os.tag != .macos) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const ts = try create(gpa);
+    defer destroy(ts);
+    const v = ts.vtable;
+    try std.testing.expect(v.raster_transforms);
+    const helvetica = try v.fontId(ts.ptr, .{ .family = "Helvetica" });
+    const glyph = v.glyphForChar(ts.ptr, helvetica, 'H') orelse return error.NoGlyph;
+    for ([_]u8{ 0, 1, 3 }) |variant| {
+        const plain: types.RenderGlyphParams = .{ .font_id = helvetica, .glyph_id = glyph, .font_size = 24, .subpixel_variant_x = variant, .subpixel_variant_y = 0, .is_emoji = false, .subpixel_rendering = false, .scale_factor = 2 };
+        // An explicit identity is the untransformed path, byte for byte.
+        var ident = plain;
+        ident.raster_transform = .{ .a = 1, .b = -0.0, .c = -0.0, .d = 1 };
+        const b0 = try v.glyphRasterBounds(ts.ptr, plain);
+        try std.testing.expectEqual(b0, try v.glyphRasterBounds(ts.ptr, ident));
+        const bm0 = try v.rasterizeGlyph(ts.ptr, gpa, plain, b0);
+        defer gpa.free(bm0);
+        const bm1 = try v.rasterizeGlyph(ts.ptr, gpa, ident, b0);
+        defer gpa.free(bm1);
+        try std.testing.expectEqualSlices(u8, bm0, bm1);
+
+        // Shear: up leans right by 0.6 per unit; the bitmap fits its bounds with ink inside.
+        var sheared = plain;
+        sheared.raster_transform = types.RasterTransform.fromBasis(.{ 1, 0 }, .{ 0.6, -1 });
+        const bs = try v.glyphRasterBounds(ts.ptr, sheared);
+        try std.testing.expect(bs.size.width > b0.size.width);
+        const bms = try v.rasterizeGlyph(ts.ptr, gpa, sheared, bs);
+        defer gpa.free(bms);
+        try std.testing.expectEqual(@as(usize, @intCast(bs.size.width * bs.size.height)), bms.len);
+        const w: usize = @intCast(bs.size.width);
+        const h: usize = @intCast(bs.size.height);
+        var ink: u64 = 0;
+        for (0..h) |y| for (0..w) |x| {
+            ink += bms[y * w + x];
+            // The 1px margin stays clear (nothing clipped at the tile edge).
+            if (x == 0 or y == 0 or x == w - 1 or y == h - 1) try std.testing.expect(bms[y * w + x] < 32);
+        };
+        try std.testing.expect(ink > 0);
+        // Top rows lean right of the bottom rows.
+        try std.testing.expect(inkCenterX(bms[0 .. w * (h / 3)], w) > inkCenterX(bms[w * (2 * h / 3) ..], w) + 2);
+    }
+}
+
+fn inkCenterX(rows: []const u8, w: usize) f64 {
+    var sum: f64 = 0;
+    var total: f64 = 0;
+    for (rows, 0..) |c, i| {
+        sum += @as(f64, @floatFromInt(c)) * @as(f64, @floatFromInt(i % w));
+        total += @floatFromInt(c);
+    }
+    return if (total == 0) 0 else sum / total;
+}
+
 /// CTLine width of `text` in `font` (test helper).
 fn testLineWidth(font: cf.CTFontRef, text: []const u8) !f32 {
     const astr = cf.CFAttributedStringCreateMutable(null, 0) orelse return error.OutOfMemory;

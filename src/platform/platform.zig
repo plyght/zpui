@@ -1356,5 +1356,18 @@ pub const TextSystem = struct {
         /// Font smoothing level (0..4) for a glyph fill color, carried in
         /// `RenderGlyphParams.dilation` (CoreText); null = no smoothing.
         glyphDilationForColor: ?*const fn (rgb: [3]f32) u8 = null,
+        /// True when `glyphRasterBounds` and `rasterizeGlyph` honor a non-identity
+        /// `RenderGlyphParams.raster_transform`: the outline is transformed (about the glyph's
+        /// baseline origin, y-down device space, see `text.RasterTransform`) before it is
+        /// rasterized, and the bounds cover the transformed glyph plus the backend's usual
+        /// antialiasing / subpixel-shift margin. A backend that leaves this false only ever
+        /// sees the identity; `Window.paintGlyphRasterTransformed` then falls back to a
+        /// composite-time transform of the upright raster.
+        ///
+        /// CoreText: CTM concat in the A8 context (`coretext.zig`). FreeType: `FT_Set_Transform`
+        /// with a 16.16 matrix, hinting off (`freetype.zig`). DirectWrite: the matrix as the
+        /// `DWRITE_MATRIX` of `CreateGlyphRunAnalysis` (y down, no flip; dx/dy = the subpixel
+        /// shift), bounds from that analysis' `GetAlphaTextureBounds` (`directwrite.zig`).
+        raster_transforms: bool = false,
     };
 };

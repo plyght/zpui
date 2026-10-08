@@ -51,6 +51,7 @@ const vtable: platform.TextSystem.VTable = .{
     .glyphRasterBounds = glyphRasterBounds,
     .rasterizeGlyph = rasterizeGlyph,
     .layoutLine = layoutLine,
+    .raster_transforms = true,
 };
 
 fn cast(ptr: *anyopaque) *Self {
@@ -89,9 +90,14 @@ fn advance(ptr: *anyopaque, id: types.FontId, glyph: types.GlyphId) geometry.Siz
     return .{ .width = cast(ptr).advanceUnits(id, @intCast(glyph)), .height = 0 };
 }
 
+/// Every glyph is an 8x10 device-px box on the baseline; a raster transform maps the box.
 fn glyphRasterBounds(_: *anyopaque, p: types.RenderGlyphParams) anyerror!geometry.Bounds(geometry.DevicePixels) {
     if (p.glyph_id == ' ') return .{ .origin = .zero, .size = .zero };
-    return .{ .origin = .{ .x = 0, .y = -10 }, .size = .{ .width = 8, .height = 10 } };
+    if (p.is_emoji or p.raster_transform.isIdentity()) return .{ .origin = .{ .x = 0, .y = -10 }, .size = .{ .width = 8, .height = 10 } };
+    const r = p.raster_transform.mapRect(0, -10, 8, 0);
+    const x0: i32 = @intFromFloat(@floor(r[0]));
+    const y0: i32 = @intFromFloat(@floor(r[1]));
+    return .{ .origin = .{ .x = x0, .y = y0 }, .size = .{ .width = @as(i32, @intFromFloat(@ceil(r[2]))) - x0, .height = @as(i32, @intFromFloat(@ceil(r[3]))) - y0 } };
 }
 
 fn rasterizeGlyph(_: *anyopaque, gpa: std.mem.Allocator, p: types.RenderGlyphParams, b: geometry.Bounds(geometry.DevicePixels)) anyerror![]u8 {

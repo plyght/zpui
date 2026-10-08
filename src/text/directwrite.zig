@@ -11,6 +11,7 @@
 //! so steady-state shaping allocates only the result in the caller's arena.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const types = @import("types.zig");
 const geometry = @import("../geometry.zig");
 const platform = @import("../platform/platform.zig");
@@ -161,6 +162,7 @@ pub const DirectWriteTextSystem = struct {
         .glyphRasterBounds = vtGlyphRasterBounds,
         .rasterizeGlyph = vtRasterizeGlyph,
         .layoutLine = vtLayoutLine,
+        .raster_transforms = true,
     };
 
     fn face(self: *DirectWriteTextSystem, id: FontId) *Face {
@@ -727,7 +729,7 @@ pub const DirectWriteTextSystem = struct {
     // Rasterization
     // -----------------------------------------------------------------------
 
-    fn analysis(self: *DirectWriteTextSystem, f: *dw.IDWriteFontFace, glyph: u16, em: f32, x: f32, y: f32) !*dw.IDWriteGlyphRunAnalysis {
+    fn analysis(self: *DirectWriteTextSystem, f: *dw.IDWriteFontFace, glyph: u16, em: f32, x: f32, y: f32, transform: ?*const dw.DWRITE_MATRIX) !*dw.IDWriteGlyphRunAnalysis {
         const ids = [_]u16{glyph};
         const adv = [_]f32{0};
         const run: dw.DWRITE_GLYPH_RUN = .{ .fontFace = f, .fontEmSize = em, .glyphCount = 1, .glyphIndices = &ids, .glyphAdvances = &adv };
@@ -735,7 +737,7 @@ pub const DirectWriteTextSystem = struct {
         try w.check(self.factory.vtbl.CreateGlyphRunAnalysis2(
             self.factory,
             &run,
-            null,
+            transform,
             dw.DWRITE_RENDERING_MODE_NATURAL_SYMMETRIC,
             dw.DWRITE_MEASURING_MODE_NATURAL,
             dw.DWRITE_GRID_FIT_MODE_DEFAULT,
@@ -785,7 +787,15 @@ pub const DirectWriteTextSystem = struct {
             return self.renderColor(gpa, layers, want_data);
         };
 
-        const a = try self.analysis(f, @intCast(params.glyph_id), em, x, 0);
+        // Raster transform (monochrome glyphs only; emoji always draw upright): the outline
+        // goes through the DWRITE_MATRIX (y down like `RasterTransform`, so no flip) about the
+        // baseline origin, with the device-space subpixel shift as its translation. Identity
+        // keeps the untransformed call exactly as before.
+        const a = if (rasterTransformed(params)) blk: {
+            const t = params.raster_transform;
+            const m = dwriteMatrix(t, x, @as(f32, @floatFromInt(params.subpixel_variant_y)) / @as(f32, @floatFromInt(types.subpixel_variants_y)));
+            break :blk try self.analysis(f, @intCast(params.glyph_id), em, 0, 0, &m);
+        } else try self.analysis(f, @intCast(params.glyph_id), em, x, 0, null);
         defer w.release(a);
         const rect = textureBounds(a);
         if (!want_data or rect.width() <= 0 or rect.height() <= 0) return .{ .rect = rect, .data = null };
@@ -934,6 +944,91 @@ pub const DirectWriteTextSystem = struct {
         return fromPtr(ptr).layoutLine(arena, str, font_size, runs);
     }
 };
+
+/// A non-identity `raster_transform` on a monochrome glyph (emoji always draw upright).
+fn rasterTransformed(params: types.RenderGlyphParams) bool {
+    return !params.is_emoji and !params.raster_transform.isIdentity();
+}
+
+/// `RasterTransform` as a `DWRITE_MATRIX` (both y down: x' = a x + c y, y' = b x + d y),
+/// translated by the device-pixel subpixel shift.
+fn dwriteMatrix(t: types.RasterTransform, dx: f32, dy: f32) dw.DWRITE_MATRIX {
+    return .{ .m11 = t.a, .m12 = t.b, .m21 = t.c, .m22 = t.d, .dx = dx, .dy = dy };
+}
+
+test "DirectWrite raster transform matrix" {
+    var p: types.RenderGlyphParams = .{ .font_id = @enumFromInt(0), .glyph_id = 1, .font_size = 16, .subpixel_variant_x = 0, .subpixel_variant_y = 0, .is_emoji = false, .subpixel_rendering = false, .scale_factor = 1 };
+    try std.testing.expect(!rasterTransformed(p));
+    p.raster_transform = types.RasterTransform.fromBasis(.{ 1, 0 }, .{ 0.5, -1 });
+    try std.testing.expect(rasterTransformed(p));
+    const m = dwriteMatrix(p.raster_transform, 0.25, 0);
+    // Glyph up, (0, -1) in y-down space, maps to v = (0.5, -1); glyph +x stays (1, 0).
+    try std.testing.expectEqual(@as(f32, 0.5), 0 * m.m11 + -1 * m.m21);
+    try std.testing.expectEqual(@as(f32, -1), 0 * m.m12 + -1 * m.m22);
+    try std.testing.expectEqual(@as(f32, 1), m.m11);
+    try std.testing.expectEqual(@as(f32, 0), m.m12);
+    try std.testing.expectEqual(@as(f32, 0.25), m.dx);
+    p.is_emoji = true;
+    try std.testing.expect(!rasterTransformed(p));
+}
+
+test "DirectWrite raster transforms: identity unchanged, shear leans and stays in bounds (Windows only)" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+    const gpa = std.testing.allocator;
+    const ts = try create(gpa);
+    defer destroy(ts);
+    const v = ts.vtable;
+    try std.testing.expect(v.raster_transforms);
+    const font = v.fontId(ts.ptr, .{ .family = "Segoe UI" }) catch v.fontId(ts.ptr, .{ .family = "Arial" }) catch
+        v.fontId(ts.ptr, .{ .family = "Tahoma" }) catch return error.SkipZigTest;
+    const glyph = v.glyphForChar(ts.ptr, font, 'H') orelse return error.SkipZigTest;
+    for ([_]u8{ 0, 1, 3 }) |variant| {
+        const plain: types.RenderGlyphParams = .{ .font_id = font, .glyph_id = glyph, .font_size = 24, .subpixel_variant_x = variant, .subpixel_variant_y = 0, .is_emoji = false, .subpixel_rendering = false, .scale_factor = 2 };
+        // An explicit identity (signed zeros) is the untransformed path, byte for byte.
+        var ident = plain;
+        ident.raster_transform = .{ .a = 1, .b = -0.0, .c = -0.0, .d = 1 };
+        const b0 = try v.glyphRasterBounds(ts.ptr, plain);
+        try std.testing.expectEqual(b0, try v.glyphRasterBounds(ts.ptr, ident));
+        const bm0 = try v.rasterizeGlyph(ts.ptr, gpa, plain, b0);
+        defer gpa.free(bm0);
+        const bm1 = try v.rasterizeGlyph(ts.ptr, gpa, ident, b0);
+        defer gpa.free(bm1);
+        try std.testing.expectEqualSlices(u8, bm0, bm1);
+
+        // Shear: up leans right by 0.6 per unit; wider bounds, ink inside, top right of bottom.
+        var sheared = plain;
+        sheared.raster_transform = types.RasterTransform.fromBasis(.{ 1, 0 }, .{ 0.6, -1 });
+        const bs = try v.glyphRasterBounds(ts.ptr, sheared);
+        try std.testing.expect(bs.size.width > b0.size.width);
+        try std.testing.expect(@abs(bs.size.height - b0.size.height) <= 2);
+        const bms = try v.rasterizeGlyph(ts.ptr, gpa, sheared, bs);
+        defer gpa.free(bms);
+        const bw: usize = @intCast(bs.size.width);
+        const bh: usize = @intCast(bs.size.height);
+        try std.testing.expectEqual(bw * bh, bms.len);
+        var ink: u64 = 0;
+        for (bms) |c| ink += c;
+        try std.testing.expect(ink > 0);
+        try std.testing.expect(testInkCenterX(bms[0 .. bw * (bh / 3)], bw) > testInkCenterX(bms[bw * (2 * bh / 3) ..], bw) + 2);
+
+        // Quarter turn clockwise: width and height swap (within the AA / subpixel margin).
+        var turned = plain;
+        turned.raster_transform = .{ .a = 0, .b = 1, .c = -1, .d = 0 };
+        const bt = try v.glyphRasterBounds(ts.ptr, turned);
+        try std.testing.expect(@abs(bt.size.width - b0.size.height) <= 2);
+        try std.testing.expect(@abs(bt.size.height - b0.size.width) <= 2);
+    }
+}
+
+fn testInkCenterX(rows: []const u8, width: usize) f64 {
+    var sum: f64 = 0;
+    var total: f64 = 0;
+    for (rows, 0..) |c, i| {
+        sum += @as(f64, @floatFromInt(c)) * @as(f64, @floatFromInt(i % width));
+        total += @floatFromInt(c);
+    }
+    return if (total == 0) 0 else sum / total;
+}
 
 /// Minimal SFNT reader for fonts registered from memory: face count (TTC), family names
 /// (name IDs 1 and 16, Windows/Unicode platforms), OS/2 weight and the italic bit.
