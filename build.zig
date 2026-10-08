@@ -467,6 +467,7 @@ fn addOverlayDemo(
     run.addPassthruArgs();
     const step = b.step("overlay-demo", "Run the desktop overlay demo (ZPUI_SMOKE_FRAMES=N for the smoke test)");
     step.dependOn(&run.step);
+    b.step("overlay-demo-build", "Build only the overlay demo to zig-out/bin/overlay-demo").dependOn(&b.addInstallArtifact(demo, .{}).step);
 }
 
 /// zeron syntax highlighting (apps/zeron/src/syntax): the vendored tree-sitter
