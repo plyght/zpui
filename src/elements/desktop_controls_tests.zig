@@ -234,3 +234,81 @@ test "drawn controls join the accessibility tree with their roles" {
     for ([_]a11y.Role{ .@"switch", .check_box, .slider, .radio_button, .combo_box, .spin_button }) |r|
         try testing.expect(seen.contains(r));
 }
+
+const prefs = @import("prefs.zig");
+
+const PrefsView = struct {
+    family: prefs.Family = .adwaita,
+    on: bool = true,
+    selected: ?u32 = null,
+    adds: u32 = 0,
+    removed: ?u32 = null,
+
+    const apps = [_]prefs.ListItem{ .{ .title = "Files" }, .{ .title = "Terminal", .subtitle = "org.gnome.Terminal" } };
+
+    pub fn render(self: *PrefsView, window: *Window, cx: *Context(PrefsView)) elements.Div {
+        const look = dc.theme.look(self.family, false, null);
+        return div().w(px(500)).h(px(900)).flex().flexCol()
+            .child(prefs.headerBar(window, look, "Preferences"))
+            .child(prefs.page(window, look, &.{
+            .{ .title = "General", .description = "Behavior", .rows = &.{
+                prefs.row("Enabled", "Turn it on", nc.nativeSwitch("en", .{ .on = self.on, .label = "Enabled" }, null, null)),
+                prefs.row("Plain", "", null),
+            } },
+            .{ .title = "Apps", .content = prefs.editableList(look, "apps", .{ .items = &apps, .selected = self.selected, .label = "Apps" }, cx.listener(PrefsView.onList)) },
+        }));
+    }
+
+    fn onList(self: *PrefsView, ev: *const prefs.ListEvent, _: *Window, cx: *Context(PrefsView)) void {
+        switch (ev.*) {
+            .select => |i| self.selected = i,
+            .add => self.adds += 1,
+            .remove => |i| self.removed = i,
+        }
+        cx.notify();
+    }
+};
+
+test "preference pages render for every family and the app list reports its events" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const tall: window_mod.WindowOptions = .{ .bounds = .{ .origin = .zero, .size = .{ .width = 500, .height = 900 } } };
+    const handle = try app.openWindow(tall, PrefsView, struct {
+        fn f(_: *Window, _: *Context(PrefsView)) PrefsView {
+            return .{};
+        }
+    }.f, .{});
+    const w = handle.window(app).?;
+    w.setDesktopTheme(.{ .style = .adwaita });
+    w.setDesktopControls(true);
+    w.setA11yActive(true);
+    for ([_]prefs.Family{ .macos, .breeze, .adwaita }) |fam| {
+        var l = handle.rootView(app).?.lease(app);
+        l.value.family = fam;
+        l.cx.notify();
+        l.end();
+        w.drawAndPresent();
+    }
+    // The list's buttons are found through the accessibility tree.
+    const tree = w.a11yTree();
+    var add_center: ?geometry.Point(f32) = null;
+    var remove_center: ?geometry.Point(f32) = null;
+    for (tree.nodes.items) |n| {
+        if (n.role != .button) continue;
+        const name = tree.name(&n) orelse continue;
+        const c: geometry.Point(f32) = .{ .x = n.bounds.origin.x + n.bounds.size.width / 2, .y = n.bounds.origin.y + n.bounds.size.height / 2 };
+        if (std.mem.eql(u8, name, "Add Application…")) add_center = c;
+        if (std.mem.eql(u8, name, "Remove") and remove_center == null) remove_center = c;
+    }
+    const tw = TestWindow.of(w.platform_window);
+    const add = add_center orelse return error.NoAddButton;
+    tw.click(add.x, add.y);
+    app.runUntilParked();
+    const rm = remove_center orelse return error.NoRemoveButton;
+    tw.click(rm.x, rm.y);
+    app.runUntilParked();
+    var l = handle.rootView(app).?.lease(app);
+    defer l.end();
+    try testing.expectEqual(@as(u32, 1), l.value.adds);
+    try testing.expectEqual(@as(?u32, 0), l.value.removed);
+}

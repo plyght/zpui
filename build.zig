@@ -35,6 +35,7 @@ pub fn build(b: *std.Build) void {
     addZeronTranscriptUi(b, target, optimize, zpui, test_step);
     addZeronApp(b, target, optimize, zpui, test_step);
     addListDemo(b, target, optimize, zpui);
+    addPrefsDemo(b, target, optimize, zpui);
     addZeronRightPane(b, target, optimize, zpui, test_step);
     addZeronPackaging(b, target);
     addZeronFiles(b, target, optimize, zpui, test_step);
@@ -884,6 +885,37 @@ fn addZeronApp(
     tests.setCwd(b.path("."));
     test_step.dependOn(&tests.step);
     b.step("zeron-app-test", "Run the zeron shell/sidebar tests").dependOn(&tests.step);
+}
+
+/// `zig build prefs-demo`: examples/prefs_demo.zig — a preferences window with every
+/// native-control kind and an editable app list in the desktop's look (libadwaita /
+/// Breeze drawn controls on Linux, AppKit on macOS). `ZPUI_SMOKE_FRAMES=N` renders N
+/// frames, captures zig-out/prefs-demo.png and exits.
+fn addPrefsDemo(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    zpui: *std.Build.Module,
+) void {
+    const os = target.result.os.tag;
+    if (os != .linux and !(os == .macos and @import("builtin").os.tag == .macos)) return;
+    const exe = b.addExecutable(.{
+        .name = "prefs-demo",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/prefs_demo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zpui", .module = zpui }},
+        }),
+    });
+    const install = b.addInstallArtifact(exe, .{});
+    b.getInstallStep().dependOn(&install.step);
+    const run = b.addRunArtifact(exe);
+    run.setCwd(b.path("."));
+    run.step.dependOn(&install.step);
+    run.addPassthruArgs();
+    const step = b.step("prefs-demo", "Run the preferences window demo (examples/prefs_demo.zig; ZPUI_SMOKE_FRAMES=N captures zig-out/prefs-demo.png)");
+    step.dependOn(&run.step);
 }
 
 /// `zig build list-demo`: examples/list_demo.zig — virtualized chat list (10k rows),

@@ -153,6 +153,12 @@ pub const PopoverAnchor = elements.native_popover.Anchor;
 pub const popoverContent = elements.popoverContent;
 pub const nativeStepper = elements.native_control.nativeStepper;
 pub const nativeControlsAvailable = elements.native_control.nativeControlsAvailable;
+/// Drawn libadwaita / Breeze controls for `native*` elements where the platform has none
+/// (opt-in: `Window.setDesktopControls`; src/elements/desktop_controls.zig) and the
+/// per-desktop preference-page blocks (src/elements/prefs.zig).
+pub const desktop_controls = elements.desktop_controls;
+pub const desktop_theme = elements.desktop_theme;
+pub const prefs = elements.prefs;
 pub const NativeControlEvent = elements.native_control.Event;
 pub const NativeViewId = platform.NativeViewId;
 /// Native context menus (macOS NSMenu; false elsewhere so callers draw their own;
