@@ -130,7 +130,7 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, files_now: f3
     // back to the sidebar seam (the strip brings its own 8px pad).
     const takeover = shell.right_expanded and right_now > 0.5;
     const liquid = theme.isLiquid(); // [liquid-glass] Tahoe capsules around item groups
-    glass_tint = theme.glassTint();
+    glass_tint = leadCapsuleTint(theme);
     const row_left = if (takeover)
         @max(sidebar_now - 8, contentStart() - layout.titlebar_identity_gap + plus_inset - 14)
     else
@@ -241,15 +241,17 @@ fn addActionPill(theme: *const Theme) zpui.Div {
 // `capsule_spacing` — e.g. while the sidebar collapses — melt into each other). The
 // group's content is the capsule's foreground, painted above the glass.
 
-/// Capsule height (the 38px band, centred on the controls' y = 21).
-pub const capsule_h: f32 = 30;
+/// Capsule height (the 38px band, centred on the controls' y = 21); the same as the
+/// leading island so every titlebar group reads as one family.
+pub const capsule_h: f32 = lead_capsule_h;
 /// Horizontal padding around 24px icon buttons / around the title.
 pub const capsule_pad: f32 = 3;
 const title_pad: f32 = 10;
 /// `NSGlassEffectContainerView.spacing` of the titlebar group.
 pub const capsule_spacing: f32 = 6;
-/// Glass corner radius for titlebar groups: zeron's own control radius, not pills.
-const glass_radius: f32 = layout.chrome_control_radius;
+/// Glass corner radius for titlebar groups: the leading island's (user preference:
+/// title and right-hand groups match the island's rounding and fill).
+const glass_radius: f32 = lead_capsule_radius;
 /// Theme tint for the titlebar glass groups, refreshed each render.
 var glass_tint: ?zpui.Hsla = null;
 /// Extra room between the leading island and the title capsule (sidebar collapsed),
@@ -285,7 +287,7 @@ fn liquidActionPill(theme: *const Theme) zpui.AnyElement {
 /// as well as the toggle / back / forward (/ +) controls, runs to the cluster's 10px
 /// trailing pad, is 32px high centred on the controls (y 5..37) and has radius 12,
 /// filled with `glass_overlay` (dark grey in dark themes). Here the island is native
-/// glass tinted with that fill. The title / right-hand groups keep the 6px radius.
+/// glass tinted with that fill. The title / right-hand groups share its height, radius and fill.
 pub const lead_capsule_left: f32 = 6;
 pub const lead_capsule_h: f32 = 32;
 pub const lead_capsule_radius: f32 = 12;

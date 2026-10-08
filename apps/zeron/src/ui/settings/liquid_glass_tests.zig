@@ -291,8 +291,8 @@ test "Liquid Glass: with the sidebar collapsed, one island wraps the traffic lig
     const tw = h.tw();
     var buf: [32]PlacedGlass = undefined;
 
-    // Sidebar expanded: the controls sit bare on the sidebar pane (no island).
-    for (titlebarGlass(tw, &buf)) |g| try testing.expect(g.radius != titlebar_mod.lead_capsule_radius);
+    // Sidebar expanded: the controls sit bare on the sidebar pane (no island at x = 6).
+    for (titlebarGlass(tw, &buf)) |g| try testing.expect(g.bounds.origin.x != titlebar_mod.lead_capsule_left);
 
     h.app.globalMut(prefs_mod.Prefs).sidebar_collapsed = true;
     h.window().refresh();
@@ -301,11 +301,12 @@ test "Liquid Glass: with the sidebar collapsed, one island wraps the traffic lig
     const has_chat = h.state.read(h.app).workspace.read(h.app).selected_chat != null;
     const placed = titlebarGlass(tw, &buf);
     var island: ?PlacedGlass = null;
-    for (placed) |g| if (g.radius == titlebar_mod.lead_capsule_radius) {
+    for (placed) |g| if (g.bounds.origin.x == titlebar_mod.lead_capsule_left) {
         try testing.expect(island == null); // exactly one
         island = g;
     };
     const lead = island orelse return error.NoLeadingIsland;
+    try testing.expectEqual(titlebar_mod.lead_capsule_radius, lead.radius);
     // zeron's titlebar island: from x = 6 (left of the traffic lights at 14,14), 32
     // high centred on the controls (y 5..37, offset here by the phase fade-in's slide,
     // like every capsule), to the cluster's trailing pad.
@@ -319,12 +320,15 @@ test "Liquid Glass: with the sidebar collapsed, one island wraps the traffic lig
     try testing.expectApproxEqAbs(want.a, tint[3], 0.001);
     try testing.expect(tint[0] < 0.2 and tint[1] < 0.2 and tint[2] < 0.2);
 
-    // The other groups keep zeron's 6px control radius and stay clear of the island
-    // (farther than the container's merge spacing).
+    // The title and right-hand groups match the island (radius, height, fill) and
+    // stay clear of it (farther than the container's merge spacing).
     var others: usize = 0;
-    for (placed) |g| if (g.radius != titlebar_mod.lead_capsule_radius) {
+    for (placed) |g| if (g.bounds.origin.x != titlebar_mod.lead_capsule_left) {
         others += 1;
-        try testing.expectEqual(zt.layout.chrome_control_radius, g.radius);
+        try testing.expectEqual(titlebar_mod.lead_capsule_radius, g.radius);
+        try testing.expectEqual(lead.bounds.size.height, g.bounds.size.height);
+        const gt = g.tint orelse return error.NoTint;
+        try testing.expectApproxEqAbs(tint[3], gt[3], 0.001);
         // Same vertical centre (the controls' y = 21).
         try testing.expectEqual(g.bounds.origin.y + g.bounds.size.height / 2, lead.bounds.origin.y + lead.bounds.size.height / 2);
         try testing.expect(g.bounds.origin.x >= lead.bounds.origin.x + lead.bounds.size.width + titlebar_mod.capsule_spacing);

@@ -46,7 +46,8 @@ const FontEntry = struct {
 };
 
 /// CSS-ish font properties of a face, for best-match selection.
-const Props = struct { weight: f32, style: types.FontStyle };
+/// `width`: CoreText width trait (-1 condensed .. 0 normal .. 1 expanded).
+const Props = struct { weight: f32, style: types.FontStyle, width: f32 = 0 };
 
 /// Create the CoreText backend (see `text.createPlatformTextSystem`).
 pub fn create(gpa: Allocator) !platform.TextSystem {
@@ -168,7 +169,9 @@ pub const CoreTextSystem = struct {
         };
         if (candidates.len == 0) return error.FontNotFound;
 
-        var props_buf: [64]Props = undefined;
+        // Large variable families (SF Pro: weights x widths x optical sizes) have many
+        // named instances; keep them all so the normal-width faces are considered.
+        var props_buf: [512]Props = undefined;
         const n = @min(candidates.len, props_buf.len);
         for (candidates[0..n], props_buf[0..n]) |cid, *p| p.* = faceProps(self.entry(cid).font);
         const ix = bestMatch(props_buf[0..n], .{ .weight = font.weight, .style = font.style });
@@ -606,7 +609,7 @@ fn nativeKey(font: cf.CTFontRef, buf: []u8) []const u8 {
     defer cf.CFRelease(ps_name);
     const ps = cf.stringToUtf8(ps_name, &ps_buf);
     const p = faceProps(font);
-    return std.fmt.bufPrint(buf, "{s}|{d:.0}|{d}", .{ ps, p.weight, @backingInt(p.style) }) catch ps;
+    return std.fmt.bufPrint(buf, "{s}|{d:.0}|{d}|{d:.2}", .{ ps, p.weight, @backingInt(p.style), p.width }) catch ps;
 }
 
 /// Weight (CSS) and style of a face from its CoreText traits.
@@ -615,9 +618,10 @@ fn faceProps(font: cf.CTFontRef) Props {
     defer cf.CFRelease(traits);
     const ct_weight = cf.numberValue(cf.CFDictionaryGetValue(traits, cf.kCTFontWeightTrait)) orelse 0;
     const slant = cf.numberValue(cf.CFDictionaryGetValue(traits, cf.kCTFontSlantTrait)) orelse 0;
+    const width = cf.numberValue(cf.CFDictionaryGetValue(traits, cf.kCTFontWidthTrait)) orelse 0;
     const symbolic = cf.CTFontGetSymbolicTraits(font);
     const style: types.FontStyle = if (symbolic & cf.kCTFontItalicTrait != 0) .italic else if (@abs(slant) > 0.01) .oblique else .normal;
-    return .{ .weight = coreTextWeightToCss(@floatCast(ct_weight)), .style = style };
+    return .{ .weight = coreTextWeightToCss(@floatCast(ct_weight)), .style = style, .width = @floatCast(width) };
 }
 
 /// font-kit's piecewise-linear map between CoreText weights (-1..1) and CSS weights (0..1000).
@@ -637,9 +641,40 @@ fn cssWeightToCoreText(css: f32) f32 {
     return ct_weights[i] + (ct_weights[i + 1] - ct_weights[i]) * (x - @as(f32, @floatFromInt(i)));
 }
 
-/// CSS Fonts 3 §5.2 matching (font-kit `find_best_match`): narrow by style
-/// preference, then pick the weight by the CSS rules.
+/// CSS Fonts 3 §5.2 matching (font-kit `find_best_match`): narrow by stretch (width),
+/// then by style preference, then pick the weight by the CSS rules. Without the width
+/// step a variable family like SF Pro could resolve to an Expanded/Condensed instance.
 fn bestMatch(cands: []const Props, want: Props) usize {
+    const width = closestWidth(cands, want.width);
+    var narrowed_buf: [512]Props = undefined;
+    var index_buf: [512]usize = undefined;
+    var n: usize = 0;
+    for (cands, 0..) |c, i| if (@abs(c.width - width) < 0.001) {
+        narrowed_buf[n] = c;
+        index_buf[n] = i;
+        n += 1;
+    };
+    return index_buf[bestMatchSameWidth(narrowed_buf[0..n], want)];
+}
+
+/// CSS stretch search: the desired width if present; for normal or narrower requests
+/// the closest narrower width, then the closest wider one (the reverse for wider).
+fn closestWidth(cands: []const Props, desired: f32) f32 {
+    var exact = false;
+    var narrower: ?f32 = null;
+    var wider: ?f32 = null;
+    for (cands) |c| {
+        const w = c.width;
+        if (@abs(w - desired) < 0.001) exact = true else if (w < desired) {
+            if (narrower == null or w > narrower.?) narrower = w;
+        } else if (wider == null or w < wider.?) wider = w;
+    }
+    if (exact) return desired;
+    if (desired <= 0) return narrower orelse wider orelse cands[0].width;
+    return wider orelse narrower orelse cands[0].width;
+}
+
+fn bestMatchSameWidth(cands: []const Props, want: Props) usize {
     const order: [3]types.FontStyle = switch (want.style) {
         .italic => .{ .italic, .oblique, .normal },
         .oblique => .{ .oblique, .italic, .normal },
@@ -800,6 +835,19 @@ test "best match prefers style then CSS weight order" {
     try std.testing.expectEqual(@as(usize, 1), bestMatch(&cands, .{ .weight = 700, .style = .normal }));
     try std.testing.expectEqual(@as(usize, 2), bestMatch(&cands, .{ .weight = 700, .style = .italic }));
     try std.testing.expectEqual(@as(usize, 0), bestMatch(&cands, .{ .weight = 500, .style = .normal }));
+}
+
+test "best match prefers the normal width of a variable family (SF Pro Expanded/Condensed)" {
+    const cands = [_]Props{
+        .{ .weight = 400, .style = .normal, .width = 0.4 }, // Expanded Regular
+        .{ .weight = 400, .style = .normal, .width = -0.2 }, // Condensed Regular
+        .{ .weight = 700, .style = .normal, .width = 0 }, // Bold
+        .{ .weight = 400, .style = .normal, .width = 0 }, // Regular
+    };
+    try std.testing.expectEqual(@as(usize, 3), bestMatch(&cands, .{ .weight = 400, .style = .normal }));
+    try std.testing.expectEqual(@as(usize, 2), bestMatch(&cands, .{ .weight = 700, .style = .normal }));
+    // No normal width: the closest narrower width wins over a wider one.
+    try std.testing.expectEqual(@as(usize, 1), bestMatch(cands[0..2], .{ .weight = 400, .style = .normal }));
     try std.testing.expectEqual(@as(usize, 3), bestMatch(&cands, .{ .weight = 200, .style = .normal }));
 }
 

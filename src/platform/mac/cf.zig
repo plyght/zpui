@@ -196,6 +196,7 @@ pub extern "c" const kCTFontFamilyNameAttribute: CFStringRef;
 pub extern "c" const kCTFontTraitsAttribute: CFStringRef;
 pub extern "c" const kCTFontWeightTrait: CFStringRef;
 pub extern "c" const kCTFontSlantTrait: CFStringRef;
+pub extern "c" const kCTFontWidthTrait: CFStringRef;
 pub extern "c" const kCTFontSymbolicTrait: CFStringRef;
 pub extern "c" const kCTFontFeatureSettingsAttribute: CFStringRef;
 pub extern "c" const kCTFontCascadeListAttribute: CFStringRef;
