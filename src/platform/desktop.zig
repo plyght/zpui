@@ -34,6 +34,37 @@ pub fn anchoredOrigin(anchor: pf.OverlayAnchor, visible: Bounds, size: Size) Poi
     };
 }
 
+/// `anchoredOrigin` for y-up spaces (AppKit screen coordinates): `visible.origin` is the
+/// bottom-left corner of the work area; returns the window's bottom-left origin.
+pub fn anchoredOriginYUp(anchor: pf.OverlayAnchor, visible: Bounds, size: Size) Point {
+    const flipped: Bounds = .{ .origin = .{ .x = visible.origin.x, .y = -(visible.origin.y + visible.size.height) }, .size = visible.size };
+    const o = anchoredOrigin(anchor, flipped, size);
+    return .{ .x = o.x, .y = -o.y - size.height };
+}
+
+/// Size of an aspect-locked overlay resized by dragging the corner opposite its anchor:
+/// `start` is the size at drag start, `delta` the pointer movement since then (screen
+/// px, y down). Growth away from the anchor corner enlarges the window; the larger of
+/// the two axis scales wins so the handle tracks the pointer; clamped to `min`..`max`
+/// width.
+pub fn aspectResize(corner: pf.OverlayCorner, start: Size, delta: Point, min_width: f32, max_width: f32) Size {
+    // Pointer moving right grows windows anchored on the left, and vice versa.
+    const dx = switch (corner) {
+        .top_left, .bottom_left => delta.x,
+        .top_right, .bottom_right => -delta.x,
+    };
+    const dy = switch (corner) {
+        .top_left, .top_right => delta.y,
+        .bottom_left, .bottom_right => -delta.y,
+    };
+    const aspect = if (start.height > 0) start.width / start.height else 1;
+    const sx = (start.width + dx) / @max(start.width, 1);
+    const sy = (start.height + dy) / @max(start.height, 1);
+    const s = if (@abs(sx - 1) > @abs(sy - 1)) sx else sy;
+    const w = std.math.clamp(start.width * s, min_width, max_width);
+    return .{ .width = @round(w), .height = @round(w / aspect) };
+}
+
 /// wlr-layer-shell anchor bits (top 1, bottom 2, left 4, right 8) and margins
 /// (top, right, bottom, left) for an overlay anchor.
 pub const LayerPlacement = struct { anchor: u32, margin: [4]i32 };
@@ -176,6 +207,109 @@ pub fn counterPollInterval(since_activity_ns: u64) u64 {
     if (since_activity_ns < 6 * std.time.ns_per_s) return std.time.ns_per_s / 20;
     return std.time.ns_per_s / 4;
 }
+
+/// Counter → events logic of a permissionless key monitor (macOS
+/// `CGEventSourceCounterForEventType`): each poll reads the system key-down counter;
+/// the increase since the previous poll becomes that many `key_down` events (capped per
+/// poll). Keys identified by a `KeySampler` keep their class and position; the rest are
+/// `.other` with `key_x` alternating left / right with a little jitter (so a pet's paws
+/// alternate), each followed by a `key_up` on the next poll.
+pub const CounterDecoder = struct {
+    /// Most key-downs reported per poll (a counter jump after sleep is not a burst).
+    pub const max_burst = 32;
+
+    count: u32 = 0,
+    primed: bool = false,
+    left: bool = false,
+    owed_ups: u32 = 0,
+
+    /// Start counting from `counter` (no events for what happened before).
+    pub fn reset(d: *CounterDecoder, counter: u32) void {
+        d.* = .{ .count = counter, .primed = true };
+    }
+
+    /// One poll. `known` are the keys a sampler saw go down since the previous poll
+    /// (possibly none). Returns the number of key-downs pushed.
+    pub fn poll(d: *CounterDecoder, q: *InputQueue, counter: u32, known: []const KeyInfo, now_ns: u64) u32 {
+        while (d.owed_ups > 0) : (d.owed_ups -= 1) q.push(.{ .kind = .key_up, .timestamp_ns = now_ns });
+        if (!d.primed) {
+            d.reset(counter);
+            return 0;
+        }
+        const delta = counter -% d.count;
+        d.count = counter;
+        // A wrapped / reset counter reads as a huge delta: treat as noise.
+        if (delta > 1 << 20) return 0;
+        const n: u32 = @min(delta, max_burst);
+        var i: u32 = 0;
+        while (i < n) : (i += 1) {
+            if (i < known.len) {
+                q.push(.{ .kind = .key_down, .key = known[i].class, .key_x = known[i].x, .timestamp_ns = now_ns });
+            } else {
+                d.left = !d.left;
+                // Deterministic jitter 0..0.15 from the counter value.
+                const h = (counter +% i) *% 2654435761;
+                const jitter: f32 = @as(f32, @floatFromInt((h >> 28) & 15)) / 100.0;
+                q.push(.{ .kind = .key_down, .key = .other, .key_x = if (d.left) 0.3 - jitter else 0.7 + jitter, .timestamp_ns = now_ns });
+                d.owed_ups += 1;
+            }
+        }
+        return n;
+    }
+};
+
+/// Tracks sampled key states (macOS `CGEventSourceKeyState`, which may or may not
+/// report real states without Input Monitoring) and probes whether sampling works: it
+/// is `.works` once any sampled key reads as pressed, and gives up (`.broken`, sampling
+/// stops) after `probe_polls` polls that counted key-downs without one sampled key
+/// pressed.
+pub const KeySampler = struct {
+    pub const probe_polls = 12;
+    pub const Probe = enum { unknown, works, broken };
+
+    probe: Probe = .unknown,
+    misses: u8 = 0,
+    down: [128]bool = @splat(false),
+    new_down: [8]KeyInfo = undefined,
+    new_len: usize = 0,
+    any_down: bool = false,
+
+    /// Whether the next poll should read key states (`counted` = key-downs this poll).
+    pub fn shouldSample(s: *const KeySampler, counted: bool) bool {
+        return s.probe != .broken and (counted or s.any_down);
+    }
+
+    pub fn begin(s: *KeySampler) void {
+        s.new_len = 0;
+        s.any_down = false;
+    }
+
+    /// One sampled key (macOS virtual keycode < 128). Releases are pushed to `q`.
+    pub fn observe(s: *KeySampler, q: *InputQueue, vk: u16, pressed: bool, now_ns: u64) void {
+        if (vk >= s.down.len) return;
+        if (pressed) {
+            s.any_down = true;
+            s.probe = .works;
+            if (!s.down[vk] and s.new_len < s.new_down.len) {
+                s.new_down[s.new_len] = macKey(vk);
+                s.new_len += 1;
+            }
+        } else if (s.down[vk]) {
+            const info = macKey(vk);
+            q.push(.{ .kind = .key_up, .key = info.class, .key_x = info.x, .timestamp_ns = now_ns });
+        }
+        s.down[vk] = pressed;
+    }
+
+    /// End of a poll that counted `counted` key-downs: updates the probe.
+    pub fn end(s: *KeySampler, counted: u32) []const KeyInfo {
+        if (s.probe == .unknown and counted > 0 and !s.any_down) {
+            s.misses += 1;
+            if (s.misses >= probe_polls) s.probe = .broken;
+        }
+        return s.new_down[0..s.new_len];
+    }
+};
 
 // ---------------------------------------------------------------------------------------
 // Launch at login files
@@ -388,4 +522,109 @@ test "launch agent plist" {
     try testing.expect(std.mem.indexOf(u8, s, "<string>com.x.typebud</string>") != null);
     try testing.expect(std.mem.indexOf(u8, s, "<string>/Applications/A&amp;B.app/Contents/MacOS/t</string>") != null);
     try testing.expect(std.mem.indexOf(u8, s, "<key>RunAtLoad</key>\n  <true/>") != null);
+}
+
+test "anchoredOriginYUp mirrors anchoredOrigin in AppKit coordinates" {
+    // A 1440x900 screen with a 25 pt menu bar and the Dock (70 pt) at the bottom.
+    const vis: Bounds = .{ .origin = .{ .x = 0, .y = 70 }, .size = .{ .width = 1440, .height = 805 } };
+    const size: Size = .{ .width = 160, .height = 120 };
+    const m: Point = .{ .x = 16, .y = 12 };
+    try testing.expectEqual(Point{ .x = 1264, .y = 82 }, anchoredOriginYUp(.{ .corner = .bottom_right, .margin = m }, vis, size));
+    try testing.expectEqual(Point{ .x = 16, .y = 82 }, anchoredOriginYUp(.{ .corner = .bottom_left, .margin = m }, vis, size));
+    try testing.expectEqual(Point{ .x = 16, .y = 743 }, anchoredOriginYUp(.{ .corner = .top_left, .margin = m }, vis, size));
+}
+
+test "anchored resize keeps the anchor corner fixed" {
+    const vis: Bounds = .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = 1000, .height = 800 } };
+    const a: pf.OverlayAnchor = .{ .corner = .bottom_right, .margin = .{ .x = 10, .y = 20 } };
+    for ([_]Size{ .{ .width = 100, .height = 80 }, .{ .width = 250, .height = 200 }, .{ .width = 37, .height = 29 } }) |sz| {
+        const o = anchoredOrigin(a, vis, sz);
+        try testing.expectEqual(@as(f32, 990), o.x + sz.width);
+        try testing.expectEqual(@as(f32, 780), o.y + sz.height);
+        const u = anchoredOriginYUp(a, vis, sz);
+        try testing.expectEqual(@as(f32, 990), u.x + sz.width);
+        try testing.expectEqual(@as(f32, 20), u.y);
+    }
+}
+
+test "aspectResize grows away from the anchor, keeps the aspect, clamps" {
+    const start: Size = .{ .width = 160, .height = 120 };
+    // Bottom-right anchor: dragging the top-left handle up-left grows.
+    const g = aspectResize(.bottom_right, start, .{ .x = -40, .y = -10 }, 64, 512);
+    try testing.expectEqual(Size{ .width = 200, .height = 150 }, g);
+    const s = aspectResize(.bottom_right, start, .{ .x = 80, .y = 0 }, 64, 512);
+    try testing.expectEqual(Size{ .width = 80, .height = 60 }, s);
+    // Top-left anchor: the handle is bottom-right; moving right/down grows.
+    try testing.expectEqual(Size{ .width = 240, .height = 180 }, aspectResize(.top_left, start, .{ .x = 0, .y = 60 }, 64, 512));
+    try testing.expectEqual(@as(f32, 64), aspectResize(.top_left, start, .{ .x = -500, .y = 0 }, 64, 512).width);
+    try testing.expectEqual(@as(f32, 512), aspectResize(.top_left, start, .{ .x = 5000, .y = 0 }, 64, 512).width);
+}
+
+test "CounterDecoder turns counter deltas into alternating key events" {
+    var q: InputQueue = .{};
+    var d: CounterDecoder = .{};
+    try testing.expectEqual(@as(u32, 0), d.poll(&q, 1000, &.{}, 1)); // primes, no events
+    try testing.expect(q.pop() == null);
+    try testing.expectEqual(@as(u32, 0), d.poll(&q, 1000, &.{}, 2));
+    try testing.expectEqual(@as(u32, 3), d.poll(&q, 1003, &.{}, 3));
+    var xs: [3]f32 = undefined;
+    for (&xs) |*x| {
+        const e = q.pop().?;
+        try testing.expectEqual(pf.GlobalInputKind.key_down, e.kind);
+        try testing.expectEqual(pf.GlobalKeyClass.other, e.key);
+        try testing.expectEqual(@as(u64, 3), e.timestamp_ns);
+        x.* = e.key_x;
+    }
+    // Paws alternate: left, right, left.
+    try testing.expect(xs[0] < 0.5 and xs[1] > 0.5 and xs[2] < 0.5);
+    try testing.expect(xs[0] >= 0.15 and xs[1] <= 0.85);
+    // The next poll owes their releases.
+    _ = d.poll(&q, 1003, &.{}, 4);
+    var ups: usize = 0;
+    while (q.pop()) |e| : (ups += 1) try testing.expectEqual(pf.GlobalInputKind.key_up, e.kind);
+    try testing.expectEqual(@as(usize, 3), ups);
+    // Sampled keys keep their identity (and owe no release: the sampler reports it).
+    const known = [_]KeyInfo{macKey(0)};
+    try testing.expectEqual(@as(u32, 2), d.poll(&q, 1005, &known, 5));
+    const first = q.pop().?;
+    try testing.expectEqual(pf.GlobalKeyClass.letter, first.key);
+    try testing.expectEqual(macKey(0).x, first.key_x);
+    try testing.expectEqual(pf.GlobalKeyClass.other, q.pop().?.key);
+    try testing.expectEqual(@as(u32, 1), d.owed_ups);
+    // Wraparound counts correctly; a huge jump is ignored; bursts are capped.
+    d.reset(0xFFFF_FFFF);
+    try testing.expectEqual(@as(u32, 2), d.poll(&q, 1, &.{}, 6));
+    try testing.expectEqual(@as(u32, 0), d.poll(&q, 1 + (1 << 24), &.{}, 7));
+    try testing.expectEqual(@as(u32, CounterDecoder.max_burst), d.poll(&q, 1 + (1 << 24) + 500, &.{}, 8));
+}
+
+test "KeySampler reports presses and releases and probes whether sampling works" {
+    var q: InputQueue = .{};
+    var s: KeySampler = .{};
+    try testing.expect(s.shouldSample(true));
+    try testing.expect(!s.shouldSample(false));
+    s.begin();
+    s.observe(&q, 0, true, 1); // A down
+    s.observe(&q, 49, false, 1);
+    const known = s.end(1);
+    try testing.expectEqual(@as(usize, 1), known.len);
+    try testing.expectEqual(KeySampler.Probe.works, s.probe);
+    try testing.expect(s.shouldSample(false)); // a key is held: keep sampling for its release
+    s.begin();
+    s.observe(&q, 0, false, 2);
+    try testing.expectEqual(@as(usize, 0), s.end(0).len);
+    const up = q.pop().?;
+    try testing.expectEqual(pf.GlobalInputKind.key_up, up.kind);
+    try testing.expectEqual(pf.GlobalKeyClass.letter, up.key);
+
+    // Without real key states, sampling is abandoned after the probe window.
+    var b: KeySampler = .{};
+    var i: usize = 0;
+    while (i < KeySampler.probe_polls) : (i += 1) {
+        b.begin();
+        b.observe(&q, 0, false, 0);
+        _ = b.end(2);
+    }
+    try testing.expectEqual(KeySampler.Probe.broken, b.probe);
+    try testing.expect(!b.shouldSample(true));
 }

@@ -229,4 +229,9 @@ test {
     _ = @import("window/a11y_tests.zig");
     _ = @import("window/context_menu_tests.zig");
     _ = @import("window/native_popover_tests.zig");
+    _ = @import("platform/desktop.zig");
+    if (@import("builtin").os.tag == .linux) {
+        _ = @import("platform/linux/global_input.zig");
+        _ = @import("platform/linux/tray.zig");
+    }
 }

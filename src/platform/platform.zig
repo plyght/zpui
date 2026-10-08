@@ -380,43 +380,45 @@ pub const Window = struct {
         screenBoundsInContent: ?*const fn (ptr: *anyopaque) ?Bounds = null,
 
         // -- overlay windows (docs/DESKTOP_OVERLAY.md) ----------------------------------------
+        // Optional: null = unsupported (the wrappers are no-ops / return null).
         /// Mouse events pass through to whatever is below the window (or stop doing so).
-        setMousePassthrough: *const fn (ptr: *anyopaque, on: bool) void,
+        setMousePassthrough: ?*const fn (ptr: *anyopaque, on: bool) void = null,
         /// Pin the window to a corner of `display_id`'s work area (null = its current / the
         /// main display).
-        setAnchor: *const fn (ptr: *anyopaque, anchor: OverlayAnchor, display_id: ?u32) void,
-        setVisible: *const fn (ptr: *anyopaque, visible: bool) void, // hide/show without destroying
+        setAnchor: ?*const fn (ptr: *anyopaque, anchor: OverlayAnchor, display_id: ?u32) void = null,
+        setVisible: ?*const fn (ptr: *anyopaque, visible: bool) void = null, // hide/show without destroying
         /// Per-region click-through: only `rects` (window content coordinates, logical px)
         /// take mouse input, the rest passes to whatever is below. null = the whole
         /// window takes input; an empty slice = fully passthrough. `setMousePassthrough(true)`
         /// overrides it (all-or-nothing) until switched off again. Copied.
-        setInputRegion: *const fn (ptr: *anyopaque, rects: ?[]const Bounds) void,
+        setInputRegion: ?*const fn (ptr: *anyopaque, rects: ?[]const Bounds) void = null,
         /// The pointer in global screen coordinates (logical px, top-left origin of the
         /// display layout, the space of `Display.bounds`), null when unknown. Valid while
         /// the window holds the implicit pointer grab of a press inside it (drags).
-        screenMousePosition: *const fn (ptr: *anyopaque) ?Point,
+        screenMousePosition: ?*const fn (ptr: *anyopaque) ?Point = null,
     };
 
     /// See `VTable.setMousePassthrough`.
     pub fn setMousePassthrough(w: Window, on: bool) void {
-        w.vtable.setMousePassthrough(w.ptr, on);
+        if (w.vtable.setMousePassthrough) |f| f(w.ptr, on);
     }
     /// See `VTable.setAnchor`.
     pub fn setAnchor(w: Window, anchor: OverlayAnchor, display_id: ?u32) void {
-        w.vtable.setAnchor(w.ptr, anchor, display_id);
+        if (w.vtable.setAnchor) |f| f(w.ptr, anchor, display_id);
     }
     /// Hide / show the window without destroying it. A hidden window gets no frame
     /// callbacks and parks its renderer / display link.
     pub fn setVisible(w: Window, visible: bool) void {
-        w.vtable.setVisible(w.ptr, visible);
+        if (w.vtable.setVisible) |f| f(w.ptr, visible);
     }
     /// See `VTable.setInputRegion`.
     pub fn setInputRegion(w: Window, rects: ?[]const Bounds) void {
-        w.vtable.setInputRegion(w.ptr, rects);
+        if (w.vtable.setInputRegion) |f| f(w.ptr, rects);
     }
     /// See `VTable.screenMousePosition`.
     pub fn screenMousePosition(w: Window) ?Point {
-        return w.vtable.screenMousePosition(w.ptr);
+        const f = w.vtable.screenMousePosition orelse return null;
+        return f(w.ptr);
     }
 
     /// See `VTable.placePopover` (no-op on backends without popovers).
@@ -827,57 +829,64 @@ pub const Platform = struct {
         supportsNativePopovers: ?*const fn (ptr: *anyopaque) bool = null,
 
         // -- desktop companion features (docs/DESKTOP_OVERLAY.md) ------------------------------
+        // Optional: null = unsupported (the `Platform` wrappers return `.unsupported`,
+        // `.not_applicable`, null or `error.Unsupported`).
         /// Callback runs on the main thread. Returns the status of the strongest backend it could start.
-        startGlobalInputMonitor: *const fn (ptr: *anyopaque, cb: Callback(GlobalInputEvent, void)) InputMonitorStatus,
-        stopGlobalInputMonitor: *const fn (ptr: *anyopaque) void,
+        startGlobalInputMonitor: ?*const fn (ptr: *anyopaque, cb: Callback(GlobalInputEvent, void)) InputMonitorStatus = null,
+        stopGlobalInputMonitor: ?*const fn (ptr: *anyopaque) void = null,
         /// Opt into (true) or out of (false, the default) the precise global input backend.
         /// macOS: false = the permissionless counter monitor (no TCC prompt; key class
         /// `.other`, estimated `key_x`); true = the listen-only CGEventTap (Input
         /// Monitoring permission). Takes effect on the next `startGlobalInputMonitor`
         /// (restarts a running monitor). No-op where every backend is already precise
         /// (Linux, Windows).
-        setPreciseInput: *const fn (ptr: *anyopaque, on: bool) void,
-        inputPermission: *const fn (ptr: *anyopaque) InputPermission,
+        setPreciseInput: ?*const fn (ptr: *anyopaque, on: bool) void = null,
+        inputPermission: ?*const fn (ptr: *anyopaque) InputPermission = null,
         /// Shows the OS prompt / opens the right settings pane. No-op where not applicable.
-        requestInputPermission: *const fn (ptr: *anyopaque) void,
+        requestInputPermission: ?*const fn (ptr: *anyopaque) void = null,
         /// Install, replace or (null) remove the tray / menu bar item. Items report back
         /// through `PlatformCallbacks.menu_action`. `error.Unsupported` when the desktop has
         /// no tray host.
-        setTrayItem: *const fn (ptr: *anyopaque, item: ?TrayItem) anyerror!void,
+        setTrayItem: ?*const fn (ptr: *anyopaque, item: ?TrayItem) anyerror!void = null,
         /// Copies into `buf`; null when unknown (e.g. Wayland without a foreign-toplevel protocol).
-        foregroundApp: *const fn (ptr: *anyopaque, buf: []u8) ?ForegroundApp,
+        foregroundApp: ?*const fn (ptr: *anyopaque, buf: []u8) ?ForegroundApp = null,
         /// Fires on the main thread whenever the foreground app changes.
-        setForegroundAppCallback: *const fn (ptr: *anyopaque, cb: Callback(void, void)) void,
-        setLaunchAtLogin: *const fn (ptr: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void,
+        setForegroundAppCallback: ?*const fn (ptr: *anyopaque, cb: Callback(void, void)) void = null,
+        setLaunchAtLogin: ?*const fn (ptr: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void = null,
     };
 
     /// See `VTable.startGlobalInputMonitor`.
     pub fn startGlobalInputMonitor(p: Platform, cb: Callback(GlobalInputEvent, void)) InputMonitorStatus {
-        return p.vtable.startGlobalInputMonitor(p.ptr, cb);
+        const f = p.vtable.startGlobalInputMonitor orelse return .unsupported;
+        return f(p.ptr, cb);
     }
     pub fn stopGlobalInputMonitor(p: Platform) void {
-        p.vtable.stopGlobalInputMonitor(p.ptr);
+        if (p.vtable.stopGlobalInputMonitor) |f| f(p.ptr);
     }
     pub fn setPreciseInput(p: Platform, on: bool) void {
-        p.vtable.setPreciseInput(p.ptr, on);
+        if (p.vtable.setPreciseInput) |f| f(p.ptr, on);
     }
     pub fn inputPermission(p: Platform) InputPermission {
-        return p.vtable.inputPermission(p.ptr);
+        const f = p.vtable.inputPermission orelse return .not_applicable;
+        return f(p.ptr);
     }
     pub fn requestInputPermission(p: Platform) void {
-        p.vtable.requestInputPermission(p.ptr);
+        if (p.vtable.requestInputPermission) |f| f(p.ptr);
     }
     pub fn setTrayItem(p: Platform, item: ?TrayItem) !void {
-        return p.vtable.setTrayItem(p.ptr, item);
+        const f = p.vtable.setTrayItem orelse return if (item == null) {} else error.Unsupported;
+        return f(p.ptr, item);
     }
     pub fn foregroundApp(p: Platform, buf: []u8) ?ForegroundApp {
-        return p.vtable.foregroundApp(p.ptr, buf);
+        const f = p.vtable.foregroundApp orelse return null;
+        return f(p.ptr, buf);
     }
     pub fn setForegroundAppCallback(p: Platform, cb: Callback(void, void)) void {
-        p.vtable.setForegroundAppCallback(p.ptr, cb);
+        if (p.vtable.setForegroundAppCallback) |f| f(p.ptr, cb);
     }
     pub fn setLaunchAtLogin(p: Platform, app_id: []const u8, exe_path: []const u8, on: bool) !void {
-        return p.vtable.setLaunchAtLogin(p.ptr, app_id, exe_path, on);
+        const f = p.vtable.setLaunchAtLogin orelse return error.Unsupported;
+        return f(p.ptr, app_id, exe_path, on);
     }
 
     /// Whether this backend hosts native popover containers (`WindowParams.popover`).

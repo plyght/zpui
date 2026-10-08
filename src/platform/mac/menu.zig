@@ -43,6 +43,15 @@ pub fn build(menus: []const pf.Menu, delegate: id) id {
     return bar;
 }
 
+/// A standalone menu (status item / tray) from `items` (autoreleased).
+pub fn buildMenu(items: []const pf.MenuItem, delegate: id) id {
+    const menu = newMenu("");
+    menu.msg(void, "setDelegate:", .{delegate});
+    menu.msg(void, "setAutoenablesItems:", .{objc.NO});
+    for (items) |item| menu.msg(void, "addItem:", .{buildItem(item, delegate)});
+    return menu;
+}
+
 fn newMenu(title: []const u8) id {
     return ak.class("NSMenu").msg(id, "alloc", .{}).msg(id, "initWithTitle:", .{ak.nsString(title)}).autorelease();
 }
