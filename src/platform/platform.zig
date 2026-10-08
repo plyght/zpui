@@ -1047,10 +1047,15 @@ pub const ContextMenuItem = struct {
     children: []const ContextMenuItem = &.{},
 };
 
+/// Which corner of the menu `ContextMenuRequest.position` names.
+pub const ContextMenuAnchor = enum(u8) { top_left, bottom_left };
+
 pub const ContextMenuRequest = struct {
     items: []const ContextMenuItem,
-    /// The menu's top-left corner in window content coordinates (logical px).
+    /// The menu's top-left corner (or, with `anchor = .bottom_left`, its bottom-left:
+    /// menus opening upward from a trigger) in window content coordinates (logical px).
     position: Point,
+    anchor: ContextMenuAnchor = .top_left,
     /// Pin the menu's appearance to dark / light (the app theme); null = system.
     dark: ?bool = null,
 };

@@ -21,6 +21,8 @@
 //!   use `+[NSMenuItem sectionHeaderWithTitle:]` (macOS 14+, else a disabled item);
 //!   check marks map to NSControlStateValueOn / Mixed.
 //! * `dark` pins the menu's NSAppearance (DarkAqua / Aqua) to the app theme.
+//! * `anchor = .bottom_left` opens the menu upward: the location is raised by the
+//!   menu's own height (`-[NSMenu size]`).
 
 const std = @import("std");
 const objc = @import("objc.zig");
@@ -100,11 +102,14 @@ pub fn show(w: *MacWindow, request: platform.ContextMenuRequest, done: platform.
         menu.msg(void, "setAppearance:", .{ak.class("NSAppearance").msg(?id, "appearanceNamed:", .{name})});
     }
     const height = ak.bounds(w.native_view).size.height;
+    var y = height - @as(CGFloat, request.position.y);
+    // Opening upward: the menu's top sits its own height above the bottom-left anchor.
+    if (request.anchor == .bottom_left) y += ak.msgStruct(NSSize, menu, "size", .{}).height;
     st.* = .{
         .gpa = w.gpa,
         .view = w.native_view.retain(),
         .menu = menu.retain(),
-        .location = .{ .x = request.position.x, .y = height - @as(CGFloat, request.position.y) },
+        .location = .{ .x = request.position.x, .y = y },
         .done = done,
     };
     // After the current event (a timer: default run-loop mode). The run loop retains

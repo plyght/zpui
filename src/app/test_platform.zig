@@ -569,6 +569,7 @@ pub const TestContextMenu = struct {
     arena: std.heap.ArenaAllocator,
     items: []const pf.ContextMenuItem,
     position: pf.Point,
+    anchor: pf.ContextMenuAnchor = .top_left,
     dark: ?bool,
     done: pf.ContextMenuDone,
 
@@ -882,7 +883,7 @@ pub const TestWindow = struct {
             self.platform.test_dispatcher.dispatcher().dispatchOnMainThread(.{ .ctx = old, .run = TestContextMenu.runDismiss, .drop = TestContextMenu.dropDismiss }, .high);
         }
         const m = gpa.create(TestContextMenu) catch return false;
-        m.* = .{ .gpa = gpa, .arena = .init(gpa), .position = request.position, .dark = request.dark, .done = done, .items = &.{} };
+        m.* = .{ .gpa = gpa, .arena = .init(gpa), .position = request.position, .anchor = request.anchor, .dark = request.dark, .done = done, .items = &.{} };
         m.items = TestContextMenu.copyItems(m.arena.allocator(), request.items) catch {
             m.destroy(gpa);
             return false;

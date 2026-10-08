@@ -91,14 +91,23 @@ const Pending = struct {
     listener: Listener,
 };
 
+pub const Anchor = platform.ContextMenuAnchor;
+
+pub const Options = struct {
+    /// Pin the menu's appearance (null = the window's glass/theme setting,
+    /// `Window.glass_dark`).
+    dark: ?bool = null,
+    /// Which corner `position` names: `.bottom_left` opens the menu upward.
+    anchor: Anchor = .top_left,
+};
+
 /// Pop up `items` at `position` (window coordinates; the menu's top-left). See the
-/// module docs. `dark` pins the menu's appearance (null = the window's glass/theme
-/// setting, `Window.glass_dark`).
+/// module docs.
 pub fn show(w: *Window, position: Point, items: []const MenuItem, on_select: Listener) bool {
-    return showWith(w, position, items, null, on_select);
+    return showWith(w, position, items, .{}, on_select);
 }
 
-pub fn showWith(w: *Window, position: Point, items: []const MenuItem, dark: ?bool, on_select: Listener) bool {
+pub fn showWith(w: *Window, position: Point, items: []const MenuItem, options: Options, on_select: Listener) bool {
     if (!supported(w) or items.len == 0) return false;
     var arena_state: std.heap.ArenaAllocator = .init(w.gpa);
     defer arena_state.deinit();
@@ -106,7 +115,7 @@ pub fn showWith(w: *Window, position: Point, items: []const MenuItem, dark: ?boo
     const converted = convert(a, items, w.scale_factor) catch return false;
     const pending = w.gpa.create(Pending) catch return false;
     pending.* = .{ .app = w.app, .window = w.id, .listener = on_select };
-    const request: platform.ContextMenuRequest = .{ .items = converted, .position = position, .dark = dark orelse w.glass_dark };
+    const request: platform.ContextMenuRequest = .{ .items = converted, .position = position, .anchor = options.anchor, .dark = options.dark orelse w.glass_dark };
     if (!w.platform_window.showContextMenu(request, .{ .ctx = pending, .func = finish })) {
         w.gpa.destroy(pending);
         return false;
