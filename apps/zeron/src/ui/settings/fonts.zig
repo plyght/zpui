@@ -14,6 +14,7 @@
 //! ```
 
 const std = @import("std");
+const builtin = @import("builtin");
 const zpui = @import("zpui");
 const model = @import("zeron_model");
 const zt = @import("zeron_theme");
@@ -119,6 +120,8 @@ pub fn choices(a: std.mem.Allocator, kind: FontKind) []const UiFontFamily {
     }
     if (catalog) |c| for (c.families) |f| {
         if (std.mem.eql(u8, f.name, "Geist") or std.mem.eql(u8, f.name, "Geist Mono")) continue;
+        // macOS: "SF Pro" is offered as the system font ("SF Pro (System)") above.
+        if (builtin.os.tag == .macos and std.mem.eql(u8, f.name, "SF Pro")) continue;
         if (kind == .terminal and !f.fixed_width) continue;
         list.append(a, .{ .installed = f.name }) catch {};
     };

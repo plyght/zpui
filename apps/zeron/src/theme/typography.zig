@@ -44,7 +44,9 @@ pub const UiFontFamily = union(enum) {
         return switch (self) {
             .geist => "Geist",
             .geist_mono => "Geist Mono",
-            .system => "System UI",
+            // macOS's system font *is* SF Pro (with system optical sizing and tracking);
+            // say so, so it isn't mistaken for the separately installed "SF Pro" family.
+            .system => if (builtin.os.tag == .macos) "SF Pro (System)" else "System UI",
             .installed => |name| name,
         };
     }
@@ -68,6 +70,9 @@ pub const UiFontFamily = union(enum) {
         if (std.mem.eql(u8, value, "system")) return .system;
         if (std.mem.eql(u8, value, "inter")) return .{ .installed = "Inter" };
         if (std.mem.eql(u8, value, "atkinsonHyperlegibleNext")) return .{ .installed = "Atkinson Hyperlegible Next" };
+        // On macOS the installed "SF Pro" family is the system font the user means;
+        // the system face gets Apple's optical sizes and tracking.
+        if (builtin.os.tag == .macos and std.mem.eql(u8, value, prefix ++ "SF Pro")) return .system;
         if (std.mem.startsWith(u8, value, prefix) and value.len > prefix.len) return .{ .installed = value[prefix.len..] };
         return .geist;
     }
