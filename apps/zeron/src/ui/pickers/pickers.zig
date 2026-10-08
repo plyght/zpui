@@ -5,6 +5,10 @@
 //! frosted popover with search, keyboard navigation and ranked filtering.
 //! The harness/model picker lives in the composer (`ModelPicker`).
 //!
+//! Projects are one row per repository across devices (`view.projectKey`,
+//! named for the representative space); the device chip then picks which
+//! checkout of it (`device_rows`), or any device without a project.
+//!
 //! Data: projects and devices are synced workspace state; refs load through
 //! `ListRefs` (stale-while-revalidate on every open, `SwitchRef` checks the
 //! project folder out when a plain non-current ref is picked in local mode).
@@ -54,6 +58,33 @@ const card_inset = ui.popover.card_inset;
 
 const RefsState = union(enum) { idle, loading, ready, failed: []u8 };
 
+/// One project-picker row: every space of a project (`project_key`, its
+/// Rust string form), named for its representative.
+pub const ProjectRow = struct { key: []const u8, name: []const u8 };
+
+/// One device-picker row: a device, and the picked project's checkout on it.
+pub const DeviceRow = struct {
+    device_id: []const u8,
+    name: []const u8,
+    /// The project's space on this device; null when no project is picked.
+    space_id: ?[]const u8 = null,
+    /// The checkout's path, when the device holds several of the project.
+    detail: ?[]const u8 = null,
+};
+
+/// The previous project's resolved ref (owned), shown ONLY by the checkout
+/// and branch chip labels until this project's refs land.
+const HeldRef = struct {
+    name: []u8,
+    worktree: bool,
+};
+
+/// `project_key` in its Rust string form (frame / scratch arena).
+fn projectKeyString(a: std.mem.Allocator, s: *const engine.protocol.Space) []const u8 {
+    const k = view.projectKey(s);
+    return if (k.repository_id) |r| std.fmt.allocPrint(a, "repo:{s}", .{r}) catch s.id else s.id;
+}
+
 pub const Pickers = struct {
     gpa: std.mem.Allocator,
     state: Entity(model.AppState),
@@ -91,6 +122,10 @@ pub const Pickers = struct {
     switch_error: ?[]u8 = null,
     /// The space the branch draft belongs to (dropped when it changes).
     space_owner: ?[]u8 = null,
+    /// `held_ref`: the previous project's ref, so a project switch never
+    /// blinks the chips through "Select ref". Never read by the popover or
+    /// the send plan.
+    held_ref: ?HeldRef = null,
 
     pub fn init(state: Entity(model.AppState), fixtures: ?*fixtures_mod.Fixtures, cx: *Context(Pickers)) !Pickers {
         const theme = ui.theme.get(cx).forPopup();
@@ -130,6 +165,7 @@ pub const Pickers = struct {
         freeOpt(self.gpa, &self.switching);
         freeOpt(self.gpa, &self.switch_error);
         freeOpt(self.gpa, &self.space_owner);
+        self.dropHeldRef();
         if (self.refs == .failed) self.gpa.free(self.refs.failed);
         self.refs_arena.deinit();
         self.scratch.deinit();
@@ -155,6 +191,12 @@ pub const Pickers = struct {
         if (same) return;
         freeOpt(self.gpa, &self.space_owner);
         if (sel) |s| self.space_owner = self.gpa.dupe(u8, s) catch null;
+        if (self.selectedRef()) |r| {
+            if (self.gpa.dupe(u8, r.name)) |name| {
+                self.dropHeldRef();
+                self.held_ref = .{ .name = name, .worktree = r.worktreePath != null };
+            } else |_| {}
+        }
         freeOpt(self.gpa, &self.branch);
         self.checkout = .local;
         if (self.open == .branch or self.open == .checkout) self.close(null, cx);
@@ -262,7 +304,13 @@ pub const Pickers = struct {
         self.refs = s;
     }
 
+    fn dropHeldRef(self: *Pickers) void {
+        if (self.held_ref) |h| self.gpa.free(h.name);
+        self.held_ref = null;
+    }
+
     fn onRefs(self: *Pickers, result: es.CallResult, cx: *Context(Pickers)) void {
+        self.dropHeldRef();
         switch (result) {
             .ok => |v| {
                 _ = self.refs_arena.reset(.retain_capacity);
@@ -296,6 +344,7 @@ pub const Pickers = struct {
             return self.setRefsState(.{ .failed = self.gpa.dupe(u8, "invalid refs fixture") catch return });
         };
         self.ref_rows = map.map.get(repo_path) orelse &.{};
+        self.dropHeldRef();
         self.setRefsState(.ready);
         cx.notify();
     }
@@ -361,13 +410,29 @@ pub const Pickers = struct {
         };
     }
 
-    fn checkoutLabel(self: *const Pickers) []const u8 {
-        return view.checkoutLabel(self.checkout, self.selectedRef());
+    /// `display_ref`: the ref the checkout and branch chips name — the
+    /// resolved one, else (while a project switch's refs load) the previous
+    /// project's. Name + whether it lives in a worktree.
+    fn displayRef(self: *const Pickers) ?struct { name: []const u8, worktree: bool } {
+        if (self.selectedRef()) |r| return .{ .name = r.name, .worktree = r.worktreePath != null };
+        if (self.refs == .idle or self.refs == .loading) if (self.held_ref) |h| return .{ .name = h.name, .worktree = h.worktree };
+        return null;
+    }
+
+    fn displayRefIsWorktree(self: *const Pickers) bool {
+        return if (self.displayRef()) |r| r.worktree else false;
+    }
+
+    pub fn checkoutLabel(self: *const Pickers) []const u8 {
+        return switch (self.checkout) {
+            .new_worktree => "New worktree",
+            .local => if (self.displayRefIsWorktree()) "Current worktree" else "Current checkout",
+        };
     }
 
     /// `From <ref>` only when a NEW worktree will be created off it.
-    fn refLabel(self: *const Pickers) []const u8 {
-        const name = self.effectiveRefName() orelse return "Select ref";
+    pub fn refLabel(self: *const Pickers) []const u8 {
+        const name = self.branch orelse (if (self.displayRef()) |r| r.name else null) orelse return "Select ref";
         return if (self.checkout == .new_worktree) zpui.fmt("From {s}", .{name}) else name;
     }
 
@@ -441,41 +506,75 @@ pub const Pickers = struct {
 
     // ---- projects / devices -----------------------------------------------------------
 
-    /// Projects on the canvas's device, sorted by display name.
-    fn scopedSpaces(self: *const Pickers, cx: anytype) []*const engine.protocol.Space {
+    /// `project_rows`: one row per project across every device — clones and
+    /// worktrees sharing a repository identity are one row, named for their
+    /// representative — by lowercased name, key tiebreak.
+    pub fn projectRows(self: *const Pickers, cx: anytype) []ProjectRow {
         const w = self.ws(cx);
         const a = @constCast(&self.scratch).allocator();
-        const all = w.spacesSorted(a) catch return &.{};
-        const device = w.effectiveDeviceId();
-        var out: std.ArrayList(*const engine.protocol.Space) = .empty;
-        for (all) |s| {
-            if (device) |d| if (!std.mem.eql(u8, s.deviceId, d)) continue;
-            out.append(a, s) catch {};
+        var rows: std.ArrayList(ProjectRow) = .empty;
+        for (w.spaces()) |*sp| {
+            const key = projectKeyString(a, sp);
+            const seen = for (rows.items) |r| {
+                if (std.mem.eql(u8, r.key, key)) break true;
+            } else false;
+            if (seen) continue;
+            rows.append(a, .{ .key = key, .name = view.spaceDisplayName(w.representativeSpace(sp)) }) catch {};
         }
-        return out.items;
+        std.sort.block(ProjectRow, rows.items, {}, struct {
+            fn lt(_: void, l: ProjectRow, r: ProjectRow) bool {
+                const o = lowerOrder(l.name, r.name);
+                if (o != .eq) return o == .lt;
+                return std.mem.order(u8, l.key, r.key) == .lt;
+            }
+        }.lt);
+        return rows.items;
     }
 
-    fn filteredSpaces(self: *const Pickers, cx: anytype) []*const engine.protocol.Space {
+    /// `project_rows` matching the search query, ranked.
+    fn filteredProjects(self: *const Pickers, cx: anytype) []ProjectRow {
         const a = @constCast(&self.scratch).allocator();
-        const spaces = self.scopedSpaces(cx);
-        const names = a.alloc([]const u8, spaces.len) catch return &.{};
-        for (spaces, 0..) |s, i| names[i] = view.spaceDisplayName(s);
-        const buf = a.alloc(usize, spaces.len) catch return &.{};
+        const rows = self.projectRows(cx);
+        const names = a.alloc([]const u8, rows.len) catch return &.{};
+        for (rows, 0..) |r, i| names[i] = r.name;
+        const buf = a.alloc(usize, rows.len) catch return &.{};
         const ix = menu.filterIndices(self.search.read(cx).text(), names, buf);
-        const out = a.alloc(*const engine.protocol.Space, ix.len) catch return &.{};
-        for (ix, 0..) |i, j| out[j] = spaces[i];
+        const out = a.alloc(ProjectRow, ix.len) catch return &.{};
+        for (ix, 0..) |i, j| out[j] = rows[i];
         return out;
     }
 
     /// The current project row, or the final opt-out row; nothing when the
     /// selection is implicit.
-    fn selectedSpaceIndex(self: *const Pickers, cx: anytype) ?usize {
+    pub fn selectedSpaceIndex(self: *const Pickers, cx: anytype) ?usize {
         const w = self.ws(cx);
-        const rows = self.scopedSpaces(cx);
+        const rows = self.projectRows(cx);
         if (w.no_project) return rows.len;
-        const sel = w.selected_space orelse return null;
-        for (rows, 0..) |s, i| if (std.mem.eql(u8, s.id, sel)) return i;
+        const sel = w.selectedSpaceRow() orelse return null;
+        const key = projectKeyString(@constCast(&self.scratch).allocator(), sel);
+        for (rows, 0..) |r, i| if (std.mem.eql(u8, r.key, key)) return i;
         return null;
+    }
+
+    /// `pick_project`: pick a project, keeping the device when it has a
+    /// checkout of it — the current checkout, else one on the current device,
+    /// else this device's (members are local-first), else the first.
+    pub fn pickProject(self: *Pickers, key: []const u8, window: ?*Window, cx: *Context(Pickers)) void {
+        const w = self.ws(cx);
+        const a = @constCast(&self.scratch).allocator();
+        const member = for (w.spaces()) |*sp| {
+            if (std.mem.eql(u8, projectKeyString(a, sp), key)) break sp;
+        } else return;
+        const members = w.projectMembers(a, member) catch return;
+        if (members.len == 0) return;
+        const selected = w.selected_space;
+        const device = w.effectiveDeviceId();
+        const pick = for (members) |m| {
+            if (selected) |sid| if (std.mem.eql(u8, sid, m.id)) break m;
+        } else for (members) |m| {
+            if (device) |d| if (std.mem.eql(u8, d, m.deviceId)) break m;
+        } else members[0];
+        self.pickSpace(pick.id, window, cx);
     }
 
     fn pickSpace(self: *Pickers, id: ?[]const u8, window: ?*Window, cx: *Context(Pickers)) void {
@@ -494,13 +593,27 @@ pub const Pickers = struct {
         self.close(window, cx);
     }
 
-    /// This device first, then by name.
-    fn deviceRows(self: *const Pickers, cx: anytype) []*const engine.protocol.Device {
+    /// `device_rows`: with a project picked, its checkouts — one row per
+    /// member (this device first), with the path when a device holds
+    /// several. Without one: every device, this device first, then by name.
+    pub fn deviceRows(self: *const Pickers, cx: anytype) []DeviceRow {
         const w = self.ws(cx);
         const a = @constCast(&self.scratch).allocator();
+        if (w.selectedSpaceRow()) |sp| {
+            const members = w.projectMembers(a, sp) catch return &.{};
+            const out = a.alloc(DeviceRow, members.len) catch return &.{};
+            for (members, out) |m, *o| {
+                var same: usize = 0;
+                for (members) |other| {
+                    if (std.mem.eql(u8, other.deviceId, m.deviceId)) same += 1;
+                }
+                o.* = .{ .device_id = m.deviceId, .name = w.deviceName(m.deviceId) orelse "Unknown device", .space_id = m.id, .detail = if (same > 1) m.path else null };
+            }
+            return out;
+        }
         const devs = w.devices();
-        const out = a.alloc(*const engine.protocol.Device, devs.len) catch return &.{};
-        for (devs, 0..) |*d, i| out[i] = d;
+        const sorted = a.alloc(*const engine.protocol.Device, devs.len) catch return &.{};
+        for (devs, 0..) |*d, i| sorted[i] = d;
         const Ctx = struct {
             local: ?[]const u8,
             fn less(c: @This(), l: *const engine.protocol.Device, r: *const engine.protocol.Device) bool {
@@ -512,26 +625,42 @@ pub const Pickers = struct {
                 return std.mem.lessThan(u8, l.id, r.id);
             }
         };
-        std.mem.sort(*const engine.protocol.Device, out, Ctx{ .local = w.local_device_id }, Ctx.less);
+        std.mem.sort(*const engine.protocol.Device, sorted, Ctx{ .local = w.local_device_id }, Ctx.less);
+        const out = a.alloc(DeviceRow, sorted.len) catch return &.{};
+        for (sorted, out) |d, *o| o.* = .{ .device_id = d.id, .name = d.name };
         return out;
     }
 
-    fn filteredDevices(self: *const Pickers, cx: anytype) []*const engine.protocol.Device {
+    /// `device_rows` filtered by the search box (name + path detail).
+    fn filteredDevices(self: *const Pickers, cx: anytype) []DeviceRow {
         const a = @constCast(&self.scratch).allocator();
         const rows = self.deviceRows(cx);
         const names = a.alloc([]const u8, rows.len) catch return &.{};
-        for (rows, 0..) |d, i| names[i] = d.name;
+        for (rows, 0..) |r, i| names[i] = if (r.detail) |d| (std.fmt.allocPrint(a, "{s} {s}", .{ r.name, d }) catch r.name) else r.name;
         const buf = a.alloc(usize, rows.len) catch return &.{};
         const ix = menu.filterIndices(self.search.read(cx).text(), names, buf);
-        const out = a.alloc(*const engine.protocol.Device, ix.len) catch return &.{};
+        const out = a.alloc(DeviceRow, ix.len) catch return &.{};
         for (ix, 0..) |i, j| out[j] = rows[i];
         return out;
     }
 
-    fn selectedDeviceIndex(self: *const Pickers, cx: anytype) usize {
-        const eff = self.ws(cx).effectiveDeviceId() orelse return 0;
-        for (self.deviceRows(cx), 0..) |d, i| if (std.mem.eql(u8, d.id, eff)) return i;
+    /// The row naming the canvas's target: its checkout with a project,
+    /// else its device.
+    fn rowSelected(w: *const model.WorkspaceStore, row: DeviceRow) bool {
+        if (row.space_id) |sid| return if (w.selectedSpaceRow()) |sel| std.mem.eql(u8, sel.id, sid) else false;
+        return if (w.effectiveDeviceId()) |e| std.mem.eql(u8, e, row.device_id) else false;
+    }
+
+    pub fn selectedDeviceIndex(self: *const Pickers, cx: anytype) usize {
+        const w = self.ws(cx);
+        for (self.deviceRows(cx), 0..) |r, i| if (rowSelected(w, r)) return i;
         return 0;
+    }
+
+    /// `pick_device_row`: the project's checkout there, or (without a
+    /// project) the device itself.
+    pub fn pickDeviceRow(self: *Pickers, row: DeviceRow, window: ?*Window, cx: *Context(Pickers)) void {
+        if (row.space_id) |sid| self.pickSpace(sid, window, cx) else self.pickDevice(row.device_id, window, cx);
     }
 
     fn nowTs(self: *const Pickers, cx: anytype) model.time.Timestamp {
@@ -545,7 +674,7 @@ pub const Pickers = struct {
         return switch (self.open orelse return 0) {
             .branch => @min(self.filteredRefsAlloc(cx).len, max_ref_rows),
             .checkout => 2,
-            .space => self.filteredSpaces(cx).len + 1,
+            .space => self.filteredProjects(cx).len + 1,
             .device => self.filteredDevices(cx).len,
         };
     }
@@ -583,12 +712,12 @@ pub const Pickers = struct {
             },
             .checkout => self.pickCheckout(if (active == 0) .local else .new_worktree, window, cx),
             .space => {
-                const rows = self.filteredSpaces(cx);
-                if (active < rows.len) self.pickSpace(rows[active].id, window, cx) else if (active == rows.len) self.pickSpace(null, window, cx);
+                const rows = self.filteredProjects(cx);
+                if (active < rows.len) self.pickProject(rows[active].key, window, cx) else if (active == rows.len) self.pickSpace(null, window, cx);
             },
             .device => {
                 const rows = self.filteredDevices(cx);
-                if (active < rows.len) self.pickDevice(rows[active].id, window, cx);
+                if (active < rows.len) self.pickDeviceRow(rows[active], window, cx);
             },
         }
     }
@@ -644,8 +773,8 @@ pub const Pickers = struct {
     }
 
     fn onSpaceRow(self: *Pickers, ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(Pickers)) void {
-        const rows = self.filteredSpaces(cx);
-        if (ix < rows.len) self.pickSpace(rows[ix].id, window, cx);
+        const rows = self.filteredProjects(cx);
+        if (ix < rows.len) self.pickProject(rows[ix].key, window, cx);
     }
 
     fn onNoProject(self: *Pickers, _: *const zpui.ClickEvent, window: *Window, cx: *Context(Pickers)) void {
@@ -659,7 +788,7 @@ pub const Pickers = struct {
 
     fn onDeviceRow(self: *Pickers, ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(Pickers)) void {
         const rows = self.filteredDevices(cx);
-        if (ix < rows.len) self.pickDevice(rows[ix].id, window, cx);
+        if (ix < rows.len) self.pickDeviceRow(rows[ix], window, cx);
     }
 
     fn onRetry(self: *Pickers, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Pickers)) void {
@@ -712,8 +841,9 @@ pub const Pickers = struct {
         return chip;
     }
 
-    /// New-session destination chips (device + project) floating above the
-    /// composer's trailing edge; their menus open above, right-aligned.
+    /// New-session destination chips: the project, then the device it runs
+    /// on, floating above the composer's trailing edge; their menus open
+    /// above, right-aligned.
     pub fn renderTargetRow(self: *Pickers, cx: *Context(Pickers)) zpui.Div {
         const theme = ui.theme.get(cx);
         const w = self.ws(cx);
@@ -726,7 +856,7 @@ pub const Pickers = struct {
         var project_chip = self.footerChip(.space, "picker-project", .folder, project_label, theme, cx);
         if (self.mounted(.device)) device_chip = device_chip.child(self.overlayEnd(.device, cx));
         if (self.mounted(.space)) project_chip = project_chip.child(self.overlayEnd(.space, cx));
-        return div().flexNone().flex().flexRow().itemsCenter().gap(px(4)).child(device_chip).child(project_chip);
+        return div().flexNone().flex().flexRow().itemsCenter().gap(px(4)).child(project_chip).child(device_chip);
     }
 
     /// New-session Git chips (checkout kind + ref) under the composer's
@@ -737,7 +867,7 @@ pub const Pickers = struct {
         if (!space.gitDetected) return null;
         self.ensureRefs(false, cx);
         const theme = ui.theme.get(cx);
-        const kind_icon: Icon = if (self.checkout == .local and (self.selectedRef() == null or self.selectedRef().?.worktreePath == null)) .folder else .folder_with_files;
+        const kind_icon: Icon = if (self.checkout == .local and !self.displayRefIsWorktree()) .folder else .worktree;
         var checkout_chip = self.footerChip(.checkout, "picker-checkout", kind_icon, self.checkoutLabel(), theme, cx);
         var branch_chip = self.footerChip(.branch, "picker-branch", .git_branch, self.refLabel(), theme, cx);
         if (self.mounted(.checkout)) checkout_chip = checkout_chip.child(self.overlayStart(.checkout, cx));
@@ -905,8 +1035,8 @@ pub const Pickers = struct {
     fn checkoutPopover(self: *Pickers, theme: *const Theme, cx: *Context(Pickers)) zpui.Div {
         const has_wt = if (self.selectedRef()) |r| r.worktreePath != null else false;
         const opts = [_]struct { CheckoutKind, []const u8, Icon }{
-            .{ .local, if (has_wt) "Current worktree" else "Current checkout", if (has_wt) .folder_with_files else .folder },
-            .{ .new_worktree, "New worktree", .folder_with_files },
+            .{ .local, if (has_wt) "Current worktree" else "Current checkout", if (has_wt) .worktree else .folder },
+            .{ .new_worktree, "New worktree", .worktree },
         };
         var col = div().flex().flexCol().gap(px(2));
         for (opts, 0..) |o, ix| {
@@ -918,21 +1048,22 @@ pub const Pickers = struct {
         return col;
     }
 
-    /// The project popover: search, one row per project on the picked device,
-    /// a full-bleed hairline, "New project…" and the opt-out row.
+    /// The project popover: search, one row per project across devices, a
+    /// full-bleed hairline, "New project…" and the opt-out row. No per-row
+    /// `@ device` tag — the device chip next door picks the host.
     fn spacePopover(self: *Pickers, theme: *const Theme, cx: *Context(Pickers)) zpui.Div {
         const w = self.ws(cx);
-        const rows = self.filteredSpaces(cx);
-        const selected = w.selected_space;
+        const rows = self.filteredProjects(cx);
+        const selected: ?[]const u8 = if (w.selectedSpaceRow()) |sel| projectKeyString(@constCast(&self.scratch).allocator(), sel) else null;
         const body: zpui.AnyElement = if (rows.len == 0)
-            zpui.intoAnyElement(note(theme, if (self.search.read(cx).isEmpty()) "No projects on this device." else "No projects match."))
+            zpui.intoAnyElement(note(theme, if (self.search.read(cx).isEmpty()) "No projects yet." else "No projects match."))
         else blk: {
             var list = div().id("space-list");
-            for (rows, 0..) |s, ix| {
-                const is_sel = !w.no_project and selected != null and std.mem.eql(u8, selected.?, s.id);
+            for (rows, 0..) |r, ix| {
+                const is_sel = !w.no_project and selected != null and std.mem.eql(u8, selected.?, r.key);
                 list = list.child(navRow(theme, is_sel, self.active == ix).id(.{ "space-row", ix })
                     .onClick(cx.listenerWith(ix, onSpaceRow))
-                    .child(div().flex1().minW0().truncate().whitespaceNowrap().child(view.spaceDisplayName(s))));
+                    .child(div().flex1().minW0().truncate().whitespaceNowrap().child(r.name)));
             }
             break :blk zpui.intoAnyElement(self.scrollList("space-list", menu.listBudget(self.geometry[2].height, 152), list));
         };
@@ -957,18 +1088,21 @@ pub const Pickers = struct {
     fn devicePopover(self: *Pickers, theme: *const Theme, cx: *Context(Pickers)) zpui.Div {
         const w = self.ws(cx);
         const rows = self.filteredDevices(cx);
-        const eff = w.effectiveDeviceId();
         const now = self.nowTs(cx);
         const body: zpui.AnyElement = if (rows.len == 0) zpui.intoAnyElement(note(theme, "No devices match.")) else blk: {
             var list = div().id("device-list");
             for (rows, 0..) |d, ix| {
-                const is_local = if (w.local_device_id) |l| std.mem.eql(u8, l, d.id) else false;
-                const is_sel = if (eff) |e| std.mem.eql(u8, e, d.id) else false;
+                const is_local = if (w.local_device_id) |l| std.mem.eql(u8, l, d.device_id) else false;
+                const is_sel = rowSelected(w, d);
+                // The name, then (a device holding several checkouts) the muted path.
+                var label = div().flex1().minW0().flex().flexRow().itemsBaseline().gap(px(6))
+                    .child(div().flexNone().whitespaceNowrap().child(d.name));
+                if (d.detail) |detail| label = label.child(div().minW0().truncate().whitespaceNowrap().textSize(ui.rems(10)).textColor(theme.text_muted).child(detail));
                 var row = navRow(theme, is_sel, self.active == ix).id(.{ "device-row", ix })
                     .onClick(cx.listenerWith(ix, onDeviceRow))
-                    .child(div().flex1().minW0().truncate().whitespaceNowrap().child(d.name));
+                    .child(label);
                 if (is_local) row = row.child(tag(theme, "You"));
-                if (!w.deviceOnline(d.id, now)) row = row.child(ui.icon.of(.wifi_off, 12, theme.warning.opacity(0.8)));
+                if (!w.deviceOnline(d.device_id, now)) row = row.child(ui.icon.of(.wifi_off, 12, theme.warning.opacity(0.8)));
                 list = list.child(row);
             }
             break :blk zpui.intoAnyElement(self.scrollList("device-list", menu.listBudget(self.geometry[3].height, 64), list));
@@ -992,6 +1126,17 @@ fn skeletonRows(theme: *const Theme, count: usize, cx: anytype) zpui.Div {
         col = col.child(div().h(px(28)).rounded(px(6)).bg(theme.ink(0.04)).opacity(0.35 + 0.4 * wave));
     }
     return col;
+}
+
+/// Order by `to_lowercase()` (ASCII folding).
+fn lowerOrder(a: []const u8, b: []const u8) std.math.Order {
+    const n = @min(a.len, b.len);
+    for (a[0..n], b[0..n]) |x, y| {
+        const lx = std.ascii.toLower(x);
+        const ly = std.ascii.toLower(y);
+        if (lx != ly) return std.math.order(lx, ly);
+    }
+    return std.math.order(a.len, b.len);
 }
 
 fn freeOpt(gpa: std.mem.Allocator, slot: *?[]u8) void {

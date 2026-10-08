@@ -258,20 +258,38 @@ pub const ClientState = struct {
     }
 
     /// A new frame replaces the old one for this target (takes `frame`).
-    pub fn store(self: *ClientState, key: WatchKey, frame: json.Parsed(Status)) void {
+    /// Returns whether the frame changes what any row can render. Snapshots
+    /// only surface through their `changeRequest` (re-validated against the
+    /// identity fields), so a first "no PR" frame or a bare `updatedAt` bump
+    /// stores silently.
+    pub fn store(self: *ClientState, key: WatchKey, frame: json.Parsed(Status)) bool {
         for (self.snapshots.items) |*s| if (s.key.eql(key)) {
+            const changed = !visibleEql(s.frame.value, frame.value);
             s.frame.deinit();
             s.frame = frame;
-            return;
+            return changed;
         };
+        const changed = frame.value.changeRequest != null;
         const owned = key.dupe(self.gpa) catch {
             frame.deinit();
-            return;
+            return false;
         };
         self.snapshots.append(self.gpa, .{ .key = owned, .frame = frame }) catch {
             owned.free(self.gpa);
             frame.deinit();
+            return false;
         };
+        return changed;
+    }
+
+    /// `visible(a) == visible(b)`: the identity fields + summary when a PR is
+    /// present; two PR-less snapshots compare equal.
+    fn visibleEql(a: Status, b: Status) bool {
+        const sa = a.changeRequest orelse return b.changeRequest == null;
+        const sb = b.changeRequest orelse return false;
+        return std.mem.eql(u8, a.deviceId, b.deviceId) and std.mem.eql(u8, a.cwd, b.cwd) and
+            std.mem.eql(u8, a.branch, b.branch) and std.mem.eql(u8, a.checkoutId, b.checkoutId) and
+            @import("eql.zig").deepEql(sa, sb);
     }
 
     pub fn retainTargets(self: *ClientState, targets: []const WatchKey) void {
@@ -356,7 +374,7 @@ pub const ChangeRequestStore = struct {
     pub fn applyFixture(self: *ChangeRequestStore, status_json: []const u8, cx: *Context(ChangeRequestStore)) !void {
         const parsed = try json.parseFromSlice(Status, self.gpa, status_json, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
         const v = parsed.value;
-        self.client.store(.{ .device_id = v.deviceId, .cwd = v.cwd, .branch = v.branch, .checkout_id = v.checkoutId }, parsed);
+        _ = self.client.store(.{ .device_id = v.deviceId, .cwd = v.cwd, .branch = v.branch, .checkout_id = v.checkoutId }, parsed);
         cx.emit(ChangeRequestsChanged{});
         cx.notify();
     }
@@ -484,8 +502,8 @@ pub const ChangeRequestStore = struct {
                     log.warn("dropping malformed checkout change request frame: {t}", .{err});
                     continue;
                 };
-                self.client.store(r.key, parsed);
-                changed = true;
+                // Only frames that change a rendered badge notify.
+                if (self.client.store(r.key, parsed)) changed = true;
             }
             switch (r.watch.end(null)) {
                 .open => {},
@@ -628,7 +646,7 @@ test "change requests: unsupported devices, upgrades and authoritative none" {
     var state = ClientState.init(testing.allocator);
     defer state.deinit();
     const key: WatchKey = .{ .device_id = "old-engine", .cwd = "/repo", .branch = "feature/pr", .checkout_id = "checkout" };
-    state.store(key, try parseStatus(testSnapshot("old-engine", "/repo", "checkout")));
+    _ = state.store(key, try parseStatus(testSnapshot("old-engine", "/repo", "checkout")));
     try testing.expect(state.changeRequestForChat(&chat) != null);
     state.markUnsupported("old-engine", "0.2.2");
     try testing.expect(state.changeRequestForChat(&chat) == null);
@@ -644,14 +662,36 @@ test "change requests: unsupported devices, upgrades and authoritative none" {
     try testing.expect(state.isSupported("old-engine"));
     try testing.expectEqual(@as(usize, 1), (try desiredWatchTargets(arena.allocator(), &.{chat}, &state, Ctx.check)).len);
     // A successful `changeRequest: null` clears a previous PR.
-    state.store(key, try parseStatus(testSnapshot("old-engine", "/repo", "checkout")));
+    _ = state.store(key, try parseStatus(testSnapshot("old-engine", "/repo", "checkout")));
     try testing.expect(state.changeRequestForChat(&chat) != null);
     var none = testSnapshot("old-engine", "/repo", "checkout");
     none.changeRequest = null;
-    state.store(key, try parseStatus(none));
+    _ = state.store(key, try parseStatus(none));
     try testing.expect(state.changeRequestForChat(&chat) == null);
     state.retainTargets(&.{});
     try testing.expectEqual(@as(usize, 0), state.snapshots.items.len);
+}
+
+test "change requests: store reports only visible changes" {
+    // change_requests.rs `store_reports_only_visible_changes`.
+    var state = ClientState.init(testing.allocator);
+    defer state.deinit();
+    const key: WatchKey = .{ .device_id = "local", .cwd = "/repo", .branch = "feature/pr", .checkout_id = "checkout" };
+    var none = testSnapshot("local", "/repo", "checkout");
+    none.changeRequest = null;
+    // A first "no PR" frame renders nothing new.
+    try testing.expect(!state.store(key, try parseStatus(none)));
+    try testing.expect(state.store(key, try parseStatus(testSnapshot("local", "/repo", "checkout"))));
+    // The host re-polls: identical PR, fresher timestamp.
+    var refreshed = testSnapshot("local", "/repo", "checkout");
+    refreshed.updatedAt = "1970-01-01T00:01:00Z";
+    try testing.expect(!state.store(key, try parseStatus(refreshed)));
+    var merged = refreshed;
+    var summary = merged.changeRequest.?;
+    summary.state = .merged;
+    merged.changeRequest = summary;
+    try testing.expect(state.store(key, try parseStatus(merged)));
+    try testing.expect(state.store(key, try parseStatus(none)));
 }
 
 test "change requests: watch params route to the checkout host" {

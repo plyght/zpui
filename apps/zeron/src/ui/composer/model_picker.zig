@@ -7,13 +7,16 @@
 //!   departs from the model default), hover / open wash `element_hover`;
 //! - popover: the compact picker (`pickers/compact.rs`, what the app shows
 //!   by default) — a 256px frosted card anchored above the chip's trailing
-//!   edge with three pages: the panel (provider button, effort title over the
-//!   model name, fast-mode bolt, the glass effort slider with stops, model
-//!   option rows such as Context Window), the model list (back + search
-//!   `TextInput` in the `PaletteSearch` context, 32px rows with the harness
-//!   mark, star on hover, selection = light glass plate) and the provider
-//!   list. Keys as in Rust: ↑/↓ open the list beside the selection,
-//!   ←/→/Home/End step the effort, Enter opens / picks, Esc backs out.
+//!   edge with two pages: the panel (effort title over the model name,
+//!   fast-mode bolt, the glass effort slider with stops, model option rows
+//!   such as Context Window) and the model list — every offered provider's
+//!   models (a chat's fixed provider: its own), starred first; above it the
+//!   back button beside the provider tab strip (each tab jumps to its group,
+//!   the group at the top of the scroll lights its tab), then the search
+//!   `TextInput` in the `PaletteSearch` context; 32px rows with the harness
+//!   mark, star on hover, selection = light glass plate. Keys as in Rust:
+//!   ↑/↓ open the list beside the selection, ←/→/Home/End step the effort,
+//!   Enter opens / picks, Esc backs out.
 //!
 //! Data comes from `AppState.catalog` (`CatalogStore`: `ListHarnesses`, per
 //! harness `ListModels` on demand), the selected chat's `ChatConfig` and the
@@ -57,14 +60,15 @@ pub const ModelPicker = struct {
     /// Committed picks (Rust `Pickers::config`); model id owned.
     draft: rc.Draft = .{},
     draft_model_buf: std.ArrayList(u8) = .empty,
-    /// The tab being browsed: null = favorites, else a harness.
-    viewed: ?HarnessId = null,
-    favorites_view: bool = false,
     /// Keyboard / hover cursor row.
     active: usize = 0,
-    /// Compact picker page (`CompactPage`): the effort panel, the model
-    /// list or the provider list.
+    /// Compact picker page (`CompactPage`): the effort panel or the model list.
     page: Page = .panel,
+    /// The model list's scroll (the provider tabs read its top row) and the
+    /// tab strip's sideways scroll + the tab last brought into view.
+    list_scroll: zpui.ScrollHandle,
+    strip_scroll: zpui.ScrollHandle,
+    strip_viewed: ?usize = null,
     /// Explicit model option picks (`modelOptions`), keys/values owned.
     options: protocol.JsonMap = .{},
     search: Entity(TextInput),
@@ -75,7 +79,7 @@ pub const ModelPicker = struct {
 
     pub const Events = .{ Picked, Closed };
 
-    pub const Page = enum { panel, models, providers };
+    pub const Page = enum { panel, models };
 
     pub fn init(state: Entity(model.AppState), cx: *Context(ModelPicker)) !ModelPicker {
         const theme = chrome.defaultTheme(.dark);
@@ -94,6 +98,8 @@ pub const ModelPicker = struct {
             .theme = theme,
             .search = search,
             .focus = cx.focusHandle(),
+            .list_scroll = zpui.ScrollHandle.init(cx.gpa()),
+            .strip_scroll = zpui.ScrollHandle.init(cx.gpa()),
         };
         const catalog = state.read(cx).catalog;
         try self.subs.add(cx.gpa(), try cx.observe(catalog, ModelPicker.onCatalog));
@@ -132,6 +138,8 @@ pub const ModelPicker = struct {
 
     pub fn deinit(self: *ModelPicker, cx: *App) void {
         self.subs.deinit(self.gpa);
+        self.list_scroll.release();
+        self.strip_scroll.release();
         self.search.release(cx);
         self.focus.release(cx);
         self.state.release(cx);
@@ -239,14 +247,63 @@ pub const ModelPicker = struct {
         self.options.map.put(self.gpa, k, .{ .string = v }) catch @panic("OOM");
     }
 
-    /// Load the effective harness's models (and the catalog) on demand.
+    /// Load the models of every provider the list can show (the effective
+    /// harness first) on demand.
     fn ensureLoaded(self: *ModelPicker, cx: *Context(ModelPicker)) void {
         const catalog = self.state.read(cx).catalog;
+        var hbuf: [16]protocol.HarnessDescriptor = undefined;
         const in = self.inputs(cx);
-        const h = self.viewed orelse rc.effectiveHarness(&in) orelse return;
-        if (catalog.read(cx).modelList(h) == null and !catalog.read(cx).models_loading.contains(h)) {
-            catalog.update(cx, model.CatalogStore.loadModels, .{ h, false });
+        var want: [17]HarnessId = undefined;
+        var n: usize = 0;
+        if (rc.effectiveHarness(&in)) |h| {
+            want[0] = h;
+            n = 1;
         }
+        for (self.railDescriptors(cx, &hbuf)) |d| {
+            if (std.mem.indexOfScalar(HarnessId, want[0..n], d.id) == null and n < want.len) {
+                want[n] = d.id;
+                n += 1;
+            }
+        }
+        for (want[0..n]) |h| {
+            if (catalog.read(cx).modelList(h) == null and !catalog.read(cx).models_loading.contains(h)) {
+                catalog.update(cx, model.CatalogStore.loadModels, .{ h, false });
+            }
+        }
+    }
+
+    /// `harness_locked`: a chat's provider is fixed.
+    fn harnessLocked(self: *const ModelPicker, cx: anytype) bool {
+        return !self.onCanvas(cx);
+    }
+
+    /// `rail_descriptors`: the providers on offer (plus the effective one when
+    /// installed but not offered); a chat's fixed provider alone.
+    fn railDescriptors(self: *const ModelPicker, cx: anytype, out: []protocol.HarnessDescriptor) []protocol.HarnessDescriptor {
+        const catalog = self.state.read(cx).catalog.read(cx);
+        const list = catalog.harnessList();
+        var offered = rc.offeredHarnesses(list, self.allow_mock, out[0 .. out.len - 1]);
+        const in = self.inputs(cx);
+        const effective = rc.effectiveHarness(&in);
+        if (effective) |e| {
+            const present = for (offered) |d| {
+                if (d.id == e) break true;
+            } else false;
+            if (!present) for (list) |d| if (d.id == e and d.installed) {
+                std.mem.copyBackwards(protocol.HarnessDescriptor, out[1 .. offered.len + 1], offered);
+                out[0] = d;
+                offered = out[0 .. offered.len + 1];
+                break;
+            };
+        }
+        if (self.harnessLocked(cx)) {
+            for (offered) |d| if (effective != null and d.id == effective.?) {
+                out[0] = d;
+                return out[0..1];
+            };
+            return out[0..0];
+        }
+        return offered;
     }
 
     // ---- open / close / pick -----------------------------------------------------------
@@ -259,9 +316,6 @@ pub const ModelPicker = struct {
         if (self.open) return self.close(window, cx);
         self.open = true;
         self.page = .panel;
-        self.favorites_view = false;
-        const in = self.inputs(cx);
-        self.viewed = rc.effectiveHarness(&in);
         self.search.update(cx, TextInput.setText, .{""});
         self.active = self.selectedRowIndex(cx) orelse 0;
         window.focus(self.focus);
@@ -279,16 +333,6 @@ pub const ModelPicker = struct {
     fn onChipClick(self: *ModelPicker, _: *const zpui.ClickEvent, window: *Window, cx: *Context(ModelPicker)) void {
         self.toggle(window, cx);
     }
-
-    fn pickHarness(self: *ModelPicker, h: HarnessId, cx: *Context(ModelPicker)) void {
-        self.favorites_view = false;
-        self.viewed = h;
-        self.active = 0;
-        self.ensureLoaded(cx);
-        cx.notify();
-    }
-
-
 
     fn commitModel(self: *ModelPicker, h: HarnessId, id: []const u8, window: *Window, cx: *Context(ModelPicker)) void {
         self.draft_model_buf.clearRetainingCapacity();
@@ -369,10 +413,24 @@ pub const ModelPicker = struct {
         cx.notify();
     }
 
+    /// `show_compact_models`: open on the current model — its provider's
+    /// group at the top when the model sits near the start of it (one row of
+    /// the previous group stays above under the edge fade), else centred.
     fn showModels(self: *ModelPicker, window: *Window, cx: *Context(ModelPicker)) void {
         self.page = .models;
-        self.favorites_view = false;
-        self.active = self.selectedRowIndex(cx) orelse 0;
+        self.strip_viewed = null;
+        self.ensureLoaded(cx);
+        const selected = self.selectedRowIndex(cx) orelse 0;
+        self.active = selected;
+        var gbuf: [24]Group = undefined;
+        const gs = self.groups(cx, &gbuf);
+        var start: usize = 0;
+        for (gs) |g| if (g.start <= selected) {
+            start = g.start;
+        };
+        if (selected - start < @as(usize, @intFromFloat(compact_list_rows)) - 2) {
+            self.list_scroll.scrollToTopOfItem(start -| @intFromBool(start > 0));
+        } else self.list_scroll.scrollToItem(selected);
         window.focus(self.search.read(cx).focus);
         cx.notify();
     }
@@ -387,30 +445,7 @@ pub const ModelPicker = struct {
     fn onShowModels(self: *ModelPicker, _: *const zpui.ClickEvent, window: *Window, cx: *Context(ModelPicker)) void {
         self.showModels(window, cx);
     }
-    fn onShowProviders(self: *ModelPicker, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ModelPicker)) void {
-        self.page = .providers;
-        self.active = 0;
-        cx.notify();
-    }
     fn onBack(self: *ModelPicker, _: *const zpui.ClickEvent, window: *Window, cx: *Context(ModelPicker)) void {
-        self.showPanel(window, cx);
-    }
-    fn onProviderRow(self: *ModelPicker, ix: usize, _: *const zpui.ClickEvent, window: *Window, cx: *Context(ModelPicker)) void {
-        var hbuf: [16]protocol.HarnessDescriptor = undefined;
-        const offered = rc.offeredHarnesses(self.state.read(cx).catalog.read(cx).harnessList(), self.allow_mock, &hbuf);
-        if (ix == 0) {
-            self.favorites_view = true;
-            self.page = .models;
-            self.active = 0;
-            window.focus(self.search.read(cx).focus);
-            return cx.notify();
-        }
-        if (ix - 1 >= offered.len) return;
-        self.pickHarness(offered[ix - 1].id, cx);
-        self.draft.harness = offered[ix - 1].id;
-        self.draft.model = null;
-        if (self.onCanvas(cx)) composer_store.rememberHarness(cx.app, offered[ix - 1].id);
-        cx.emit(Picked{});
         self.showPanel(window, cx);
     }
     fn onToggleFast(self: *ModelPicker, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ModelPicker)) void {
@@ -480,23 +515,19 @@ pub const ModelPicker = struct {
             return cx.stopPropagation();
         }
         var buf: [256]Row = undefined;
-        const n = if (self.page == .models) self.rows(cx, &buf).len else blk: {
-            var hbuf: [16]protocol.HarnessDescriptor = undefined;
-            break :blk 1 + rc.offeredHarnesses(self.state.read(cx).catalog.read(cx).harnessList(), self.allow_mock, &hbuf).len;
-        };
+        const n = self.rows(cx, &buf).len;
         if (eq(u8, k, "escape")) {
             self.showPanel(window, cx);
         } else if (eq(u8, k, "down")) {
             if (n > 0) self.active = (self.active + 1) % n;
+            self.list_scroll.scrollToItem(self.active);
             cx.notify();
         } else if (eq(u8, k, "up")) {
             if (n > 0) self.active = (self.active + n - 1) % n;
+            self.list_scroll.scrollToItem(self.active);
             cx.notify();
         } else if (eq(u8, k, "enter")) {
-            if (self.page == .models) self.activate(self.active, window, cx) else {
-                const click: zpui.ClickEvent = undefined;
-                self.onProviderRow(self.active, &click, window, cx);
-            }
+            self.activate(self.active, window, cx);
         } else return;
         cx.stopPropagation();
     }
@@ -509,34 +540,106 @@ pub const ModelPicker = struct {
 
     pub const Row = struct { harness: HarnessId, model: *const protocol.Model };
 
-    fn matches(query: []const u8, m: *const protocol.Model) bool {
-        if (query.len == 0) return true;
-        return std.ascii.findIgnoreCase(m.label, query) != null or std.ascii.findIgnoreCase(m.id, query) != null;
+    /// `popover::match_rank`: 0 = prefix, 1 = substring (empty query: 1).
+    fn matchRank(query: []const u8, label: []const u8) ?usize {
+        const q = std.mem.trim(u8, query, " \t");
+        if (q.len == 0) return 1;
+        if (q.len <= label.len and std.ascii.eqlIgnoreCase(label[0..q.len], q)) return 0;
+        if (std.ascii.findIgnoreCase(label, q) != null) return 1;
+        return null;
     }
 
-    /// The visible rows for the viewed tab, filtered by the search query.
+    fn isFavorite(self: *const ModelPicker, cx: anytype, h: HarnessId, id: []const u8) bool {
+        const d = self.stickyDefaults(cx) orelse return false;
+        return d.isFavorite(h, id);
+    }
+
+    /// `scoped_model_rows`: every rail provider's models, starred first (a
+    /// chat's fixed provider: its own, starred first). A query ranks label
+    /// prefix < label substring < description hit, stars then input order
+    /// breaking ties (starred first across providers).
     pub fn rows(self: *const ModelPicker, cx: anytype, out: []Row) []Row {
         const catalog = self.state.read(cx).catalog.read(cx);
         const query = std.mem.trim(u8, self.search.read(cx).text(), " ");
+        var hbuf: [16]protocol.HarnessDescriptor = undefined;
+        const descs = self.railDescriptors(cx, &hbuf);
+        const locked = self.harnessLocked(cx);
         var n: usize = 0;
-        if (self.favorites_view) {
-            const d = self.stickyDefaults(cx) orelse return out[0..0];
-            for (d.favorites) |fav| {
-                const list = catalog.modelList(fav.harness) orelse continue;
-                for (list) |*m| if (std.mem.eql(u8, m.id, fav.model) and matches(query, m) and n < out.len) {
-                    out[n] = .{ .harness = fav.harness, .model = m };
+        if (query.len > 0) {
+            const Ranked = struct { rank: usize, unstarred: bool, ix: usize };
+            var keys: [256]Ranked = undefined;
+            var input_ix: usize = 0;
+            for (descs) |d| {
+                const list = catalog.modelList(d.id) orelse continue;
+                for (list) |*m| {
+                    defer input_ix += 1;
+                    if (n >= out.len) break;
+                    var buf: [512]u8 = undefined;
+                    const hay = std.fmt.bufPrint(&buf, "{s} {s}", .{ m.description orelse "", m.label }) catch m.label;
+                    const by_label = matchRank(query, m.label);
+                    const by_desc: ?usize = if (matchRank(query, hay)) |r| r + 2 else null;
+                    const rank = if (by_label) |l| (if (by_desc) |dd| @min(l, dd) else l) else by_desc orelse continue;
+                    out[n] = .{ .harness = d.id, .model = m };
+                    keys[n] = .{ .rank = rank, .unstarred = !self.isFavorite(cx, d.id, m.id), .ix = input_ix };
                     n += 1;
-                };
+                }
+            }
+            // Insertion sort (lists are short) on the Rust sort key.
+            var i: usize = 1;
+            while (i < n) : (i += 1) {
+                const kr = keys[i];
+                const rr = out[i];
+                var j = i;
+                while (j > 0 and rankedLess(kr, keys[j - 1], locked)) : (j -= 1) {
+                    keys[j] = keys[j - 1];
+                    out[j] = out[j - 1];
+                }
+                keys[j] = kr;
+                out[j] = rr;
             }
             return out[0..n];
         }
-        const in = self.inputs(cx);
-        const h = self.viewed orelse rc.effectiveHarness(&in) orelse return out[0..0];
-        const list = catalog.modelList(h) orelse return out[0..0];
-        for (list) |*m| {
-            if (!matches(query, m) or n >= out.len) continue;
-            out[n] = .{ .harness = h, .model = m };
-            n += 1;
+        // Unsearched: starred first (stable), then the rest in provider order.
+        for ([_]bool{ true, false }) |starred| {
+            for (descs) |d| {
+                const list = catalog.modelList(d.id) orelse continue;
+                for (list) |*m| {
+                    if (self.isFavorite(cx, d.id, m.id) != starred or n >= out.len) continue;
+                    out[n] = .{ .harness = d.id, .model = m };
+                    n += 1;
+                }
+            }
+        }
+        return out[0..n];
+    }
+
+    fn rankedLess(a: anytype, b: @TypeOf(a), locked: bool) bool {
+        if (locked) {
+            if (a.rank != b.rank) return a.rank < b.rank;
+            if (a.unstarred != b.unstarred) return !a.unstarred;
+        } else {
+            if (a.unstarred != b.unstarred) return !a.unstarred;
+            if (a.rank != b.rank) return a.rank < b.rank;
+        }
+        return a.ix < b.ix;
+    }
+
+    /// One provider tab: the starred run (null) or a provider's run.
+    pub const Group = struct { harness: ?HarnessId, start: usize };
+
+    /// `compact_groups`: where each provider's group starts in the
+    /// unsearched list — starred models first, then one run per provider.
+    pub fn groups(self: *const ModelPicker, cx: anytype, out: []Group) []Group {
+        var buf: [256]Row = undefined;
+        const list = self.rows(cx, &buf);
+        var n: usize = 0;
+        for (list, 0..) |r, ix| {
+            const g: ?HarnessId = if (self.isFavorite(cx, r.harness, r.model.id)) null else r.harness;
+            if (n == 0 or out[n - 1].harness != g) {
+                if (n == out.len) break;
+                out[n] = .{ .harness = g, .start = ix };
+                n += 1;
+            }
         }
         return out[0..n];
     }
@@ -615,7 +718,9 @@ pub const ModelPicker = struct {
     const header_height: f32 = 48;
     const header_height_single: f32 = 36;
     const fast_button_width: f32 = 32;
-    const list_header: f32 = 40;
+    /// `LIST_HEADER`: the back button with the provider tab strip (one row
+    /// plus the card inset above and below, 40), then the search row (40).
+    const list_header: f32 = 80;
     /// Card 256 − 2 border − 2 × 4 inset − 2 × 8 slider padding.
     const slider_width: f32 = compact_width - 2 - 2 * chrome.card_inset - 16;
 
@@ -630,7 +735,6 @@ pub const ModelPicker = struct {
         const content = switch (self.page) {
             .panel => zpui.intoAnyElement(self.renderPanel(&theme, cx)),
             .models => zpui.intoAnyElement(self.renderModels(&theme, cx)),
-            .providers => zpui.intoAnyElement(self.renderProviders(&theme, cx)),
         };
         const card = chrome.card(&theme).p(px(0)).w(px(compact_width)).flex().flexCol()
             .id("model-popover")
@@ -642,12 +746,64 @@ pub const ModelPicker = struct {
         return chrome.frosted(&base, chrome.card_radius, chrome.menu_blur, card);
     }
 
-    fn listHeader(self: *ModelPicker, theme: *const Theme, cx: *Context(ModelPicker)) zpui.Div {
-        return div().h(px(list_header)).flexNone().px(px(chrome.card_inset)).borderB1().borderColor(theme.hairline(0.08))
-            .flex().itemsCenter().gap(px(4))
-            .child(chrome.menuRow(theme, "compact-list-back", false).role(.button).ariaLabel("Back").flexNone().onClick(cx.listener(ModelPicker.onBack))
-                .child(chrome.icon(.alt_arrow_left, 14, theme.text_muted)))
-            .child(div().flex1().minW0().textSize(rems(13)).child(self.search));
+    /// `compact_model_back_header`: back to the panel, then the providers
+    /// as tabs. Each tab jumps the list to its group; the group at the top of
+    /// the scroll lights its tab. The strip fades at both edges over the tabs
+    /// scrolled past them.
+    fn backHeader(self: *ModelPicker, theme: *const Theme, cx: *Context(ModelPicker)) zpui.Div {
+        const searching = std.mem.trim(u8, self.search.read(cx).text(), " ").len > 0;
+        var gbuf: [24]Group = undefined;
+        const gs: []Group = if (searching) gbuf[0..0] else self.groups(cx, &gbuf);
+        // Rows share one pitch, so the scroll offset names the top row.
+        const top: usize = @intFromFloat(@max(@round(-self.list_scroll.offset().y / (compact_row_height + chrome.menu_gap)), 0));
+        var current: ?usize = null;
+        for (gs, 0..) |g, i| if (g.start <= top) {
+            current = i;
+        };
+        if (current != self.strip_viewed) {
+            self.strip_viewed = current;
+            if (current) |i| self.strip_scroll.scrollToItem(i);
+        }
+        var header = div().h(px(compact_row_height + 2 * chrome.card_inset)).flexNone().px(px(chrome.card_inset))
+            .flex().itemsCenter().gap(px(chrome.menu_gap))
+            .child(div().id("compact-model-back").role(.button).ariaLabel("Back").flexNone().size(px(compact_row_height))
+                .rounded(px(chrome.menu_item_radius)).flex().itemsCenter().justifyCenter().cursorPointer()
+                .hover(sb.bg(theme.ink(0.05)))
+                .onClick(cx.listener(ModelPicker.onBack))
+                .child(chrome.icon(.alt_arrow_left, 14, theme.text_muted)));
+        if (gs.len > 0) {
+            var tabs = div().id("compact-group-strip").flex1().minW0().hFull().flex().itemsCenter().gap(px(chrome.menu_gap))
+                .overflowXScroll().trackScroll(self.strip_scroll);
+            for (gs, 0..) |g, i| {
+                const viewed = current == i;
+                const mark: chrome.Icon, const tint: ?zpui.Hsla, const name: []const u8 = if (g.harness) |h| blk: {
+                    const m, const t = chrome.harnessMark(h);
+                    break :blk .{ m, t, chrome.harnessName(h) };
+                } else .{ .star_bold, null, "Starred" };
+                var tab = div().id(.{ "compact-group", g.start }).role(.button).ariaLabel(zpui.fmt("Jump to {s}", .{name}))
+                    .tooltipWith(chrome.TipData{ .text = name, .dark = theme.appearance.isDark() }, chrome.buildTooltip)
+                    .flexNone().size(px(compact_row_height)).rounded(px(chrome.menu_item_radius))
+                    .flex().itemsCenter().justifyCenter().cursorPointer()
+                    .onClick(cx.listenerWith(g.start, ModelPicker.onGroupTab))
+                    .child(chrome.icon(mark, 14, tint orelse if (viewed) theme.text else theme.text_muted));
+                tab = if (viewed) tab.bg(theme.ink(0.08)) else tab.opacity(0.7).hover(sb.bg(theme.ink(0.05)).opacity(1.0));
+                tabs = tabs.child(tab);
+            }
+            header = header.child(tabs);
+        }
+        return header;
+    }
+
+    fn onGroupTab(self: *ModelPicker, start: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(ModelPicker)) void {
+        self.active = start;
+        self.list_scroll.scrollToTopOfItem(start);
+        cx.notify();
+    }
+
+    /// The search row under the tab strip (full-bleed hairline below).
+    fn searchRow(self: *ModelPicker, theme: *const Theme) zpui.Div {
+        return div().h(px(40)).flexNone().px(px(chrome.card_inset + 8)).borderB1().borderColor(theme.hairline(0.08))
+            .flex().itemsCenter().child(div().flex1().minW0().textSize(rems(13)).child(self.search));
     }
 
     fn renderModels(self: *ModelPicker, theme: *const Theme, cx: *Context(ModelPicker)) zpui.Div {
@@ -657,13 +813,11 @@ pub const ModelPicker = struct {
         const selected = rc.selectedModel(&in);
         const catalog = self.state.read(cx).catalog.read(cx);
         var col = div().id("model-menu-scroll").flex().flexCol().gap(px(chrome.menu_gap)).p(px(chrome.card_inset))
-            .h(px(compactListHeight(list.len))).overflowYScroll();
+            .h(px(compactListHeight(list.len))).overflowYScroll().trackScroll(self.list_scroll);
         if (list.len == 0) {
-            const viewed = self.viewed orelse rc.effectiveHarness(&in);
+            const viewed = rc.effectiveHarness(&in);
             const note = if (catalog.harnesses == null or (viewed != null and catalog.modelList(viewed.?) == null))
                 "Loading models…"
-            else if (self.favorites_view)
-                "No starred models yet"
             else
                 "No models found";
             col = col.child(div().px(px(8)).py(px(10)).textSize(rems(12)).textColor(theme.text_muted).child(note));
@@ -689,39 +843,7 @@ pub const ModelPicker = struct {
                     .child(chrome.icon(if (fav) .star_bold else .star, 13, if (fav) theme.text else theme.text_muted)));
             col = col.child(row);
         }
-        return div().flex().flexCol().child(self.listHeader(theme, cx)).child(col);
-    }
-
-    fn renderProviders(self: *ModelPicker, theme: *const Theme, cx: *Context(ModelPicker)) zpui.Div {
-        var hbuf: [16]protocol.HarnessDescriptor = undefined;
-        const offered = rc.offeredHarnesses(self.state.read(cx).catalog.read(cx).harnessList(), self.allow_mock, &hbuf);
-        const in = self.inputs(cx);
-        const effective = rc.effectiveHarness(&in);
-        var col = div().flex().flexCol().gap(px(chrome.menu_gap)).p(px(chrome.card_inset)).h(px(compactListHeight(offered.len + 1)));
-        var ix: usize = 0;
-        while (ix <= offered.len) : (ix += 1) {
-            const is_star = ix == 0;
-            const sel = !is_star and effective == offered[ix - 1].id;
-            const mark, const tint = if (is_star) .{ chrome.Icon.star_bold, @as(?zpui.Hsla, null) } else chrome.harnessMark(offered[ix - 1].id);
-            var row = div().id(.{ "compact-provider", ix }).role(.list_box_option).ariaLabel(if (is_star) "Starred" else offered[ix - 1].name).ariaSelected(sel).h(px(compact_row_height)).flexNone().px(px(8))
-                .rounded(px(chrome.menu_item_radius)).flex().itemsCenter().gap(px(8)).cursorPointer().textColor(theme.text)
-                .onClick(cx.listenerWith(ix, ModelPicker.onProviderRow))
-                .onHover(cx.listenerWith(ix, ModelPicker.onHoverRow));
-            row = if (sel) chrome.lightPlate(theme, 1).apply(row) else row.border1().borderColor(zpui.hsla(0, 0, 0, 0));
-            if (!sel and ix == self.active) row = row.bg(theme.ink(0.05));
-            row = row.child(chrome.icon(mark, 14, tint orelse theme.text_muted))
-                .child(div().flex1().minW0().truncate().textSize(rems(12)).fontWeight(500)
-                .child(if (is_star) "Starred" else offered[ix - 1].name));
-            if (sel) row = row.child(chrome.icon(.check, 13, theme.text_muted));
-            col = col.child(row);
-        }
-        return div().flex().flexCol()
-            .child(div().h(px(list_header)).flexNone().px(px(chrome.card_inset)).borderB1().borderColor(theme.hairline(0.08))
-                .flex().itemsCenter().gap(px(4))
-                .child(chrome.menuRow(theme, "compact-provider-back", false).role(.button).ariaLabel("Back").flexNone().onClick(cx.listener(ModelPicker.onBack))
-                    .child(chrome.icon(.alt_arrow_left, 14, theme.text_muted)))
-                .child(div().textSize(rems(13)).textColor(theme.text_muted).child("Providers")))
-            .child(col);
+        return div().flex().flexCol().child(self.backHeader(theme, cx)).child(self.searchRow(theme)).child(col);
     }
 
     const SliderPaint = struct { fraction: f32, count: usize, filled: zpui.Hsla, open: zpui.Hsla };
@@ -742,14 +864,13 @@ pub const ModelPicker = struct {
         const in = self.inputs(cx);
         const ladder = rc.traitLadder(&in);
         const effort = rc.effectiveReasoning(&in);
-        const harness = rc.effectiveHarness(&in);
         const label = rc.modelLabel(&in) orelse "Default";
         const m = rc.selectedModel(&in);
         var selected_ix: usize = 0;
         for (ladder, 0..) |l, i| if (effort == l) {
             selected_ix = i;
         };
-        // Header: provider button, title (effort over model name), fast mode.
+        // Header: title (effort over model name), fast mode.
         var title = div().id("compact-select-model").role(.button).ariaLabel(zpui.fmt("{s} · {s} · Change model", .{ if (ladder.len > 0) rc.reasoningLabel(ladder[selected_ix]) else "Default", label })).flex1().minW0().hFull().px(px(8)).rounded(px(chrome.menu_item_radius))
             .flex().flexCol().itemsStart().justifyCenter().cursorPointer()
             .hover(sb.bg(theme.ink(0.05)))
@@ -765,15 +886,6 @@ pub const ModelPicker = struct {
                 .child(div().flexNone().opacity(0.55).child(chrome.icon(.alt_arrow_right, 10, theme.text_muted))));
         }
         var header = div().h(px(if (ladder.len > 0) header_height else header_height_single)).flexNone().flex().gap(px(chrome.card_inset));
-        if (harness) |h| {
-            const mark, const tint = chrome.harnessMark(h);
-            header = header.child(div().id("compact-select-provider").role(.button).ariaLabel(zpui.fmt("{s} · Change provider", .{chrome.harnessName(h)})).w(px(fast_button_width)).hFull().flexNone()
-                .rounded(px(chrome.menu_item_radius)).flex().itemsCenter().justifyCenter().cursorPointer()
-                .hover(sb.bg(theme.ink(0.05)))
-                .tooltipWith(chrome.TipData{ .text = chrome.harnessName(h), .dark = theme.appearance.isDark() }, chrome.buildTooltip)
-                .onClick(cx.listener(ModelPicker.onShowProviders))
-                .child(chrome.icon(mark, 16, tint orelse theme.text_muted)));
-        }
         header = header.child(title);
         var fast_option: ?*const protocol.ModelOption = null;
         if (m) |mm| for (mm.options) |*o| if (std.mem.eql(u8, o.id, "fastMode")) {

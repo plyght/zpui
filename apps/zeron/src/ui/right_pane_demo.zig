@@ -129,7 +129,7 @@ const Root = struct {
         const icons = div().flexNone().flex().flexRow().itemsCenter().gap(px(4))
             .child(ui.button.headerIcon("expand-changes", .expand_arrows, "Expand panel", theme))
             .child(ui.button.headerIcon("toggle-files-panel", .file_tree, "Show files panel", theme))
-            .child(ui.button.headerIcon("toggle-changes", .sidebar_minimalistic, "Toggle right sidebar", theme));
+            .child(ui.button.headerIconWith("toggle-changes", ui.icon.sidebarGlyph(1, true, 16, theme.text_muted), "Toggle right sidebar", theme));
         return div().absolute().left(px(0)).top(px(0)).right(px(0)).h(px(zt.layout.titlebar_height))
             .pt(px(zt.layout.titlebar_top_pad)).pl(px(7)).pr(px(6)).flex().flexRow().itemsCenter().gap(px(4))
             .child(strip).child(icons);

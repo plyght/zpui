@@ -48,6 +48,18 @@ const is_linux = builtin.os.tag == .linux;
 /// Half-width of the invisible pane-resize hit target straddling a seam.
 const resize_hitbox_half: f32 = 10;
 
+/// `shell_clock_wake`: when the shell next has render-only clock pixels to
+/// repaint, as of `n` — every second while the selected chat is Working (the
+/// trailer's elapsed timer and flavour word), else the next wall-clock minute
+/// for relative "5m"/"2h" labels. State transitions (staleness, device
+/// presence, send grace) arrive as store notifications instead
+/// (`WorkspaceStore.nextClockTransition`). Pure.
+pub fn shellClockWake(ws: *const model.WorkspaceStore, n: model.time.Timestamp) model.time.Timestamp {
+    const working = if (ws.selected_chat) |id| ws.indicatorFor(id, n) == .working else false;
+    if (working) return n.addMillis(1000);
+    return .{ .secs = (@divFloor(n.secs, 60) + 1) * 60 };
+}
+
 pub const SidebarResize = struct {};
 pub const RightPaneResize = struct {};
 
@@ -130,6 +142,10 @@ pub const Shell = struct {
     /// [motion] The window's resolved reduced-motion flag, sampled each
     /// render (`Shell::reduced_motion`): tweens and edge bounces snap.
     reduced_motion: bool = false,
+    /// [clock] `ClockRedraw`: the one-shot redraw for the next clock-driven
+    /// change (`shellClockWake`), re-armed on every render.
+    clock_task: zpui.Task(void) = .none,
+    clock_wake_at: ?model.time.Timestamp = null,
     /// [motion] Resize-drag edge latches + bounces (`*_resize_edge`,
     /// `*_edge_bounce`): a drag pressed past a limit nudges 5 px once.
     sidebar_resize_edge: ?motion.ResizeEdge = null,
@@ -198,6 +214,7 @@ pub const Shell = struct {
     }
 
     pub fn deinit(self: *Shell, app: *App) void {
+        self.clock_task.cancel();
         wiring_mod.detach(self, app); // [wiring]
         self.subs.deinit(self.gpa);
         self.palette_subs.deinit(self.gpa);
@@ -777,7 +794,34 @@ pub const Shell = struct {
         return self.state.read(cx).gate(cx);
     }
 
+    /// `ClockRedraw::arm`: notify at `wake` unless a redraw is already due no
+    /// later. Idle shells sleep until that deadline instead of polling.
+    fn armClock(self: *Shell, wake: model.time.Timestamp, n: model.time.Timestamp, cx: *Context(Shell)) void {
+        if (self.clock_task.header != null) if (self.clock_wake_at) |at| if (at.order(wake) != .gt) return;
+        self.clock_task.cancel();
+        self.clock_wake_at = wake;
+        const delay_ms: u64 = @intCast(@max(wake.millisSince(n), 0));
+        self.clock_task = cx.timer(delay_ms * std.time.ns_per_ms, onClock) catch {
+            self.clock_wake_at = null;
+            return;
+        };
+    }
+
+    fn onClock(self: *Shell, cx: *Context(Shell)) void {
+        self.clock_task.detach();
+        self.clock_wake_at = null;
+        cx.notify();
+    }
+
     pub fn render(self: *Shell, window: *Window, cx: *Context(Shell)) zpui.Div {
+        // [clock] Every repaint (state frame, input, or the clock firing)
+        // reschedules the next clock-driven one; the sidebar and transcript
+        // follow this view's notifications.
+        {
+            const ws = self.state.read(cx).workspace.read(cx);
+            const n = prefs_mod.get(cx).now(ws.io);
+            self.armClock(shellClockWake(ws, n), n, cx);
+        }
         // [liquid-glass] Glass material follows zeron's theme, not the OS appearance.
         window.glass_dark = ui.theme.get(cx).appearance == .dark;
         syncWindowBackground(window, cx);

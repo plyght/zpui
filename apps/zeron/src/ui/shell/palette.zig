@@ -130,7 +130,7 @@ pub const Palette = struct {
         var chats: std.ArrayList(*const engine.protocol.Chat) = .empty;
         defer chats.deinit(arena);
         for (ws.chats()) |*c| {
-            if (c.parentChatId != null) continue;
+            if (!c.isTopLevel()) continue;
             const project = if (ws.spaceForChat(c)) |s| view.spaceDisplayName(s) else "~";
             const hay = std.fmt.allocPrint(arena, "{s} {s} {s} {s}", .{ c.title orelse "New session", project, ws.deviceName(c.deviceId) orelse "", if (c.sourceContext) |sc| sc.branch else "" }) catch continue;
             defer if (arena.ptr == self.gpa.ptr) self.gpa.free(hay);

@@ -168,7 +168,37 @@ const RowData = struct {
     remote: bool,
     selected: bool,
     archived: bool,
+    /// Draw the row's project tile (a project group's header wears it instead).
+    project_icon: bool = true,
 };
+
+/// `sidebar_project_group`: project-mode group of a chat as (key, label).
+/// Projects sharing a repository identity fold into one group named for
+/// their representative space; project-less sessions group per device and
+/// read as `~`. Strings live in the frame arena.
+fn projectGroup(ws: *const model.WorkspaceStore, c: *const Chat) struct { key: []const u8, label: []const u8 } {
+    if (ws.spaceForChat(c)) |s| return .{ .key = projectKeyString(s), .label = view.spaceDisplayName(ws.representativeSpace(s)) };
+    if (c.spaceId) |sid| return .{ .key = sid, .label = "?" };
+    return .{ .key = zpui.fmt("home:{s}", .{c.deviceId}), .label = "~" };
+}
+
+/// `project_key` in its Rust string form (frame arena).
+fn projectKeyString(s: *const engine.protocol.Space) []const u8 {
+    const k = view.projectKey(s);
+    return if (k.repository_id) |r| zpui.fmt("repo:{s}", .{r}) else s.id;
+}
+
+/// The checkout a group's `+` opens a new chat on: this device's checkout
+/// of the project keyed `key` when it has one (`project_members` order).
+fn groupSpace(ws: *const model.WorkspaceStore, gpa: std.mem.Allocator, key: []const u8) ?[]const u8 {
+    for (ws.spaces()) |*s| {
+        if (!std.mem.eql(u8, projectKeyString(s), key)) continue;
+        const members = ws.projectMembers(gpa, s) catch return s.id;
+        defer gpa.free(members);
+        return if (members.len > 0) members[0].id else s.id;
+    }
+    return null;
+}
 
 pub const Sidebar = struct {
     gpa: std.mem.Allocator,
@@ -856,6 +886,8 @@ pub const Sidebar = struct {
         selected_id: ?[]const u8,
     ) RowData {
         const space = ws.spaceForChat(c);
+        // The artwork and monogram are shared by every checkout of a project.
+        const rep_space = if (space) |s| ws.representativeSpace(s) else null;
         const project: []const u8 = if (space) |s| view.spaceDisplayName(s) else if (c.spaceId == null) "~" else "?";
         const dev_name = ws.deviceName(c.deviceId);
         const folder = if (dev_name) |d| zpui.fmt("{s} @ {s}", .{ project, d }) else project;
@@ -876,9 +908,9 @@ pub const Sidebar = struct {
             .status = status,
             .title = title,
             .folder = folder,
-            .project_name = if (space) |s| view.spaceDisplayName(s) else "Home",
-            .project_seed = if (space) |s| s.path else "home",
-            .space_path = if (space) |s| (if (remote) null else s.path) else null,
+            .project_name = if (rep_space) |s| view.spaceDisplayName(s) else "Home",
+            .project_seed = if (rep_space) |s| s.path else "home",
+            .space_path = if (space) |s| localCheckoutPath(ws, s) else null,
             .branch = branch,
             .pr = if (prefs.show_pull_request) (prefs.pullRequest(c.id) orelse if (self.livePr(c)) |pr| pr.number else null) else null,
             .time_ago = ago,
@@ -886,6 +918,14 @@ pub const Sidebar = struct {
             .selected = if (selected_id) |s| std.mem.eql(u8, s, c.id) else false,
             .archived = c.archived,
         };
+    }
+
+    /// This device's checkout of `s`'s project (artwork is read locally).
+    fn localCheckoutPath(ws: *const model.WorkspaceStore, s: *const engine.protocol.Space) ?[]const u8 {
+        const local = ws.local_device_id orelse return null;
+        if (std.mem.eql(u8, s.deviceId, local)) return s.path;
+        for (ws.spaces()) |*m| if (std.mem.eql(u8, m.deviceId, local) and view.sameProject(m, s)) return m.path;
+        return null;
     }
 
     fn lessThan(sort: prefs_mod.Sort, a: *const Chat, b: *const Chat) bool {
@@ -956,8 +996,8 @@ pub const Sidebar = struct {
         // Archived shelf.
         var archived: std.ArrayList(RowData) = .empty;
         for (ws.chats()) |*c| {
-            if (!c.archived or c.parentChatId != null) continue;
-            if (prefs.space_filter) |f| if (!std.mem.eql(u8, c.spaceId orelse "", f)) continue;
+            if (!c.archived or !c.isTopLevel()) continue;
+            if (prefs.space_filter) |f| if (!ws.projectFilterMatches(f, c)) continue;
             archived.append(arena, self.buildRow(ws, c, ws.displayStatusFor(c, now), now, prefs, ws.selected_chat)) catch {};
         }
         std.sort.block(RowData, archived.items, prefs.sort, struct {
@@ -989,7 +1029,7 @@ pub const Sidebar = struct {
                 const grouped = prefs.organization != .in_one_list;
                 if (grouped or self.sessions_open) for (regular.items) |*r| {
                     if (grouped) {
-                        const key: []const u8 = if (prefs.organization == .by_device) r.chat.deviceId else (r.chat.spaceId orelse "~");
+                        const key: []const u8 = if (prefs.organization == .by_device) r.chat.deviceId else projectGroup(ws, r.chat).key;
                         if (self.isCollapsed(key)) continue;
                     }
                     order.append(arena, .{ .key = r.chat.id, .height = rh(prefs, r) }) catch {};
@@ -1268,8 +1308,9 @@ pub const Sidebar = struct {
         var groups: std.ArrayList(Group) = .empty;
         for (rows) |*r| {
             const by_device = prefs.organization == .by_device;
-            const key: []const u8 = if (by_device) r.chat.deviceId else (r.chat.spaceId orelse "~");
-            const label: []const u8 = if (by_device) (ws.deviceName(r.chat.deviceId) orelse "Unknown device") else r.project_name;
+            const pg = if (by_device) null else projectGroup(ws, r.chat);
+            const key: []const u8 = if (pg) |g| g.key else r.chat.deviceId;
+            const label: []const u8 = if (pg) |g| g.label else (ws.deviceName(r.chat.deviceId) orelse "Unknown device");
             const g = for (groups.items) |*g| {
                 if (std.mem.eql(u8, g.key, key)) break g;
             } else blk: {
@@ -1292,12 +1333,24 @@ pub const Sidebar = struct {
             const open = !self.isCollapsed(g.key);
             const label = if (open) g.label else zpui.fmt("{s} ({d})", .{ g.label, g.rows.items.len });
             const tone = theme.text_muted.opacity(0.5);
+            // A project group wears the project icon on its header instead of
+            // repeating it on every row.
+            const project_group = prefs.organization == .by_project;
+            if (project_group) for (g.rows.items) |r| {
+                @constCast(r).project_icon = false;
+            };
+            const group_icon: ?zpui.Div = if (project_group and prefs.show_project_icon and g.rows.items.len > 0) blk: {
+                var lead = g.rows.items[0].*;
+                lead.selected = false;
+                break :blk div().size(px(harness_icon_size)).flexNone().child(self.projectTile(&lead, theme, cx));
+            } else null;
             const header = div().id(.{ "sidebar-group", gi }).role(.button).ariaLabel(g.label).ariaExpanded(open)
                 .flex().flexRow().itemsCenter().gap(px(8)).h(px(disclosure_header_height)).px(px(zt.layout.space_sm)).cursorPointer()
                 .onClick(cx.listenerWith(gi, Sidebar.toggleGroup))
+                .child(group_icon)
                 .child(div().minW0().flex().textSize(rems(12)).fontWeight(500).textColor(tone).child(ui.effects.fadedText(label, .{})))
                 .child(div().flex1())
-                .child(if (prefs.organization == .by_project and !std.mem.eql(u8, g.key, "~"))
+                .child(if (project_group and groupSpace(ws, arena, g.key) != null)
                     div().id(.{ "group-new-chat", gi }).role(.button).ariaLabel("New chat in project").size(px(20)).flexNone().flex().itemsCenter().justifyCenter()
                         .rounded(px(6)).cursorPointer().hover(sb.bg(theme.glassHover()))
                         .onClick(cx.listenerWith(gi, Sidebar.onGroupNewChat))
@@ -1329,9 +1382,11 @@ pub const Sidebar = struct {
     fn onGroupNewChat(self: *Sidebar, gi: usize, _: *const zpui.ClickEvent, _: *Window, cx: *Context(Sidebar)) void {
         cx.stopPropagation();
         if (gi >= self.group_keys.items.len) return;
-        const key = self.gpa.dupe(u8, self.group_keys.items[gi]) catch return;
-        defer self.gpa.free(key);
         const ws = self.state.read(cx).workspace;
+        // On this device's checkout when it has one, never silently on a
+        // possibly offline machine just because it cloned first.
+        const key = self.gpa.dupe(u8, groupSpace(ws.read(cx), self.gpa, self.group_keys.items[gi]) orelse return) catch return;
+        defer self.gpa.free(key);
         ws.update(cx, model.WorkspaceStore.selectChat, .{@as(?[]const u8, null)});
         ws.update(cx, model.WorkspaceStore.selectSpace, .{@as(?[]const u8, key)});
         cx.emit(NewSession{});
@@ -1450,7 +1505,7 @@ pub const Sidebar = struct {
 
         // Harness + project icons.
         const harness: ?zpui.elements.Svg = if (prefs.show_harness) (if (r.chat.config) |cfg| icon.harness(cfg.harness, harness_icon_size, subline, if (archived_muted) 0.4 else 0.8) else null) else null;
-        const project_icon: ?zpui.Div = if (prefs.show_project_icon)
+        const project_icon: ?zpui.Div = if (prefs.show_project_icon and r.project_icon)
             div().flexNone().opacity(if (archived_muted) 0.4 else 1.0).child(self.projectTile(r, theme, cx))
         else
             null;
@@ -1477,9 +1532,20 @@ pub const Sidebar = struct {
                 .child(harness)
                 .child(project_icon)
                 .child(self.titleCell(r));
-            if (r.remote or hovered) line = line.child(corner);
+            // Compact trailing cluster, right-packed: the PR badge sits LEFT
+            // of one fixed 30px slot that shows the relative time and swaps to
+            // the archive affordance while the row is hovered. No remote
+            // globe: the fixed slot keeps the column aligned across rows.
             if (r.pr) |n| line = line.child(self.prBadge(r, n, theme));
-            line = line.child(div().w(px(30)).flexNone().whitespaceNowrap().textRight().textSize(rems(11)).lineHeight(px(14)).textColor(subline).child(r.time_ago));
+            var slot = div().id(.{ "row-corner", ix }).w(px(30)).h(px(14)).flexNone().flex().itemsCenter().justifyEnd()
+                .ariaLabel(if (hovered) (if (r.archived) "Unarchive" else "Archive") else "Session time");
+            slot = if (hovered)
+                slot.role(.button).cursorPointer().onClick(cx.listenerWith(ix, Sidebar.onArchiveClick))
+                    .tooltipWith(@as([]const u8, if (r.archived) "Unarchive session" else "Archive session"), ui.tooltip.buildAbove)
+                    .child(icon.of(if (r.archived) .archive_up_minimalistic else .archive_minimalistic, harness_icon_size, theme.text_muted))
+            else
+                slot.child(div().whitespaceNowrap().textRight().textSize(rems(11)).lineHeight(px(14)).textColor(subline).child(r.time_ago));
+            line = line.child(slot);
             return row.child(line);
         }
 
@@ -1514,9 +1580,13 @@ pub const Sidebar = struct {
         var tag: ?[]const u8 = null;
         var offline = false;
         if (prefs.space_filter) |f| if (ws.space(f)) |s| {
-            label = view.spaceDisplayName(s);
-            var buf: [96]u8 = undefined;
-            const t, const off = ws.spaceDeviceTag(&buf, s, now);
+            // The filter names the whole repository: its representative's name
+            // and every device holding a checkout.
+            label = view.spaceDisplayName(ws.representativeSpace(s));
+            const arena = zpui.window.arena_mod.frameAllocator();
+            const members = ws.projectMembers(arena, s) catch &.{};
+            var buf: [160]u8 = undefined;
+            const t, const off = ws.projectDeviceTag(&buf, members, now);
             tag = zpui.fmt("{s}", .{t});
             offline = off;
         };
@@ -1536,8 +1606,7 @@ pub const Sidebar = struct {
             .cursorPointer()
             .onClick(cx.listener(Sidebar.onSpacesTrigger))
             .child(icon.of(.folder, 16, theme.text_muted))
-            .child(name_group)
-            .child(icon.of(.alt_arrow_down, 14, theme.text_muted.opacity(0.6)));
+            .child(name_group);
         const spaces_exit = menuExit(self.spaces_menu_open, &self.spaces_menu_exit, cx.app.executor.now());
         if (self.spaces_menu_open or spaces_exit != null) trigger = trigger.child(ui.popover.anchoredBelowExit(self.renderSpacesMenu(theme, prefs, ws, cx), spaces_exit));
 
@@ -1569,18 +1638,23 @@ pub const Sidebar = struct {
             .child(icon.of(.folder, 16, theme.text_muted))
             .child(div().flex1().child("All projects"))
             .child(if (prefs.space_filter == null) icon.of(.check, 14, theme.text_muted) else null));
-        const spaces = ws.spacesSorted(arena) catch &.{};
-        var buf: [96]u8 = undefined;
-        for (spaces, 0..) |s, i| {
+        // One row per repository across devices, carrying its local-first
+        // checkout's id; the host tag keeps same-named projects apart.
+        const projects = ws.projects(arena) catch &.{};
+        const filter_key: ?[]const u8 = if (prefs.space_filter) |f| (if (ws.space(f)) |fs| projectKeyString(fs) else f) else null;
+        var buf: [160]u8 = undefined;
+        for (projects, 0..) |members, i| {
+            const s = members[0];
+            const rs = ws.representativeSpace(s);
             self.menu_space_ids.append(self.gpa, self.gpa.dupe(u8, s.id) catch continue) catch {};
-            const active = if (prefs.space_filter) |f| std.mem.eql(u8, f, s.id) else false;
-            const tag, _ = ws.spaceDeviceTag(&buf, s, prefs.now(ws.io));
+            const active = if (filter_key) |k| std.mem.eql(u8, k, projectKeyString(s)) else false;
+            const tag, _ = ws.projectDeviceTag(&buf, members, prefs.now(ws.io));
             card = card.child(ui.popover.menuRow(theme, active).id(.{ "spaces-row", i }).role(.menu_item)
                 .onClick(cx.listenerWith(i, Sidebar.onPickSpace))
                 .onMouseDown(.right, cx.listenerWith(i, Sidebar.onSpaceContext)) // [wiring]
-                .child(ui.badge.monogram(view.spaceDisplayName(s), s.path, 16, false, null, theme))
+                .child(ui.badge.monogram(view.spaceDisplayName(rs), rs.path, 16, false, null, theme))
                 .child(div().flex1().minW0().flex().itemsCenter().gap(px(6))
-                    .child(ui.effects.fadedText(view.spaceDisplayName(s), .{}))
+                    .child(ui.effects.fadedText(view.spaceDisplayName(rs), .{}))
                     .child(div().textSize(rems(10)).textColor(theme.text_muted.opacity(0.6)).whitespaceNowrap().child(zpui.fmt("{s}", .{tag}))))
                 .child(if (active) icon.of(.check, 14, theme.text_muted) else null));
         }

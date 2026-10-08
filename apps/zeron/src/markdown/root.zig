@@ -17,6 +17,7 @@ pub const mend = @import("mend.zig");
 pub const json = @import("json.zig");
 pub const cmark = @import("cmark/parse.zig");
 pub const inline_code_links = @import("inline_code_links.zig");
+pub const attachment_mentions = @import("attachment_mentions.zig");
 
 pub const Range = model.Range;
 pub const Block = model.Block;

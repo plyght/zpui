@@ -816,6 +816,12 @@ pub const UiSettings = struct {
     wallpaperSource: ?[]const u8 = null,
     wallpaperHistory: []const []const u8 = &.{},
     newThreadBackgroundEffect: NewThreadBackgroundEffect = .none,
+    /// Stable native Codex voice id only; devices and microphone state are
+    /// never persisted. (Voice chat itself is not ported; kept for file
+    /// compatibility.)
+    codexVoice: ?[]const u8 = null,
+    /// Local preference: never transfers an active call or credentials.
+    codexVoiceDevice: ?[]const u8 = null,
 
     /// The theme subset (appearance, theme selection, accent, surface,
     /// fonts, motion, wallpaper colors): `zeron_theme.ThemeSettings`.

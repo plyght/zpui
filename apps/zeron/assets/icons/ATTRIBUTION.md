@@ -7,10 +7,13 @@ Copied from zeron `crates/ui/assets/icons/` (see `crates/ui/src/icons.rs`).
   licensed under the Creative Commons Attribution 4.0 International license
   (CC BY 4.0, https://creativecommons.org/licenses/by/4.0/).
   Attribution: "Solar Icons by 480 Design". Some files are modified
-  (mirrored/rotated variants such as `arrow-down`, `arrow-up-right`,
-  `alt-arrow-up`, `sidebar-minimalistic-left`).
-- Glyphs drawn for zeron in the same linear style (e.g. `terminal`, `plus`,
-  `close`, `stop`, `return`, `git-branch`, `pull-request`, `bot`, `bell`,
+  (mirrored/rotated variants such as `arrow-down`, `arrow-up-right`).
+- **Zeron Icons** (icons.zeron.sh; 24px canvas, 1.75px round strokes):
+  `folder`, `fork`, `git-branch`, `pull-request`, `worktree`, `plus`,
+  `arrow-left`/`-right`, `alt-arrow-*`, and the sidebar glyph (drawn in code,
+  `ui/components/icon.zig` `sidebarGlyph`). zeron source, MIT licensed.
+- Glyphs drawn for zeron in the same linear style (e.g. `terminal`,
+  `close`, `stop`, `return`, `gallery`, `microphone*`, `phone-hang-up`, `bot`, `bell`,
   `info-circle`, `floppy-disk`, `pin`, `star`, `window-*`, `queue-*`,
   `action-*`, `file-*`, `zeron-logo`) are zeron source, MIT licensed
   (`../LICENSE.zeron`).

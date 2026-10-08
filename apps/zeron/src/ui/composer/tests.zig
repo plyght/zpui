@@ -117,6 +117,53 @@ const Fixture = struct {
     }
 };
 
+test "compact model list: provider tabs are its groups, starred first" {
+    // pickers.rs: "The list's tabs are its provider groups, in list order;
+    // starring adds a Starred tab ahead of them".
+    var f = try Fixture.init();
+    defer f.deinit();
+    try f.injectCatalog();
+    const MP = @import("model_picker.zig").ModelPicker;
+    const protocol = @import("zeron_engine").protocol;
+    {
+        const catalog = f.state.read(f.app).catalog;
+        var l = catalog.lease(f.app);
+        defer l.end();
+        const mv = try std.json.parseFromSlice(std.json.Value, testing.allocator,
+            \\[{"id":"gpt-a","label":"GPT A"},{"id":"gpt-b","label":"GPT B"}]
+        , .{});
+        defer mv.deinit();
+        l.value.models.set(.codex, try model.status.OwnedJson([]protocol.Model).fromValue(testing.allocator, mv.value));
+        l.cx.notify();
+    }
+    const picker = f.composer().picker;
+    var gbuf: [8]MP.Group = undefined;
+    var rbuf: [16]MP.Row = undefined;
+    {
+        const gs = picker.read(f.app).groups(f.app, &gbuf);
+        try testing.expectEqual(@as(usize, 2), gs.len);
+        try testing.expectEqual(@as(?protocol.HarnessId, .@"claude-code"), gs[0].harness);
+        try testing.expectEqual(@as(usize, 0), gs[0].start);
+        try testing.expectEqual(@as(?protocol.HarnessId, .codex), gs[1].harness);
+        try testing.expectEqual(@as(usize, 2), gs[1].start);
+    }
+    // Starring a model adds the Starred group (and its row) ahead.
+    const favs = [_]@import("zeron_model").composer_defaults.FavoriteModel{.{ .harness = .codex, .model = "gpt-b" }};
+    const defaults: @import("run_config.zig").ComposerDefaults = .{ .favorites = &favs };
+    picker.update(f.app, MP.setDefaults, .{&defaults});
+    {
+        const gs = picker.read(f.app).groups(f.app, &gbuf);
+        try testing.expectEqual(@as(usize, 3), gs.len);
+        try testing.expectEqual(@as(?protocol.HarnessId, null), gs[0].harness);
+        try testing.expectEqual(@as(usize, 1), gs[1].start);
+        try testing.expectEqual(@as(usize, 3), gs[2].start);
+        const rows = picker.read(f.app).rows(f.app, &rbuf);
+        try testing.expectEqualStrings("gpt-b", rows[0].model.id);
+        try testing.expectEqualStrings("gpt-a", rows[3].model.id);
+    }
+    picker.update(f.app, MP.setDefaults, .{null});
+}
+
 test "compact pill until a newline, then expanded with auto-grow" {
     var f = try Fixture.init();
     defer f.deinit();

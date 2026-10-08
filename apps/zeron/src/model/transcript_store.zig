@@ -84,6 +84,10 @@ pub const TranscriptStore = struct {
     retry_task: Task(void) = .none,
     echoes: std.ArrayList(Echo) = .empty,
     pending_send: ?PendingSend = null,
+    /// [clock] Fires when the pending send's grace expires into "Not
+    /// delivered" (`watch_clock_transitions`' grace deadline): no frame
+    /// announces that flip.
+    grace_task: Task(void) = .none,
     /// Resubscribes caused by desyncs (diagnostics/tests).
     desyncs: u32 = 0,
     now_override: ?Timestamp = null,
@@ -112,6 +116,7 @@ pub const TranscriptStore = struct {
     pub fn deinit(self: *TranscriptStore, app: *App) void {
         self.engine_sub.deinit();
         self.retry_task.cancel();
+        self.grace_task.cancel();
         self.watch.close();
         self.transcript.deinit();
         for (self.echoes.items) |e| e.deinit(self.gpa);
@@ -341,6 +346,30 @@ pub const TranscriptStore = struct {
         if (self.pending_send) |p| self.gpa.free(p.message_id);
         self.pending_send = .{ .message_id = id, .started = self.now() };
         _ = self.ackPendingSend();
+        self.armGrace(cx);
+        cx.emit(Changed{});
+        cx.notify();
+    }
+
+    /// The first instant `sendUndelivered` reads true, if a send is pending.
+    pub fn nextClockTransition(self: *const TranscriptStore, n: Timestamp) ?Timestamp {
+        const p = self.pending_send orelse return null;
+        const at = p.started.addMillis(undelivered_grace_ms + 1);
+        return if (at.order(n) == .gt) at else null;
+    }
+
+    fn armGrace(self: *TranscriptStore, cx: *Context(TranscriptStore)) void {
+        self.grace_task.cancel();
+        const n = self.now();
+        const at = self.nextClockTransition(n) orelse return;
+        const delay_ms = @max(at.millisSince(n), 0) + 1;
+        self.grace_task = cx.timer(@intCast(delay_ms * std.time.ns_per_ms), onGrace) catch return;
+    }
+
+    fn onGrace(self: *TranscriptStore, cx: *Context(TranscriptStore)) void {
+        self.grace_task.detach();
+        if (!self.sendUndelivered(self.now())) return self.armGrace(cx);
+        self.revision +%= 1;
         cx.emit(Changed{});
         cx.notify();
     }
@@ -349,6 +378,7 @@ pub const TranscriptStore = struct {
     /// restart the grace window so the trailer reads as Sending again.
     pub fn retryPendingSend(self: *TranscriptStore, cx: *Context(TranscriptStore)) void {
         if (self.pending_send) |*p| p.started = self.now();
+        self.armGrace(cx);
         self.revision +%= 1;
         cx.emit(Changed{});
         cx.notify();

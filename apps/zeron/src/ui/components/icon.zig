@@ -11,6 +11,7 @@
 //! `icons/*.svg` svg switches through the resolver `installSystemSymbols` registers,
 //! so call sites and layout boxes stay as they are; brand marks and file types stay SVG.
 
+const std = @import("std");
 const zpui = @import("zpui");
 const assets = @import("zeron_assets");
 const engine = @import("zeron_engine");
@@ -30,6 +31,38 @@ pub const HarnessId = engine.protocol.HarnessId;
 /// A `size`×`size` icon tinted with `color`.
 pub fn of(i: Icon, size: f32, color: zpui.Hsla) zpui.elements.Svg {
     return zpui.svg().source(i.path(), i.svg()).size(zpui.px(size)).flexNone().textColor(color);
+}
+
+/// `sidebar_glyph`: the Zeron Icons sidebar glyph (icons.zeron.sh "Sidebar"
+/// / "Right sidebar") — a rounded frame holding a panel whose width morphs
+/// 5.5 -> 1.75 as the sidebar closes. SVGs are static, so it is drawn from
+/// quads in the source's 24-unit space, scaled to `size`. `open` is the
+/// morph progress (1 = open; drive it with `hover.stateT`); `right` mirrors it.
+pub fn sidebarGlyph(open: f32, right: bool, size: f32, color: zpui.Hsla) zpui.Div {
+    const px = zpui.px;
+    const s = size / 24.0;
+    // `<rect x=3 y=4 w=18 h=16 rx=4 stroke-width=1.75>`: the centered stroke
+    // grows the box by half the stroke on each side.
+    const stroke: f32 = 1.75;
+    const frame = zpui.div().absolute()
+        .left(px((3.0 - stroke / 2.0) * s))
+        .top(px((4.0 - stroke / 2.0) * s))
+        .w(px((18.0 + stroke) * s))
+        .h(px((16.0 + stroke) * s))
+        .rounded(px((4.0 + stroke / 2.0) * s))
+        .border(px(stroke * s))
+        .borderColor(color);
+    // `<rect class=zi-panel x=6.5 y=7.5 w=5.5 h=9 rx=.875>`; closed: w=1.75.
+    const t = std.math.clamp(open, 0.0, 1.0);
+    const inset = px(6.5 * s);
+    var panel = zpui.div().absolute()
+        .top(px(7.5 * s))
+        .w(px((1.75 + (5.5 - 1.75) * t) * s))
+        .h(px(9.0 * s))
+        .rounded(px(0.875 * s))
+        .bg(color);
+    panel = if (right) panel.right(inset) else panel.left(inset);
+    return zpui.div().relative().flexNone().size(px(size)).child(frame).child(panel);
 }
 
 /// `harness_brand_icon`: the mark and its fixed tint (Claude orange) or null

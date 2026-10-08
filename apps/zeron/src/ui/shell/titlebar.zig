@@ -101,7 +101,7 @@ pub fn cluster(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div
     var row = div().absolute().top(px(0)).left(px(0)).h(px(layout.titlebar_height))
         .flex().flexRow().itemsCenter().pt(px(layout.titlebar_top_pad)).px(px(cluster_pad));
     if (is_mac) row = row.child(div().flexNone().hFull().w(px(clusterStart() - cluster_pad)));
-    row = row.child(button.windowControl("toggle-sidebar", .sidebar_minimalistic_left, "Toggle left sidebar", theme)
+    row = row.child(button.windowControlWith("toggle-sidebar", sidebarToggleGlyph(shell, theme, cx), "Toggle left sidebar", theme)
         .onClick(cx.listener(Shell.onToggleSidebarClick)));
     const back = if (shell.canBack())
         zpui.intoAnyElement(button.windowControl("nav-back", .arrow_left, "Back", theme).onClick(cx.listener(Shell.navBack)))
@@ -162,7 +162,7 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, files_now: f3
         // Session controls: new side chat, fork.
         inner = inner.child(capsule(liquid, "titlebar-session-glass", capsule_pad, div().flexNone().flex().flexRow().itemsCenter().gap(px(2))
             .child(button.headerIcon("session-new-side-chat", .plus, "New side chat", theme))
-            .child(button.headerIcon("session-fork", .git_branch, "Fork this session", theme))));
+            .child(button.headerIcon("session-fork", .fork, "Fork this session", theme))));
         // Project actions: the split Run/Setup control (24px, radius 7, the
         // composer's material and edge) — project_actions.zig.
         // `available_titlebar_width` (tabs.rs): the row minus the trailing strip,
@@ -202,7 +202,7 @@ pub fn sessionBar(shell: *Shell, sidebar_now: f32, right_now: f32, files_now: f3
             if (files_open) b = b.bg(theme.wash(0.09));
             break :blk b;
         };
-        const right_btn = button.headerIcon("toggle-changes", .sidebar_minimalistic, "Toggle right sidebar", theme)
+        const right_btn = button.headerIconWith("toggle-changes", ui.icon.sidebarGlyph(ui.hover.stateT(cx, "toggle-changes", shell.rightOpen(cx), zt.motion.glyph_state, shell.reduced_motion), true, 16, theme.text_muted), "Toggle right sidebar", theme)
             .onClick(cx.listener(Shell.onToggleRightClick));
         const slot = div().w(px(files_controls)).hFull().flexNone().flex().itemsCenter().justifyEnd();
         // [liquid-glass] One capsule around the pane toggles (not the whole slot).
@@ -310,7 +310,7 @@ pub fn leadCapsuleRight(has_chat: bool) f32 {
 fn liquidCluster(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div {
     const has_chat = shell.state.read(cx).workspace.read(cx).selected_chat != null;
     var group = div().flex().flexRow().itemsCenter()
-        .child(button.windowControl("toggle-sidebar", .sidebar_minimalistic_left, "Toggle left sidebar", theme)
+        .child(button.windowControlWith("toggle-sidebar", sidebarToggleGlyph(shell, theme, cx), "Toggle left sidebar", theme)
         .onClick(cx.listener(Shell.onToggleSidebarClick)));
     const back = if (shell.canBack())
         zpui.intoAnyElement(button.windowControl("nav-back", .arrow_left, "Back", theme).onClick(cx.listener(Shell.navBack)))
@@ -412,4 +412,11 @@ pub fn linuxResizeBorders(shell: *Shell, window: *Window) ?zpui.Div {
         .child(div().absolute().top(px(0)).right(px(0)).size(px(corner)).onMouseDown(.left, resizeStrip(.top_right)))
         .child(div().absolute().bottom(px(0)).left(px(0)).size(px(corner)).onMouseDown(.left, resizeStrip(.bottom_left)))
         .child(div().absolute().bottom(px(0)).right(px(0)).size(px(corner)).onMouseDown(.left, resizeStrip(.bottom_right)));
+}
+
+/// The left toggle's morphing sidebar glyph (`icons::sidebar_glyph` over
+/// `motion::state_t("toggle-sidebar", !sidebar_collapsed, GLYPH_STATE)`).
+fn sidebarToggleGlyph(shell: *Shell, theme: *const Theme, cx: *Context(Shell)) zpui.Div {
+    const open = !prefs_mod.get(cx).sidebar_collapsed;
+    return ui.icon.sidebarGlyph(ui.hover.stateT(cx, "toggle-sidebar", open, zt.motion.glyph_state, shell.reduced_motion), false, 16, theme.text_muted);
 }

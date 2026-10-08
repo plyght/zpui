@@ -21,6 +21,7 @@ const zt = @import("zeron_theme");
 const model = @import("zeron_model");
 const engine = @import("zeron_engine");
 const md = @import("zeron_ui_markdown");
+const attachment_mentions = @import("zeron_markdown").attachment_mentions;
 const assets = @import("zeron_assets");
 const rows = @import("rows.zig");
 const tools = @import("tools.zig");
@@ -384,7 +385,17 @@ pub const TranscriptView = struct {
         return null;
     }
 
-    fn imageState(self: *TranscriptView, devices: []const []const u8, path: []const u8, mime: ?[]const u8, cx: *Context(TranscriptView)) att.Snapshot {
+    /// `image_host`: the chat whose agent produced these rows (a subagent tab
+    /// borrows the selected chat's host and cwd) — device + cwd.
+    pub fn imageHost(self: *const TranscriptView, cx: *Context(TranscriptView)) struct { device: ?[]const u8, cwd: ?[]const u8 } {
+        const st = (self.app_state orelse return .{ .device = null, .cwd = null }).read(cx);
+        const ws = st.workspace.read(cx);
+        const own: ?*const engine.protocol.Chat = if (self.store) |s| ws.chat(s.read(cx).chat_id) else null;
+        const c = own orelse ws.selectedChatRow() orelse return .{ .device = null, .cwd = null };
+        return .{ .device = c.deviceId, .cwd = c.cwd };
+    }
+
+    pub fn imageState(self: *TranscriptView, devices: []const []const u8, path: []const u8, mime: ?[]const u8, cx: *Context(TranscriptView)) att.Snapshot {
         const eng = self.engineEntity(cx) orelse return .{ .failed = .{ .retry_in_ns = std.math.maxInt(u64) } };
         return att.attachmentState(cx.app, eng, devices, self.localDevice(cx), path, mime);
     }
@@ -1479,7 +1490,11 @@ pub const TranscriptView = struct {
         if (u.text.len > 0) {
             const collapsible = userNeedsCollapse(u.text);
             const expanded = self.user_expanded.contains(row.key);
-            const flat = md.flatten(&.{.{ .text = u.text }}, theme, 400, theme.text);
+            // Attachment chips (`[Image N](zeron-image:N)`, `[name](zeron-
+            // attachment:N)`) read as their plain label: the strip above
+            // carries the attachments themselves. [partial: no inline chip pills]
+            const shown = attachment_mentions.attachmentMentionPrompt(zpui.window.arena_mod.frameAllocator(), u.text) catch u.text;
+            const flat = md.flatten(&.{.{ .text = shown }}, theme, 400, theme.text);
             var text_el = div().relative().child(md.flatElement(flat, row.key ^ 0x55E7, .{ .theme = theme, .key = row.key }));
             // The full text stays laid out behind the clip; a probe records its height.
             if (collapsible) if (self.userHeightCell(row.key)) |cell| {

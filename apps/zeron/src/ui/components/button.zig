@@ -2,9 +2,9 @@
 //! gate-card buttons).
 //!
 //! ```zig
-//! button.windowControl("toggle-sidebar", .sidebar_minimalistic_left, "Toggle left sidebar", theme)
+//! button.windowControlWith("toggle-sidebar", icon.sidebarGlyph(open_t, false, 16, theme.text_muted), "Toggle left sidebar", theme)
 //!     .onClick(cx.listener(Shell.onToggleSidebar))          // 24px, radius 6, icon 16 muted
-//! button.headerIcon("toggle-right", .sidebar_minimalistic, "Toggle right sidebar", theme)   // 28px
+//! button.headerIconWith("toggle-right", icon.sidebarGlyph(open_t, true, 16, theme.text_muted), "Toggle right sidebar", theme)   // 28px
 //! button.disabledControl(.arrow_right, theme)               // 35% muted, inert
 //! button.solid("sign-in", "Log in", theme).wFull()           // white pill, 36px
 //! button.outline("retry", "Retry", theme)                    // hairline-bordered, hover wash
@@ -31,6 +31,12 @@ fn preventDefault(_: *const zpui.input.MouseDownEvent, window: *zpui.Window, _: 
 
 /// 24px titlebar control: rounded 6, glass-hover wash, 16px muted icon.
 pub fn windowControl(id: anytype, i: icon.Icon, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
+    return windowControlWith(id, icon.of(i, 16, theme.text_muted), label, theme);
+}
+
+/// `window_control_button_with`: `windowControl` around a caller-drawn glyph
+/// (the morphing sidebar glyph).
+pub fn windowControlWith(id: anytype, glyph: anytype, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
     return div().id(id).role(.button).ariaLabel(label)
         .size(px(24)).flexNone().flex().itemsCenter().justifyCenter()
         .rounded(px(6)).cursorPointer()
@@ -38,7 +44,7 @@ pub fn windowControl(id: anytype, i: icon.Icon, label: []const u8, theme: *const
         .occlude()
         .onMouseDown(.left, preventDefault)
         .tooltipWith(label, tooltip.build)
-        .child(icon.of(i, 16, theme.text_muted));
+        .child(glyph);
 }
 
 /// A disabled 24px control (history arrows with nowhere to go).
@@ -49,6 +55,11 @@ pub fn disabledControl(i: icon.Icon, theme: *const Theme) zpui.Div {
 
 /// 28px main-panel header button (`size-7 rounded-md`), wash 0.11 on hover.
 pub fn headerIcon(id: anytype, i: icon.Icon, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
+    return headerIconWith(id, icon.of(i, 16, theme.text_muted), label, theme);
+}
+
+/// `header_icon_button_with`: `headerIcon` around a caller-drawn glyph.
+pub fn headerIconWith(id: anytype, glyph: anytype, label: []const u8, theme: *const Theme) zpui.StatefulDiv {
     return div().id(id).role(.button).ariaLabel(label)
         .size(px(28)).flexNone().flex().itemsCenter().justifyCenter()
         .rounded(px(6)).cursorPointer()
@@ -56,7 +67,7 @@ pub fn headerIcon(id: anytype, i: icon.Icon, label: []const u8, theme: *const Th
         .occlude()
         .onMouseDown(.left, preventDefault)
         .tooltipWith(label, tooltip.build)
-        .child(icon.of(i, 16, theme.text_muted));
+        .child(glyph);
 }
 
 /// Primary solid button: `bg text`, label `on_solid`, 36px, radius 6, 14px medium.

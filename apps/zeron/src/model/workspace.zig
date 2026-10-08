@@ -105,6 +105,14 @@ pub const WorkspaceStore = struct {
 
     /// Clock override for tests (`null` = wall clock).
     now_override: ?Timestamp = null,
+    /// [clock] One-shot timer for the next clock-driven transition
+    /// (`ClockTransitions` / `watch_clock_transitions`): a session going
+    /// stale or a remote device leaving its online window — no frame
+    /// announces those. `clock_checked_at` is the last time observers saw
+    /// current state (an apply or a wake).
+    clock_task: Task(void) = .none,
+    clock_wake_at: ?Timestamp = null,
+    clock_checked_at: ?Timestamp = null,
     io: std.Io,
 
     pub const Events = .{ ChatsChanged, SpacesChanged, DevicesChanged, SessionsChanged, SidebarPreferencesChanged, SelectionChanged };
@@ -125,6 +133,7 @@ pub const WorkspaceStore = struct {
     pub fn deinit(self: *WorkspaceStore, app: *App) void {
         self.engine_sub.deinit();
         self.retry_task.cancel();
+        self.clock_task.cancel();
         self.closeWatches();
         inline for (.{ "chats_frame", "spaces_frame", "devices_frame", "sessions_frame", "sidebar_frame" }) |f| {
             if (@field(self, f)) |fr| fr.deinit();
@@ -329,6 +338,7 @@ pub const WorkspaceStore = struct {
             cx.emit(SessionsChanged{});
             cx.notify();
         }
+        self.armClockTransition(cx);
     }
 
     pub fn applySpaces(self: *WorkspaceStore, frame: json.Parsed([]Space), cx: *Context(WorkspaceStore)) void {
@@ -395,6 +405,102 @@ pub const WorkspaceStore = struct {
             cx.emit(DevicesChanged{});
             cx.notify();
         }
+        self.armClockTransition(cx);
+    }
+
+    // ---- [clock] clock-driven transitions ---------------------------------------------
+
+    /// `next_clock_transition`: the earliest moment after `n` at which a
+    /// clock-derived value flips with no frame to announce it — a
+    /// Working/AwaitingInput session going stale (`session_stale_ms`) or a
+    /// remote device leaving its online window. Each deadline is the first
+    /// instant the predicate reads differently. (Pending-send grace lives on
+    /// `TranscriptStore.nextClockTransition`.) Pure.
+    pub fn nextClockTransition(self: *const WorkspaceStore, n: Timestamp) ?Timestamp {
+        var it = self.clockDeadlines();
+        var best: ?Timestamp = null;
+        while (it.next()) |d| {
+            if (d.order(n) != .gt) continue;
+            if (best == null or d.order(best.?) == .lt) best = d;
+        }
+        return best;
+    }
+
+    /// Whether any clock-driven transition fell in `(from, to]`; tells a real
+    /// transition from a wake a silent heartbeat made obsolete. Pure.
+    pub fn clockTransitionBetween(self: *const WorkspaceStore, from: Timestamp, to: Timestamp) bool {
+        var it = self.clockDeadlines();
+        while (it.next()) |d| if (from.order(d) == .lt and d.order(to) != .gt) return true;
+        return false;
+    }
+
+    const ClockDeadlines = struct {
+        ws: *const WorkspaceStore,
+        session_ix: usize = 0,
+        device_ix: usize = 0,
+
+        fn next(it: *ClockDeadlines) ?Timestamp {
+            const sessions_ = it.ws.sessions();
+            while (it.session_ix < sessions_.len) {
+                const sess = sessions_[it.session_ix];
+                it.session_ix += 1;
+                if (sess.status != .working and sess.status != .awaitingInput) continue;
+                const updated = time.parse(sess.updatedAt) orelse Timestamp.epoch;
+                // `age_ms > session_stale_ms` first holds one millisecond past it.
+                return updated.addMillis(view.session_stale_ms + 1);
+            }
+            const devices_ = it.ws.devices();
+            while (it.device_ix < devices_.len) {
+                const d = devices_[it.device_ix];
+                it.device_ix += 1;
+                if (it.ws.local_device_id) |l| if (std.mem.eql(u8, l, d.id)) continue;
+                const seen = time.parseOpt(d.lastSeenAt) orelse continue;
+                // Whole seconds `<= device_online_window_secs` stay online.
+                return seen.addMillis((view.device_online_window_secs + 1) * std.time.ms_per_s);
+            }
+            return null;
+        }
+    };
+
+    fn clockDeadlines(self: *const WorkspaceStore) ClockDeadlines {
+        return .{ .ws = self };
+    }
+
+    /// Re-arm the single one-shot timer for the next deadline (idle state
+    /// never polls).
+    fn armClockTransition(self: *WorkspaceStore, cx: *Context(WorkspaceStore)) void {
+        const n = self.now();
+        self.clock_checked_at = n;
+        const wake = self.nextClockTransition(n);
+        const same = if (wake) |w| (if (self.clock_wake_at) |a| w.eql(a) else false) else self.clock_wake_at == null;
+        if (same and (wake == null or self.clock_task.header != null)) return;
+        self.clock_task.cancel();
+        self.clock_wake_at = wake;
+        const w = wake orelse return;
+        const delay_ms = @max(w.millisSince(n), 0) + 1;
+        self.clock_task = cx.timer(@intCast(delay_ms * std.time.ns_per_ms), onClockTransition) catch {
+            self.clock_wake_at = null;
+            return;
+        };
+    }
+
+    fn onClockTransition(self: *WorkspaceStore, cx: *Context(WorkspaceStore)) void {
+        self.clock_task.detach();
+        self.clock_wake_at = null;
+        const n = self.now();
+        const from = self.clock_checked_at orelse n;
+        if (self.clockTransitionBetween(from, n)) {
+            // Record what this transition changed, so the frame that later
+            // reverts it (a heartbeat reviving the session or device)
+            // compares unequal and notifies.
+            for (self.sessions(), 0..) |*sess, i| {
+                if (i < self.session_presence.items.len) self.session_presence.items[i] = view.effectiveIndicator(sess, n);
+            }
+            cx.emit(SessionsChanged{});
+            cx.emit(DevicesChanged{});
+            cx.notify();
+        }
+        self.armClockTransition(cx);
     }
 
     fn devicePresentationEql(a: Device, b: Device, n: Timestamp) bool {
@@ -467,10 +573,11 @@ pub const WorkspaceStore = struct {
     }
 
     /// Non-archived, top-level chats in sidebar order (children of another
-    /// chat — `parentChatId` — never take a sidebar row).
+    /// chat — `parentChatId` — and voice orchestrator chats never take a
+    /// sidebar row; `Chat.isTopLevel`).
     pub fn visibleChats(self: *const WorkspaceStore, gpa: Allocator) Allocator.Error![]*const Chat {
         var out: std.ArrayList(*const Chat) = .empty;
-        for (self.chats()) |*c| if (!c.archived and c.parentChatId == null) try out.append(gpa, c);
+        for (self.chats()) |*c| if (!c.archived and c.isTopLevel()) try out.append(gpa, c);
         return out.toOwnedSlice(gpa);
     }
 
@@ -478,7 +585,7 @@ pub const WorkspaceStore = struct {
     pub fn chatsInSpace(self: *const WorkspaceStore, gpa: Allocator, space_id: []const u8) Allocator.Error![]*const Chat {
         var out: std.ArrayList(*const Chat) = .empty;
         for (self.chats()) |*c| {
-            if (c.archived or c.parentChatId != null) continue;
+            if (c.archived or !c.isTopLevel()) continue;
             if (c.spaceId) |s| if (std.mem.eql(u8, s, space_id)) try out.append(gpa, c);
         }
         view.sortTabs(out.items);
@@ -530,7 +637,7 @@ pub const WorkspaceStore = struct {
     pub fn overviewChats(self: *const WorkspaceStore, gpa: Allocator, n: Timestamp) Allocator.Error![]view.ActiveRow {
         var out: std.ArrayList(view.ActiveRow) = .empty;
         for (self.chats()) |*c| {
-            if (c.archived or c.parentChatId != null) continue;
+            if (c.archived or !c.isTopLevel()) continue;
             if (c.spaceId) |sid| if (self.space(sid) == null) continue;
             try out.append(gpa, .{ .status = self.displayStatusFor(c, n), .chat = c });
         }
@@ -545,15 +652,128 @@ pub const WorkspaceStore = struct {
         const filter = space_filter orelse return rows;
         var kept: usize = 0;
         for (rows) |r| {
-            if (r.chat.spaceId) |s| if (std.mem.eql(u8, s, filter)) {
+            if (self.projectFilterMatches(filter, r.chat)) {
                 rows[kept] = r;
                 kept += 1;
-            };
+            }
         }
         if (gpa.resize(rows, kept)) return rows[0..kept];
         const out = try gpa.dupe(view.ActiveRow, rows[0..kept]);
         gpa.free(rows);
         return out;
+    }
+
+    /// `project_filter`: the sidebar's project filter matches by repository.
+    /// It stores one checkout's space id, and a chat in ANY checkout of that
+    /// repository (clones and worktrees on every device, `view.projectKey`)
+    /// matches. A filter naming a space not synced here matches its own id.
+    pub fn projectFilterMatches(self: *const WorkspaceStore, filter: []const u8, c: *const Chat) bool {
+        const space_id = c.spaceId orelse return false;
+        if (std.mem.eql(u8, space_id, filter)) return true;
+        const filtered = self.space(filter) orelse return false;
+        const s = self.space(space_id) orelse return false;
+        return view.sameProject(s, filtered);
+    }
+
+    /// `representative_space`: the space whose name and color stand for
+    /// `s`'s whole project.
+    pub fn representativeSpace(self: *const WorkspaceStore, s: *const Space) *const Space {
+        return view.representativeSpace(self.spaces(), s);
+    }
+
+    /// `project_members`: every space of `s`'s project — this device's
+    /// first, then by device name (lowercased) and path, id tiebreak.
+    pub fn projectMembers(self: *const WorkspaceStore, gpa: Allocator, s: *const Space) Allocator.Error![]*const Space {
+        var out: std.ArrayList(*const Space) = .empty;
+        errdefer out.deinit(gpa);
+        for (self.spaces()) |*m| if (view.sameProject(m, s)) try out.append(gpa, m);
+        std.sort.block(*const Space, out.items, self, memberLess);
+        return out.toOwnedSlice(gpa);
+    }
+
+    fn memberLess(self: *const WorkspaceStore, a: *const Space, b: *const Space) bool {
+        const la = self.isLocalDevice(a.deviceId);
+        const lb = self.isLocalDevice(b.deviceId);
+        if (la != lb) return la;
+        const o = lowerOrder(self.deviceName(a.deviceId) orelse "", self.deviceName(b.deviceId) orelse "");
+        if (o != .eq) return o == .lt;
+        const p = std.mem.order(u8, a.path, b.path);
+        if (p != .eq) return p == .lt;
+        return std.mem.order(u8, a.id, b.id) == .lt;
+    }
+
+    fn isLocalDevice(self: *const WorkspaceStore, device_id: []const u8) bool {
+        const l = self.local_device_id orelse return false;
+        return std.mem.eql(u8, l, device_id);
+    }
+
+    /// `projects`: one entry per repository across devices, each its
+    /// checkouts in `projectMembers` order, ordered by the representative's
+    /// display name (lowercased), id tiebreak. Free with `freeProjects`.
+    pub fn projects(self: *const WorkspaceStore, gpa: Allocator) Allocator.Error![][]*const Space {
+        var out: std.ArrayList([]*const Space) = .empty;
+        errdefer {
+            for (out.items) |m| gpa.free(m);
+            out.deinit(gpa);
+        }
+        const all = self.spaces();
+        for (all, 0..) |*s, i| {
+            const seen = for (all[0..i]) |*prev| {
+                if (view.sameProject(prev, s)) break true;
+            } else false;
+            if (seen) continue;
+            const members = try self.projectMembers(gpa, s);
+            out.append(gpa, members) catch |e| {
+                gpa.free(members);
+                return e;
+            };
+        }
+        std.sort.block([]*const Space, out.items, self, struct {
+            fn lt(st: *const WorkspaceStore, a: []*const Space, b: []*const Space) bool {
+                const ra = st.representativeSpace(a[0]);
+                const rb = st.representativeSpace(b[0]);
+                const o = lowerOrder(view.spaceDisplayName(ra), view.spaceDisplayName(rb));
+                if (o != .eq) return o == .lt;
+                return std.mem.order(u8, ra.id, rb.id) == .lt;
+            }
+        }.lt);
+        return out.toOwnedSlice(gpa);
+    }
+
+    pub fn freeProjects(gpa: Allocator, list: [][]*const Space) void {
+        for (list) |m| gpa.free(m);
+        gpa.free(list);
+    }
+
+    /// `project_device_tag`: a project's host tag — its one device as in
+    /// `spaceDeviceTag`, else the two device names joined by " · " or
+    /// "N devices". Offline only when every device is.
+    pub fn projectDeviceTag(self: *const WorkspaceStore, buf: []u8, members: []const *const Space, n: Timestamp) struct { []const u8, bool } {
+        var ids: [64][]const u8 = undefined;
+        var count: usize = 0;
+        var distinct: usize = 0;
+        for (members) |m| {
+            const dup = for (ids[0..count]) |d| {
+                if (std.mem.eql(u8, d, m.deviceId)) break true;
+            } else false;
+            if (dup) continue;
+            distinct += 1;
+            if (count < ids.len) {
+                ids[count] = m.deviceId;
+                count += 1;
+            }
+        }
+        if (distinct == 0) return .{ "", false };
+        if (distinct == 1) return self.spaceDeviceTag(buf, members[0], n);
+        var offline = true;
+        for (ids[0..count]) |d| if (self.deviceOnline(d, n)) {
+            offline = false;
+        };
+        const tag = if (distinct == 2)
+            std.fmt.bufPrint(buf, "@ {s} \u{00B7} {s}", .{ self.deviceName(ids[0]) orelse "Unknown device", self.deviceName(ids[1]) orelse "Unknown device" }) catch "@ 2 devices"
+        else
+            std.fmt.bufPrint(buf, "@ {d} devices", .{distinct}) catch "@ devices";
+        return .{ tag, offline };
     }
 
     pub fn selectedChatRow(self: *const WorkspaceStore) ?*const Chat {
@@ -722,13 +942,18 @@ pub const WorkspaceStore = struct {
         cx.notify();
     }
 
-    /// Pick the composer's device; a project on another device can't survive
-    /// the switch.
+    /// Pick the composer's device. The project pick moves to the project's
+    /// checkout on the new device, else the first project there, else "no
+    /// project".
     pub fn selectDevice(self: *WorkspaceStore, device_id: []const u8, cx: *Context(WorkspaceStore)) void {
-        const moves = if (self.selectedSpaceRow()) |s| !std.mem.eql(u8, s.deviceId, device_id) else false;
-        if (moves) {
+        const moving: ?*const Space = if (self.selectedSpaceRow()) |s| (if (!std.mem.eql(u8, s.deviceId, device_id)) s else null) else null;
+        if (moving) |current| {
+            // The project's own checkout on the new device, else its first project.
             var first: ?*const Space = null;
-            for (self.spaces()) |*s| if (std.mem.eql(u8, s.deviceId, device_id)) {
+            for (self.spaces()) |*s| if (std.mem.eql(u8, s.deviceId, device_id) and view.sameProject(s, current)) {
+                if (first == null or self.memberLess(s, first.?)) first = s;
+            };
+            if (first == null) for (self.spaces()) |*s| if (std.mem.eql(u8, s.deviceId, device_id)) {
                 if (first == null or spaceDisplayLess(s, first.?)) first = s;
             };
             self.no_project = first == null;

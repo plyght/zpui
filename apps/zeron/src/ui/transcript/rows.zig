@@ -19,6 +19,7 @@ const mdm = @import("zeron_markdown");
 const diff = @import("zeron_diff");
 const assets = @import("zeron_assets");
 const thought = @import("thought.zig");
+const tool_images = @import("tool_images.zig");
 const wl = @import("workspace_links.zig");
 pub const badges = @import("badges.zig");
 
@@ -95,9 +96,17 @@ pub const ToolItem = struct {
     diff_ref: ?[]const u8 = null,
     subagent_ref: ?[]const u8 = null,
     subagent_status: ?protocol.SubagentStatus = null,
+    /// Image files the call read, wrote or printed (as reported; relative
+    /// paths resolve against the chat cwd). Expanding the chip previews them.
+    images: []const []const u8 = &.{},
 
     pub fn isSpawnLink(self: ToolItem) bool {
         return self.is_agent and self.subagent_ref != null;
+    }
+
+    /// `chip_has_images`: spawn chips never expand, so never preview images.
+    pub fn hasImages(self: ToolItem) bool {
+        return self.images.len > 0 and !self.isSpawnLink();
     }
 };
 
@@ -359,6 +368,8 @@ pub fn outputDetail(a: Allocator, output: []const u8, cap: usize) Allocator.Erro
     var lines = try splitLines(a, try a.dupe(u8, output));
     trimTrailingBlank(&lines);
     if (lines.items.len == 0) return null;
+    // `output_line`: lines clip, but each is shaped whole for selection.
+    for (lines.items) |*l| l.* = try tool_images.outputLine(a, l.*);
     const truncated = lines.items.len -| cap;
     return .{ .output = .{ .lines = lines.items[0..@min(lines.items.len, cap)], .truncated_by = truncated } };
 }
@@ -509,6 +520,7 @@ fn toolItem(gpa: Allocator, a: Allocator, rows: *EntryRows, part: MessagePart.To
         .diff_ref = if (part.diffRef) |r| try a.dupe(u8, r) else null,
         .subagent_ref = if (part.subagentRef) |r| try a.dupe(u8, r) else null,
         .subagent_status = part.subagentStatus,
+        .images = try tool_images.imagePaths(a, part.call, part.output),
     };
 }
 
@@ -682,6 +694,7 @@ fn toolFingerprint(tools: []const ToolItem, auto_open: bool) u64 {
             .stats => |s| hashU64(&h, s.len),
         };
         if (t.invocation) |inv| for (inv.output.lines) |l| h.update(l);
+        hashU64(&h, t.images.len);
     }
     h.update(&.{@intFromBool(auto_open)});
     return h.final();

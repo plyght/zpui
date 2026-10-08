@@ -274,7 +274,7 @@ const Root = struct {
         return div().absolute().left(px(0)).top(px(0)).right(px(0)).h(px(zt.layout.titlebar_height))
             .pt(px(zt.layout.titlebar_top_pad)).pr(px(6)).flex().flexRow().itemsCenter().justifyEnd().gap(px(4))
             .child(ui.button.headerIcon("toggle-files-panel", .file_tree, "Hide files panel", theme).bg(theme.wash(0.10)))
-            .child(ui.button.headerIcon("toggle-right", .sidebar_minimalistic, "Toggle right sidebar", theme));
+            .child(ui.button.headerIconWith("toggle-right", ui.icon.sidebarGlyph(1, true, 16, theme.text_muted), "Toggle right sidebar", theme));
     }
 
     pub fn render(self: *Root, window: *Window, cx: *Context(Root)) zpui.Div {

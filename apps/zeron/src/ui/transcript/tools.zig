@@ -18,6 +18,7 @@ const diff_view = @import("diff_view.zig");
 const assets = @import("zeron_assets");
 const files = md.file_icons;
 const view_mod = @import("view.zig");
+const tool_images = @import("tool_images.zig");
 
 const App = zpui.App;
 const Window = zpui.Window;
@@ -293,7 +294,7 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
     const opens = a.alloc(bool, g.tools.len) catch @panic("OOM");
     var animating = false;
     for (g.tools, 0..) |t, ix| {
-        const expandable = !t.isSpawnLink() and (t.body != null or t.invocation != null);
+        const expandable = !t.isSpawnLink() and (t.body != null or t.invocation != null or t.hasImages());
         const df = self.details.get(detailKey(row.key, ix)) orelse Fold{};
         // Compact mode overrides it all: nothing inside the fold opens itself.
         const default_open = t.kind == .thought and !t.resolved and !compact;
@@ -301,6 +302,7 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
         var target = base_row_height;
         if (opens[ix]) {
             if (t.invocation) |inv| target += detailHeight(inv);
+            if (t.hasImages()) target += image_strip_height;
             // [wiring] a fetched sidecar blob upgrades the body in place.
             if (self.blobs.effective(t)) |b| target += detailHeight(b);
             var abuf: [96]u8 = undefined;
@@ -431,7 +433,7 @@ fn chipRow(self: *TranscriptView, row: *const rows.Row, t: ToolItem, ix: usize, 
     // The text arrives with the branch tip (rises 4 px as it fades in).
     const content_reveal = connectorParts(rv.connector, has_pred)[1];
     if (t.isSpawnLink()) return subagentChip(t, row.key, ix, collapses, theme, cx);
-    const expandable = t.body != null or t.invocation != null;
+    const expandable = t.body != null or t.invocation != null or t.hasImages();
     if (!expandable) {
         var r = div().h(px(base_row_height)).wFull().flexNone().flex().flexRow();
         if (collapses) r = r.child(activityRail(t, has_pred, continues, base_row_height, rv, theme));
@@ -458,12 +460,14 @@ fn chipRow(self: *TranscriptView, row: *const rows.Row, t: ToolItem, ix: usize, 
         if (t.invocation) |inv| {
             var sep = div().h(px(rows.detail_separator)).flexNone();
             if (!collapses) sep = sep.bg(theme.hairline(0.06));
-            panel = panel.child(sep).child(detailBody(inv, theme));
+            panel = panel.child(sep).child(detailBody(inv, mixKey(dkey, 0xCA11), theme));
         }
+        // Image previews exist only while the chip's body is mounted.
+        if (t.hasImages()) panel = panel.child(imageStrip(self, dkey, t, collapses, theme, cx));
         if (self.blobs.effective(t)) |b| {
             var sep = div().h(px(rows.detail_separator)).flexNone();
             if (!collapses) sep = sep.bg(theme.hairline(0.06));
-            panel = panel.child(sep).child(detailBody(b, theme));
+            panel = panel.child(sep).child(detailBody(b, mixKey(dkey, 0xB10B), theme));
         }
         // [wiring] "Show full output" fetches the sidecar blob (FetchToolBlob).
         var abuf: [96]u8 = undefined;
@@ -618,32 +622,88 @@ fn ribbon(path: *zpui.scene.Path, pts: []const [2]f32, ox: f32, oy: f32) void {
     }
 }
 
+/// `TOOL_IMAGE_STRIP_HEIGHT`: analytic height an open chip's image strip
+/// adds (separator + frames).
+pub const image_strip_height: f32 = rows.detail_separator + tool_images.image_height + 2 * tool_images.image_pad;
+
+/// `render_tool_image_strip`: a separator over a sideways-scrolling row of
+/// 220px frames whose widths follow each image's aspect.
+fn imageStrip(self: *TranscriptView, dkey: u64, t: ToolItem, collapses: bool, theme: *const Theme, cx: *Context(TranscriptView)) zpui.Div {
+    const host = self.imageHost(cx);
+    const a = zpui.window.arena_mod.frameAllocator();
+    var strip = div().id(.{ "tool-images", dkey }).h(px(tool_images.image_height + 2 * tool_images.image_pad)).py(px(tool_images.image_pad))
+        .flex().flexRow().gap(px(tool_images.image_pad)).overflowXScroll();
+    if (!collapses) strip = strip.px(px(tool_images.image_pad));
+    const h = tool_images.image_height;
+    for (t.images, 0..) |raw, ix| {
+        const path = tool_images.resolvePath(a, raw, host.cwd) catch raw;
+        const name = fileBadgeName(path);
+        const state = if (host.device) |d| self.imageState(&.{d}, path, null, cx) else @import("zeron_model").attachments.Snapshot{ .failed = .{ .retry_in_ns = std.math.maxInt(u64) } };
+        const width: f32 = switch (state) {
+            .loaded => |l| blk: {
+                const size = l.image.size(0);
+                const aspect = @as(f32, @floatFromInt(@max(size.width, 1))) / @as(f32, @floatFromInt(@max(size.height, 1)));
+                break :blk std.math.clamp(h * aspect, 48, tool_images.image_max_width);
+            },
+            else => h * 4.0 / 3.0,
+        };
+        var frame = div().id(.{ "tool-img", mixKey(dkey, ix) }).ariaLabel(name).w(px(width)).h(px(h)).flexNone().flex().itemsCenter().justifyCenter()
+            .rounded(px(8)).overflowHidden().border1().borderColor(theme.hairline(0.07)).bg(theme.ink(0.035));
+        frame = switch (state) {
+            .loaded => |l| frame.child(zpui.img(l.image).w(px(width - 2)).h(px(h - 2)).rounded(px(7)).objectFit(.contain)),
+            .loading => frame.textSize(px(tool_text_size)).textColor(theme.text_faint).child("Loading image\u{2026}"),
+            .failed => frame.flexCol().gap(px(4)).px(px(12)).textSize(px(tool_text_size)).textColor(theme.text_faint)
+                .child("Image unavailable").child(div().maxWFull().truncate().child(name)),
+        };
+        strip = strip.child(frame);
+    }
+    var sep = div().h(px(rows.detail_separator)).flexNone();
+    if (!collapses) sep = sep.bg(theme.hairline(0.06));
+    return div().h(px(image_strip_height)).flexNone().flex().flexCol().child(sep).child(strip);
+}
+
+/// One selectable output line: joins the transcript's selection so paths,
+/// commands and output can be drag-selected and copied. Lines clip rather
+/// than ellipsize (selection maps the pointer onto the full text).
+fn selectableLine(key: u64, ix: usize, text: zpui.StyledText, theme: *const Theme) zpui.Div {
+    return div().wFull().minW0().overflowHidden().whitespaceNowrap().child(zpui.intoAnyElement(md.RichText{
+        .id = .{ .hash = mixKey(key, ix) },
+        .key = mixKey(key, ix),
+        .text = text,
+        .selection_wash = theme.selection,
+        .truncate_links = false,
+        .disclose_links = false,
+    }));
+}
+
 /// An open chip's body: output lines, thought lines, stats or an inline diff.
-fn detailBody(d: ToolDetail, theme: *const Theme) AnyElement {
+fn detailBody(d: ToolDetail, key: u64, theme: *const Theme) AnyElement {
     const body = div().wFull().minW0().flex().flexCol().overflowHidden();
     switch (d) {
         .diff => |dd| return zpui.intoAnyElement(body.child(diff_view.render(dd.file, dd.old_text, dd.new_text, theme))),
         .stats => |stats| {
             var b = body.py(px(6)).fontFamily(theme.font_mono).textSize(px(tool_text_size));
-            for (stats) |s| b = b.child(div().h(px(rows.output_line_height)).wFull().minW0().flex().itemsCenter().gap(px(8))
+            for (stats, 0..) |s, six| b = b.child(div().h(px(rows.output_line_height)).wFull().minW0().flex().itemsCenter().gap(px(8))
                 .child(files.icon(s.path, theme, 14))
-                .child(div().minW0().flex1().truncate().textColor(theme.text_faint).child(s.path))
+                .child(div().minW0().flex1().textColor(theme.text_faint).child(selectableLine(key, six, zpui.StyledText.init(s.path), theme)))
                 .child(div().flexNone().textColor(theme.success).child(zpui.fmt("+{d}", .{s.additions})))
                 .child(div().flexNone().textColor(theme.danger).child(zpui.fmt("\u{2212}{d}", .{s.deletions}))));
             return zpui.intoAnyElement(b);
         },
         .output => |o| {
             var b = body.py(px(6)).fontFamily(theme.font_mono).textSize(px(tool_text_size));
-            for (o.lines) |l| b = b.child(div().h(px(rows.output_line_height)).wFull().minW0().flex().itemsCenter()
-                .textColor(theme.text_faint).child(div().wFull().minW0().truncate().whitespaceNowrap().child(if (l.len == 0) " " else l)));
+            for (o.lines, 0..) |l, lix| {
+                const line_row = div().h(px(rows.output_line_height)).wFull().minW0().flex().itemsCenter().textColor(theme.text_faint);
+                b = b.child(if (l.len == 0) line_row else line_row.child(selectableLine(key, lix, zpui.StyledText.init(l), theme)));
+            }
             if (o.truncated_by > 0) b = b.child(moreLines(o.truncated_by, theme));
             return zpui.intoAnyElement(b);
         },
         .thought => |o| {
             var b = body.py(px(6)).textSize(px(tool_text_size));
-            for (o.lines) |l| {
+            for (o.lines, 0..) |l, lix| {
                 var line_row = div().h(px(rows.output_line_height)).wFull().minW0().flex().itemsCenter();
-                if (thoughtLineText(l, theme)) |st| line_row = line_row.child(div().wFull().minW0().truncate().whitespaceNowrap().child(st));
+                if (thoughtLineText(l, theme)) |st| line_row = line_row.child(selectableLine(key, lix, st, theme));
                 b = b.child(line_row);
             }
             if (o.truncated_by > 0) b = b.child(moreLines(o.truncated_by, theme));

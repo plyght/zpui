@@ -9,7 +9,7 @@ revision we ported from and diff forward from there.
 | upstream | repo | pinned | date | what tracks it |
 |---|---|---|---|---|
 | zui | https://github.com/zeronsh/zui | `dce5c1f737a834b32c2b531d552ea78035e54093` | 2026-10-07 | `src/**` (zpui) |
-| zeron | https://github.com/zeronsh/zeron | `9e1a11158b0626237c814f4bd36f5948483ed797` | 2026-10-02 | `apps/zeron/**` |
+| zeron | https://github.com/zeronsh/zeron | `037f4c10d67a38175b2386e776aba54355b4e941` | 2026-10-08 | `apps/zeron/**` |
 | gpui-component | https://github.com/zeronsh/gpui-component | `47ccd07295858d66f8fe826df9651a56218eb887` | 2026-10-07 | `apps/zeron/src/ui/editor/**`, `src/elements/scrollbar.zig` (optional) |
 
 zeron's own `Cargo.toml` pins zui at the same `dce5c1f` and gpui-component (`gpui-base`) at
@@ -315,7 +315,7 @@ No port needed (`n/a`): `crates/gpui/src/app/bench_context.rs`, `crates/gpui/src
 | `crates/ui/src/markdown/mod.rs` | `apps/zeron/src/markdown/root.zig`, `apps/zeron/src/ui/markdown/root.zig` | ported |  |
 | `crates/ui/src/markdown/render.rs` | `apps/zeron/src/ui/markdown/root.zig`, `apps/zeron/src/ui/markdown/rich_text.zig` | ported |  |
 | `crates/ui/src/markdown/selection.rs` | `apps/zeron/src/ui/markdown/rich_text.zig` | ported |  |
-| `crates/ui/src/markdown/veil.rs` | — | **not ported** |  |
+| `crates/ui/src/markdown/veil.rs` | `apps/zeron/src/ui/markdown/veil.zig` | ported | run recoloring half; chunk tracking moved to crates/veil |
 | `crates/ui/src/motion.rs` | `apps/zeron/src/theme/motion.zig`, `apps/zeron/src/ui/components/anim.zig`, `apps/zeron/src/ui/components/hover.zig` | ported |  |
 | `crates/ui/src/new_thread_background_*.rs` | — | **not ported** |  |
 | `crates/ui/src/notice.rs` | `apps/zeron/src/ui/transcript/view.zig`, `apps/zeron/src/ui/composer/composer.zig` | ported |  |
@@ -359,6 +359,10 @@ No port needed (`n/a`): `crates/gpui/src/app/bench_context.rs`, `crates/gpui/src
 | `crates/ui/src/shell/tabs.rs` | `apps/zeron/src/ui/shell/titlebar.zig` | ported |  |
 | `crates/ui/src/shell/*_tests.rs` | `apps/zeron/src/ui/shell/shell_test.zig` | partial |  |
 | `crates/ui/src/sound.rs` | — | **not ported** |  |
+| `crates/ui/src/tool_images.rs` | `apps/zeron/src/ui/transcript/tool_images.zig`, `apps/zeron/src/ui/transcript/tools.zig` | partial | image paths + preview strip via the shared attachment cache; no bounded thumbnail decode, release grace, offscreen budget or image context menu |
+| `crates/ui/src/roll_text.rs` | — | **not ported** | rolling chip labels (picker chips, compact effort title) show plainly |
+| `crates/ui/src/voice.rs`, `crates/ui/src/voice/**`, `crates/ui/src/shell/voice_stage.rs`, `crates/ui/src/orb/**` | — | **not ported** | Codex voice chat |
+| `crates/proto/src/attachment_mentions.rs` | `apps/zeron/src/markdown/attachment_mentions.zig`, `apps/zeron/src/ui/transcript/view.zig` | partial | pure module with the Rust tests; transcript shows chips as their plain label; no composer chip projection |
 | `crates/ui/src/state.rs` | `apps/zeron/src/model/app_state.zig`, `apps/zeron/src/model/engine_state.zig`, `apps/zeron/src/model/workspace.zig`, `apps/zeron/src/model/status.zig`, `apps/zeron/src/model/transcript_store.zig`, `apps/zeron/src/model/queue_store.zig` | ported |  |
 | `crates/ui/src/surface_chrome.rs` | `apps/zeron/src/ui/changes/tabs.zig`, `apps/zeron/src/theme/layout.zig` | ported |  |
 | `crates/ui/src/syntax_cache.rs` | `apps/zeron/src/ui/changes/highlight.zig`, `apps/zeron/src/ui/editor/highlight.zig` | partial |  |
@@ -405,6 +409,12 @@ No port needed (`n/a`): `crates/gpui/src/app/bench_context.rs`, `crates/gpui/src
 | `crates/doc/src/queue.rs` | `apps/zeron/src/model/queue_store.zig` | partial |  |
 | `crates/engine/src/rpc.rs` | `apps/zeron/src/engine/methods.zig`, `apps/zeron/src/engine/protocol.zig` | partial | stream classification + wire shapes |
 | `crates/update/**` | — | **not ported** | app self-update |
+| `crates/veil/src/lib.rs` | `apps/zeron/src/ui/markdown/veil.zig` | ported | streaming fade veil (moved from crates/ui/src/markdown/veil.rs) |
+| `crates/veil/src/caption.rs` | — | **not ported** | voice call captions |
+| `crates/audio/**` | — | **not ported** | Codex voice chat audio (capture, AEC, DSP) |
+| `crates/orb/**` | — | **not ported** | voice orb animation engine |
+| `crates/voice-media/**` | — | **not ported** | Codex voice chat media (WebRTC) |
+| `crates/voice-session/**` | — | **not ported** | Codex voice chat session |
 | `crates/voice/**` | — | **not ported** | Parakeet dictation |
 | `apps/zeron/src/main.rs` | `apps/zeron/src/main.zig`, `apps/zeron/src/engine_bin.zig` | partial | no URL argument; CLI subcommands live in the engine binary |
 | `apps/zeron/src/paths.rs` | `apps/zeron/src/model/settings.zig` | ported |  |

@@ -13,6 +13,7 @@ const shell_mod = @import("shell.zig");
 const sidebar_mod = @import("../sidebar/sidebar.zig");
 const right_pane_mod = @import("right_pane.zig");
 const pickers_mod = @import("../pickers/root.zig");
+const zeron_engine = @import("zeron_engine");
 
 const testing = std.testing;
 const TestWindow = zpui.core.test_platform.TestWindow;
@@ -171,6 +172,84 @@ test "new-session pickers open from the canvas chips and pick" {
     tw.typeKey("enter");
     h.app.runUntilParked();
     try testing.expect(ws_e.read(h.app).no_project);
+}
+
+test "project picker lists repositories then their devices" {
+    // pickers.rs `project_picker_lists_repositories_then_their_devices`.
+    var h = try Harness.init("apps/zeron/fixtures/reference");
+    defer h.deinit();
+    const gpa = testing.allocator;
+    const ws_e = h.state.read(h.app).workspace;
+    {
+        var l = ws_e.lease(h.app);
+        defer l.end();
+        if (l.value.local_device_id) |d| gpa.free(d);
+        l.value.local_device_id = try gpa.dupe(u8, "mac");
+    }
+    const devices = try std.json.parseFromSlice([]zeron_engine.protocol.Device, gpa,
+        \\[{"id":"mac","name":"MAC","platform":"macos"},{"id":"vps","name":"VPS","platform":"linux"}]
+    , .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
+    ws_e.update(h.app, model.WorkspaceStore.applyDevices, .{devices});
+    const spaces = try std.json.parseFromSlice([]zeron_engine.protocol.Space, gpa,
+        \\[{"id":"notes","deviceId":"mac","path":"/mac/notes","name":"notes","createdAt":"1970-01-01T00:00:00Z"},
+        \\ {"id":"server","deviceId":"vps","path":"/vps/server","name":"comet","repositoryId":"github.com/o/comet","gitDetected":true,"createdAt":"1970-01-01T00:01:00Z"},
+        \\ {"id":"laptop","deviceId":"mac","path":"/mac/laptop","name":"comet-laptop","repositoryId":"github.com/o/comet","gitDetected":true,"createdAt":"1970-01-01T00:02:00Z"},
+        \\ {"id":"server-wt","deviceId":"vps","path":"/vps/server-wt","name":"comet-wt","repositoryId":"github.com/o/comet","gitDetected":true,"createdAt":"1970-01-01T00:03:00Z"}]
+    , .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
+    ws_e.update(h.app, model.WorkspaceStore.applySpaces, .{spaces});
+    ws_e.update(h.app, model.WorkspaceStore.selectChat, .{@as(?[]const u8, null)});
+    ws_e.update(h.app, model.WorkspaceStore.selectSpace, .{@as(?[]const u8, "notes")});
+    const shell = h.handle.rootView(h.app).?.read(h.app);
+    const pickers = shell.main.read(h.app).slots.pickers;
+    var l = pickers.lease(h.app);
+    defer l.end();
+    const p = l.value;
+    // One row per repository, named for its oldest checkout.
+    const rows = p.projectRows(h.app);
+    try testing.expectEqual(@as(usize, 2), rows.len);
+    try testing.expectEqualStrings("comet", rows[0].name);
+    try testing.expectEqualStrings("repo:github.com/o/comet", rows[0].key);
+    try testing.expectEqualStrings("notes", rows[1].name);
+    try testing.expectEqualStrings("notes", rows[1].key);
+    // Picking it keeps the canvas on this device's checkout.
+    p.pickProject("repo:github.com/o/comet", null, &l.cx);
+    try testing.expectEqualStrings("laptop", ws_e.read(h.app).selected_space.?);
+    try testing.expectEqual(@as(?usize, 0), p.selectedSpaceIndex(h.app));
+    // The device picker offers only the project's checkouts; a device
+    // holding two is told apart by path.
+    const devs = p.deviceRows(h.app);
+    try testing.expectEqual(@as(usize, 3), devs.len);
+    try testing.expectEqualStrings("mac", devs[0].device_id);
+    try testing.expect(devs[0].detail == null);
+    try testing.expectEqualStrings("vps", devs[1].device_id);
+    try testing.expectEqualStrings("/vps/server", devs[1].detail.?);
+    try testing.expectEqualStrings("/vps/server-wt", devs[2].detail.?);
+    p.pickDeviceRow(devs[1], null, &l.cx);
+    try testing.expectEqualStrings("server", ws_e.read(h.app).selected_space.?);
+    try testing.expectEqual(@as(usize, 1), p.selectedDeviceIndex(h.app));
+    // Without a project, every device is offered.
+    ws_e.update(h.app, model.WorkspaceStore.selectSpace, .{@as(?[]const u8, null)});
+    const all = p.deviceRows(h.app);
+    try testing.expectEqual(@as(usize, 2), all.len);
+    try testing.expect(all[0].space_id == null and all[1].space_id == null);
+    // A device switch keeps the project when the device has a checkout.
+    ws_e.update(h.app, model.WorkspaceStore.selectSpace, .{@as(?[]const u8, "laptop")});
+    ws_e.update(h.app, model.WorkspaceStore.selectDevice, .{@as([]const u8, "vps")});
+    try testing.expectEqualStrings("server", ws_e.read(h.app).selected_space.?);
+}
+
+test "idle shell sleeps until the minute; a working chat ticks every second" {
+    // shell.rs `shell_clock_wake` (`idle_shell_sleeps_until_the_minute`).
+    var h = try Harness.init("apps/zeron/fixtures/reference");
+    defer h.deinit();
+    const ws_e = h.state.read(h.app).workspace;
+    ws_e.update(h.app, model.WorkspaceStore.selectChat, .{@as(?[]const u8, null)});
+    const n = model.time.parse("2026-07-19T12:00:20Z").?;
+    const wake = shell_mod.shellClockWake(ws_e.read(h.app), n);
+    try testing.expect(wake.eql(model.time.parse("2026-07-19T12:01:00Z").?));
+    // On the minute itself the next boundary is a full minute away.
+    const on = model.time.parse("2026-07-19T12:01:00Z").?;
+    try testing.expect(shell_mod.shellClockWake(ws_e.read(h.app), on).eql(model.time.parse("2026-07-19T12:02:00Z").?));
 }
 
 test "clicking a sidebar row selects its chat" {

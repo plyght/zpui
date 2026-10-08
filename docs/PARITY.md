@@ -110,7 +110,7 @@ handlers. Customizable combos come from `KeymapConfig` (`mod` = cmd on macOS, ct
 
 | Feature | Rust | Zig | Status |
 |---|---|---|---|
-| Space filter dropdown ("All projects", search) | `shell/spaces.rs` | `ui/sidebar/sidebar.zig` | ✅ |
+| Space filter dropdown ("All projects", search); projects grouped by repository identity (`repositoryId`: one row / group / filter per repository across devices, named for the oldest checkout, "@ A · B" / "N devices" host tag) | `shell/spaces.rs`, `state.rs` `project_filter` / `projects` / `project_members` | `ui/sidebar/sidebar.zig`, `model/workspace.zig` (`projectFilterMatches`, `projects`, `projectMembers`, `projectDeviceTag`), `model/view.zig` (`projectKey`, `representativeSpace`) | ✅ (no search field in the filter menu) |
 | Pinned / Sessions / Archived disclosures, detailed + compact rows, status glyphs, harness/branch/project labels | `shell.rs` `render_chat_row`, `spaces.rs` | `ui/sidebar/sidebar.zig` | ✅ |
 | Pin drag-reorder (optimistic overlay, `changeSidebarPin move`) | `shell/sidebar_pins.rs` | `ui/sidebar/sidebar.zig` `PinDrag` | ✅ |
 | View menu (organize by device/project/none, sort, show branch/PR/harness/icon/location) | `render_sidebar_view_menu` | `ui/sidebar/sidebar.zig`; choices persist (`sidebarOrganization`/`Sort`/`Show*`/`Compact`) and are read back at boot | ✅ |
@@ -130,10 +130,10 @@ handlers. Customizable combos come from `KeymapConfig` (`mod` = cmd on macOS, ct
 |---|---|---|---|
 | Command palette (mod-k): actions, chat search, key hints | `shell/command_palette.rs` | `ui/shell/palette.zig` | ✅ |
 | Add-space palette (devices → drives → folders, typed paths, ⌘⏎) | `shell/spaces.rs` `AddSpaceFlow` | `ui/pickers/add_project.zig` | ✅ |
-| New-session target pickers: project, device, checkout (local / new worktree / reuse worktree), ref (`ListRefs`, `SwitchRef`) | `pickers.rs` | `ui/pickers/pickers.zig`, `paths.zig`, `menu.zig` | ✅ |
+| New-session target pickers: project (one row per repository across devices), device (the project's checkouts, path when a device holds several), checkout (local / new worktree / reuse worktree), ref (`ListRefs`, `SwitchRef`; the previous project's ref labels held until refs land) | `pickers.rs` | `ui/pickers/pickers.zig`, `paths.zig`, `menu.zig` | 🟡 no rolling chip labels (`roll_text.rs`); per-device catalog revalidation n/a (the Zig catalog is the local engine's) |
 | Repo picker clone / create (`ListRepos`, `CloneRepo`, `CreateRepo`, `AddRepo`) | — (engine RPCs only; zeron's UI at the pin never calls them) | — | ➖ nothing to port |
 | Worktree delete (`DeleteWorktree`) | — (engine RPC only; no UI caller in zeron) | — | ➖ nothing to port |
-| Harness/model picker, compact presentation (effort slider, fast mode, model options, provider page, favorites) | `pickers/compact.rs` | `ui/composer/model_picker.zig`, `run_config.zig` | ✅ |
+| Harness/model picker, compact presentation (effort slider, fast mode, model options, model list over every offered provider with the provider tab strip, favorites) | `pickers/compact.rs` | `ui/composer/model_picker.zig`, `run_config.zig` | ✅ (no Tab provider cycling, no rolling effort title) |
 | Full (non-compact) model picker (`compactModelPicker = false`) | `pickers.rs` `render_harness_model_popover` | — (setting has no consumer; compact is always shown) | ❌ |
 | Popover primitives: frosted card, menu-in motion, keyboard nav, ranked search, outside-click dismissal | `popover.rs` | `ui/components/popover.zig`, `ui/pickers/menu.zig` | ✅ |
 | Nested-menu hover intent; dropdown containment in dialogs | `popover/hover_intent.rs`, `popover/contained.rs` | — (only flat menus exist) | ❌ |
@@ -170,6 +170,8 @@ handlers. Customizable combos come from `KeymapConfig` (`mod` = cmd on macOS, ct
 |---|---|---|---|
 | Virtualized block-granular rows, stick-to-bottom, minimal splices on stream | `transcript.rs` | `ui/transcript/view.zig`, `rows.zig` | ✅ |
 | Tool-group accordion, chips, detail folds with tweens, inline diffs | `transcript.rs` | `ui/transcript/tools.zig`, `diff_view.zig` | ✅ |
+| Tool-call image previews (files a tool read/wrote/printed, 220px strip in the open chip) and selectable tool output (paths, commands, output lines join the selection) | `tool_images.rs`, `transcript.rs` `render_tool_image_strip` / `detail_body` | `ui/transcript/tool_images.zig` (paths, UNC/device refusal, `resolvePath`, 8K-char line cap; Rust tests ported), `tools.zig` `imageStrip` / `selectableLine` | 🟡 pixels come from the shared attachment cache (no bounded thumbnail decode, release grace or budget); no image context menu (Copy path / Copy image) |
+| Attachment chips in sent messages (`[Image N](zeron-image:N)`, `[name](zeron-attachment:N)`) | `transcript.rs`, `proto/attachment_mentions.rs` | `markdown/attachment_mentions.zig` (Rust tests ported); `TranscriptView.renderUser` shows each chip as its plain label | 🟡 no chip pills, the strip keeps chipped attachments |
 | Reasoning ("Thought process") | `transcript.rs` | `ui/transcript/thought.zig` | ✅ |
 | User bubble collapse/expand, copy message | `transcript.rs` | `ui/transcript/view.zig` | ✅ |
 | Error chip, fork marker, input (question) chip, working trailer with flavour words | `transcript.rs`, `notice.rs` | `ui/transcript/view.zig` | ✅ |

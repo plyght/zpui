@@ -12,8 +12,8 @@
   "zeron": {
    "url": "https://github.com/zeronsh/zeron",
    "branch": "main",
-   "pinned": "9e1a11158b0626237c814f4bd36f5948483ed797",
-   "pinned_date": "2026-10-02",
+   "pinned": "037f4c10d67a38175b2386e776aba54355b4e941",
+   "pinned_date": "2026-10-08",
    "local": "/home/user/zeron"
   },
   "gpui-component": {
@@ -2047,8 +2047,11 @@
   {
    "upstream": "zeron",
    "pattern": "crates/ui/src/markdown/veil.rs",
-   "zig": [],
-   "status": "not-ported"
+   "zig": [
+    "apps/zeron/src/ui/markdown/veil.zig"
+   ],
+   "status": "ported",
+   "note": "run recoloring half; chunk tracking moved to crates/veil"
   },
   {
    "upstream": "zeron",
@@ -2538,6 +2541,51 @@
   },
   {
    "upstream": "zeron",
+   "pattern": "crates/ui/src/tool_images.rs",
+   "zig": [
+    "apps/zeron/src/ui/transcript/tool_images.zig",
+    "apps/zeron/src/ui/transcript/tools.zig"
+   ],
+   "status": "partial",
+   "note": "image paths + preview strip via the shared attachment cache; no bounded thumbnail decode, release grace, offscreen budget or image context menu"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/roll_text.rs",
+   "zig": [],
+   "status": "not-ported",
+   "note": "rolling chip labels (picker chips, compact effort title) show plainly"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/voice.rs",
+   "zig": [],
+   "status": "not-ported",
+   "note": "Codex voice chat"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/voice/**",
+   "zig": [],
+   "status": "not-ported",
+   "note": "Codex voice chat (mic permissions, remote voice)"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/shell/voice_stage.rs",
+   "zig": [],
+   "status": "not-ported",
+   "note": "Codex voice chat stage"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/ui/src/orb/**",
+   "zig": [],
+   "status": "not-ported",
+   "note": "voice orb"
+  },
+  {
+   "upstream": "zeron",
    "pattern": "crates/ui/src/**",
    "zig": [],
    "status": "not-ported",
@@ -2778,6 +2826,16 @@
   },
   {
    "upstream": "zeron",
+   "pattern": "crates/proto/src/attachment_mentions.rs",
+   "zig": [
+    "apps/zeron/src/markdown/attachment_mentions.zig",
+    "apps/zeron/src/ui/transcript/view.zig"
+   ],
+   "status": "partial",
+   "note": "pure module ported with the Rust tests; transcript shows chips as their plain label, the composer inserts no chips (no chip projection)"
+  },
+  {
+   "upstream": "zeron",
    "pattern": "crates/proto/**",
    "zig": [],
    "status": "n/a"
@@ -2860,6 +2918,56 @@
    "zig": [],
    "status": "not-ported",
    "note": "app self-update"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/veil/src/lib.rs",
+   "zig": [
+    "apps/zeron/src/ui/markdown/veil.zig"
+   ],
+   "status": "ported",
+   "note": "streaming fade veil (moved from crates/ui/src/markdown/veil.rs)"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/veil/src/caption.rs",
+   "zig": [],
+   "status": "not-ported",
+   "note": "voice call captions"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/veil/**",
+   "zig": [],
+   "status": "n/a"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/audio/**",
+   "zig": [],
+   "status": "not-ported",
+   "note": "Codex voice chat audio (capture, AEC, DSP)"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/orb/**",
+   "zig": [],
+   "status": "not-ported",
+   "note": "voice orb animation engine"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/voice-media/**",
+   "zig": [],
+   "status": "not-ported",
+   "note": "Codex voice chat media (WebRTC)"
+  },
+  {
+   "upstream": "zeron",
+   "pattern": "crates/voice-session/**",
+   "zig": [],
+   "status": "not-ported",
+   "note": "Codex voice chat session"
   },
   {
    "upstream": "zeron",

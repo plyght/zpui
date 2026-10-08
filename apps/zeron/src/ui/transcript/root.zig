@@ -23,6 +23,7 @@ pub const subagents = @import("subagents.zig");
 pub const blobs = @import("blobs.zig");
 pub const badges = @import("badges.zig");
 pub const stick = @import("stick.zig");
+pub const tool_images = @import("tool_images.zig");
 
 pub const TranscriptView = view.TranscriptView;
 pub const parseFixture = view.parseFixture;

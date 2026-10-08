@@ -165,6 +165,65 @@ pub fn sortSpaces(spaces: []Space) void {
     }.lt);
 }
 
+/// `project_key`: the project a space belongs to. Spaces sharing a
+/// repository identity (clones and worktrees of one repository, on any
+/// device) are one project; a space without one is a project of its own.
+/// Rust renders it as `"repo:{repository_id}"` or the space id; this keeps
+/// the two halves apart and compares them the same way (`eql`, `write`).
+pub const ProjectKey = struct {
+    repository_id: ?[]const u8,
+    space_id: []const u8,
+
+    const prefix = "repo:";
+
+    pub fn eql(a: ProjectKey, b: ProjectKey) bool {
+        if (a.repository_id) |ra| {
+            if (b.repository_id) |rb| return std.mem.eql(u8, ra, rb);
+            return mixedEql(ra, b.space_id);
+        }
+        if (b.repository_id) |rb| return mixedEql(rb, a.space_id);
+        return std.mem.eql(u8, a.space_id, b.space_id);
+    }
+
+    fn mixedEql(repository_id: []const u8, space_id: []const u8) bool {
+        return std.mem.startsWith(u8, space_id, prefix) and std.mem.eql(u8, space_id[prefix.len..], repository_id);
+    }
+
+    /// The Rust string form.
+    pub fn write(k: ProjectKey, w: *std.Io.Writer) std.Io.Writer.Error!void {
+        if (k.repository_id) |r| try w.print(prefix ++ "{s}", .{r}) else try w.writeAll(k.space_id);
+    }
+};
+
+pub fn projectKey(space: *const Space) ProjectKey {
+    return .{ .repository_id = space.repositoryId, .space_id = space.id };
+}
+
+pub fn sameProject(a: *const Space, b: *const Space) bool {
+    return projectKey(a).eql(projectKey(b));
+}
+
+/// `representative_space`: the space that speaks for `space`'s whole
+/// project — its oldest member, id tiebreak — so a repository looks alike
+/// on every device.
+pub fn representativeSpace(spaces: []const Space, space: *const Space) *const Space {
+    const rid = space.repositoryId orelse return space;
+    var best: ?*const Space = null;
+    var best_at: Timestamp = .epoch;
+    for (spaces) |*s| {
+        const r = s.repositoryId orelse continue;
+        if (!std.mem.eql(u8, r, rid)) continue;
+        const at = time.parse(s.createdAt) orelse Timestamp.epoch;
+        if (best) |b| {
+            const o = at.order(best_at);
+            if (o == .gt or (o == .eq and std.mem.order(u8, s.id, b.id) != .lt)) continue;
+        }
+        best = s;
+        best_at = at;
+    }
+    return best orelse space;
+}
+
 /// Sidebar order: recency desc, then `createdAt` desc, then id.
 pub fn sortChats(chats: []Chat) void {
     std.sort.block(Chat, chats, {}, struct {
@@ -693,6 +752,35 @@ test "gate phase basics" {
     try t.expectEqual(GatePhase.sign_in, gatePhase(.ready, .synced, &signed_out));
     try t.expectEqual(GatePhase.sign_in, gatePhase(.ready, null, null));
     try t.expectEqual(GatePhase.loading, gatePhase(.connecting, null, null));
+}
+
+test "spaces sharing a repository are one project led by the oldest" {
+    // proto view.rs `project_tests`.
+    const mk = struct {
+        fn f(id: []const u8, device: []const u8, repository: ?[]const u8, created_at: []const u8) Space {
+            return .{ .id = id, .deviceId = device, .path = id, .gitDetected = repository != null, .repositoryId = repository, .createdAt = created_at };
+        }
+    }.f;
+    const spaces = [_]Space{
+        mk("laptop", "mac", "github.com/o/r", "1970-01-01T00:02:00Z"),
+        mk("server", "vps", "github.com/o/r", "1970-01-01T00:01:00Z"),
+        mk("notes", "mac", null, "1970-01-01T00:00:00Z"),
+    };
+    var buf: [64]u8 = undefined;
+    var w: std.Io.Writer = .fixed(&buf);
+    try projectKey(&spaces[0]).write(&w);
+    try std.testing.expectEqualStrings("repo:github.com/o/r", w.buffered());
+    try std.testing.expect(sameProject(&spaces[0], &spaces[1]));
+    try std.testing.expect(!sameProject(&spaces[0], &spaces[2]));
+    w = .fixed(&buf);
+    try projectKey(&spaces[2]).write(&w);
+    try std.testing.expectEqualStrings("notes", w.buffered());
+    try std.testing.expectEqualStrings("server", representativeSpace(&spaces, &spaces[0]).id);
+    try std.testing.expectEqualStrings("server", representativeSpace(&spaces, &spaces[1]).id);
+    try std.testing.expectEqualStrings("notes", representativeSpace(&spaces, &spaces[2]).id);
+    // The string forms compare equal across the two halves, like Rust's.
+    const odd = mk("repo:github.com/o/r", "mac", null, "1970-01-01T00:00:00Z");
+    try std.testing.expect(sameProject(&odd, &spaces[0]));
 }
 
 test "project label and version triple" {

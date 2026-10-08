@@ -263,7 +263,7 @@ pub const Notifier = struct {
         for (ws.sessions()) |*session| {
             const cur = SessionState.of(session, n);
             const chat = ws.chat(session.chatId);
-            const notify = if (chat) |ch| ch.parentChatId == null else false;
+            const notify = if (chat) |ch| ch.isTopLevel() else false;
             const send_pending = self.sendPending(session.chatId, n, cx);
             const gop = self.baselines.getOrPut(self.gpa, session.chatId) catch continue;
             if (!gop.found_existing) {

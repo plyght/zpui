@@ -1563,7 +1563,7 @@ pub const FilesPanel = struct {
         if (kind == .chats) {
             header = header.child(div().flexNone().flex().flexRow().itemsCenter().gap(px(2)).opacity(0).groupHover(group, sb.opacity(1))
                 .child(headerAction("files-sections-new-chat", .plus, "New side chat", theme).onClick(cx.listener(onNewSideChat)))
-                .child(headerAction("files-sections-fork", .git_branch, "Fork this chat", theme).onClick(cx.listener(onFork))));
+                .child(headerAction("files-sections-fork", .fork, "Fork this chat", theme).onClick(cx.listener(onFork))));
         }
         // [motion] `render_chevron` / `render_disclosure_body`: the right
         // chevron turns a quarter while the body tweens (COLLAPSE).
@@ -1619,7 +1619,7 @@ pub const FilesPanel = struct {
                 .textSize(ui.rems(12)).lineHeight(px(16)).textColor(theme.text_muted.opacity(0.5))
                 .child(if (kind == .subagents) "Subagents will appear here when they are created" else "Side chats will appear here when they are created"));
             if (kind == .chats) empty = empty.child(div().flex().flexRow().itemsCenter().gap(px(6)).h(px(empty_actions_height))
-                .child(pillButton("files-sections-empty-fork", .git_branch, "Fork", theme).onClick(cx.listener(onFork)))
+                .child(pillButton("files-sections-empty-fork", .fork, "Fork", theme).onClick(cx.listener(onFork)))
                 .child(pillButton("files-sections-empty-new", .plus, "New side chat", theme).onClick(cx.listener(onNewSideChat))));
             return empty;
         }

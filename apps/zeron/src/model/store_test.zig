@@ -370,6 +370,107 @@ test "bootstrap: engine info, standing watches, list updates with change detecti
     try testing.expectEqual(model.view.Indicator.none, ws.indicatorFor("chat-a", model.time.parse("2026-01-05T00:01:00Z").?));
 }
 
+test "project filter and projects span a repository across devices" {
+    // state.rs `project_filter_and_projects_span_a_repository_across_devices`.
+    var h = try Harness.init();
+    defer h.deinit();
+    const app = h.app;
+    var counter: Counter = .{};
+    var s1 = try app.subscribe(h.workspace(), &counter, Counter.onChats);
+    defer s1.deinit();
+    const chats = try h.fake.waitRequest("WatchChats", null, 0);
+    const spaces = try h.fake.waitRequest("WatchSpaces", null, 0);
+    h.fake.item(spaces.id, "[" ++
+        \\{"id":"remote","deviceId":"metal","path":"/w/anara","repositoryId":"commit:abc","createdAt":"2026-01-01T00:01:00Z"},
+    ++
+        \\{"id":"local","deviceId":"dev-local","path":"/h/anara","repositoryId":"commit:abc","createdAt":"2026-01-01T00:02:00Z"},
+    ++
+        \\{"id":"other","deviceId":"dev-local","path":"/h/notes","createdAt":"2026-01-01T00:03:00Z"}
+    ++ "]");
+    h.fake.item(chats.id, "[" ++
+        \\{"id":"on-remote","deviceId":"metal","archived":false,"createdAt":"2026-01-01T00:00:00Z","spaceId":"remote"},
+    ++
+        \\{"id":"on-local","deviceId":"dev-local","archived":false,"createdAt":"2026-01-01T00:00:00Z","spaceId":"local"},
+    ++
+        \\{"id":"on-other","deviceId":"dev-local","archived":false,"createdAt":"2026-01-01T00:00:00Z","spaceId":"other"}
+    ++ "]");
+    try h.pump(&counter, struct {
+        fn f(c: *Counter, _: *App) bool {
+            return c.chats >= 1;
+        }
+    }.f);
+    const ws = h.workspace().read(app);
+    try testing.expect(ws.spaces_synced);
+    const gpa = testing.allocator;
+
+    // One project per repository, its checkouts local-first.
+    const projects = try ws.projects(gpa);
+    defer model.WorkspaceStore.freeProjects(gpa, projects);
+    try testing.expectEqual(@as(usize, 2), projects.len);
+    try testing.expectEqual(@as(usize, 2), projects[0].len);
+    try testing.expectEqualStrings("local", projects[0][0].id);
+    try testing.expectEqualStrings("remote", projects[0][1].id);
+    try testing.expectEqualStrings("other", projects[1][0].id);
+    // The oldest checkout speaks for the project.
+    try testing.expectEqualStrings("remote", ws.representativeSpace(projects[0][0]).id);
+
+    // Filtering on either checkout shows the whole repository's chats.
+    const n = model.Timestamp.fromUnixMillis(1_767_500_000_000);
+    for ([_][]const u8{ "remote", "local" }) |filter| {
+        const rows = try ws.sidebarChats(gpa, n, filter);
+        defer gpa.free(rows);
+        try testing.expectEqual(@as(usize, 2), rows.len);
+        for (rows) |r| try testing.expect(!std.mem.eql(u8, r.chat.id, "on-other"));
+    }
+    const other_only = try ws.sidebarChats(gpa, n, "other");
+    defer gpa.free(other_only);
+    try testing.expectEqual(@as(usize, 1), other_only.len);
+    try testing.expectEqualStrings("on-other", other_only[0].chat.id);
+
+    // A two-device project tags both hosts; a one-device one keeps the plain tag.
+    var buf: [128]u8 = undefined;
+    const tag, _ = ws.projectDeviceTag(&buf, projects[0], n);
+    try testing.expect(std.mem.startsWith(u8, tag, "@ "));
+    try testing.expect(std.mem.indexOf(u8, tag, " \u{00B7} ") != null);
+    var buf2: [128]u8 = undefined;
+    const tag1, _ = ws.projectDeviceTag(&buf, projects[1], n);
+    const plain, _ = ws.spaceDeviceTag(&buf2, projects[1][0], n);
+    try testing.expectEqualStrings(plain, tag1);
+}
+
+test "clock transitions: a working session's stale cutoff is the next deadline" {
+    // state.rs `next_clock_transition` / `stale_session_notifies_state_at_its_cutoff`.
+    var h = try Harness.init();
+    defer h.deinit();
+    const app = h.app;
+    var counter: Counter = .{};
+    var s1 = try app.subscribe(h.workspace(), &counter, Counter.onSessions);
+    defer s1.deinit();
+    const sessions = try h.fake.waitRequest("WatchSessions", null, 0);
+    h.workspace().update(app, struct {
+        fn f(ws: *model.WorkspaceStore, _: *zpui.Context(model.WorkspaceStore)) void {
+            ws.now_override = model.time.parse("2026-07-19T12:00:00Z").?;
+        }
+    }.f, .{});
+    h.fake.item(sessions.id, "[{\"chatId\":\"row\",\"deviceId\":\"dev-local\",\"status\":\"working\",\"updatedAt\":\"2026-07-19T11:59:50Z\"}," ++
+        "{\"chatId\":\"idle\",\"deviceId\":\"dev-local\",\"status\":\"idle\",\"updatedAt\":\"2026-07-19T11:00:00Z\"}]");
+    try h.pump(&counter, struct {
+        fn f(c: *Counter, _: *App) bool {
+            return c.sessions >= 1;
+        }
+    }.f);
+    const ws = h.workspace().read(app);
+    const now = ws.now_override.?;
+    const cutoff = model.time.parse("2026-07-19T11:59:50Z").?.addMillis(model.view.session_stale_ms + 1);
+    try testing.expect(ws.nextClockTransition(now).?.eql(cutoff));
+    try testing.expectEqual(model.view.Indicator.working, ws.indicatorFor("row", cutoff.addMillis(-1)));
+    try testing.expectEqual(model.view.Indicator.none, ws.indicatorFor("row", cutoff));
+    try testing.expect(!ws.clockTransitionBetween(now, cutoff.addMillis(-1)));
+    try testing.expect(ws.clockTransitionBetween(now, cutoff));
+    // Past every deadline nothing is armed (idle state never polls).
+    try testing.expect(ws.nextClockTransition(cutoff) == null);
+}
+
 const TranscriptCounter = struct {
     changed: u32 = 0,
     text: u32 = 0,

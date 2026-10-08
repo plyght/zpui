@@ -43,7 +43,18 @@ pub const capabilities = struct {
     pub const message_queue_clean_attachment_text_v1 = "message-queue-clean-attachment-text-v1";
     pub const message_queue_edit_lease_v1 = "message-queue-edit-lease-v1";
     pub const harness_updates_v1 = "harness-updates-v1";
+    /// `zeron_proto::voice::remote::CAPABILITY`.
+    pub const voice_client_media_v1 = "voice-client-media-v1";
 };
+
+/// `zeron_proto::voice::ORCHESTRATOR_CHAT_PREFIX`: id prefix of the hidden
+/// chat that hosts a voice orchestrator session (never a sidebar row).
+pub const voice_orchestrator_chat_prefix = "voice-orchestrator-";
+
+/// `zeron_proto::voice::is_orchestrator_chat`.
+pub fn isOrchestratorChat(chat_id: []const u8) bool {
+    return std.mem.startsWith(u8, chat_id, voice_orchestrator_chat_prefix);
+}
 
 /// `EngineInfo` reply.
 pub const EngineInfo = struct {
@@ -546,6 +557,12 @@ pub const Chat = struct {
     roomGen: ?u32 = null,
     parentChatId: ?[]const u8 = null,
 
+    /// `Chat::is_top_level`: neither another chat's worker (`parentChatId`)
+    /// nor a hidden voice orchestrator.
+    pub fn isTopLevel(self: Chat) bool {
+        return self.parentChatId == null and !isOrchestratorChat(self.id);
+    }
+
     /// RFC 3339 UTC timestamps from the engine compare lexicographically.
     pub fn unseen(self: Chat) bool {
         const msg = self.lastMessageAt orelse return false;
@@ -563,6 +580,10 @@ pub const Space = struct {
     gitDetected: bool = false,
     gitCheckedAt: ?[]const u8 = null,
     checkoutId: ?[]const u8 = null,
+    /// Owner-stamped repository identity shared by every clone and worktree
+    /// (`commit:<sha>`, `host/owner/repo`, or `local:<hash>`). Opaque: spaces
+    /// with equal ids are one project (`view.projectKey`).
+    repositoryId: ?[]const u8 = null,
     createdAt: []const u8,
 };
 

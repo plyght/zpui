@@ -222,6 +222,9 @@ pub const chevron: MotionSpec = .init(200, ease);
 pub const scroll_glide: MotionSpec = .init(500, ease_in_out);
 /// CSS `transition-colors` default: every hover wash fades over this.
 pub const hover_fade: MotionSpec = .init(150, ease_tailwind);
+/// Zeron Icons (icons.zeron.sh) state morph: `--zi-duration: 280ms` over
+/// `cubic-bezier(.22, 1, .36, 1)` — the sidebar glyph's panel open <-> closed.
+pub const glyph_state: MotionSpec = .init(280, ease_out_quint);
 /// Zeron loader pulse period.
 pub const zeron_pulse: MotionSpec = .init(2400, ease);
 /// Gradient matrix spinner wave period.
@@ -512,6 +515,86 @@ pub const HoverFades = struct {
     }
 };
 
+// ---- two-state glyph morphs (CSS `transition` on a `data-state` flip) ----
+
+/// `StateMorphs`: Zeron Icons morph between two states (the sidebar glyph's
+/// panel narrows when the sidebar closes). Same clock and liveness rules as
+/// `HoverFades`, keyed by the element's *state* rather than pointer events:
+/// the first read of a key snaps to its state (mounting never replays a
+/// morph), a flip re-anchors at the current value so a mid-flight toggle
+/// reverses smoothly, and an entry unread for a full frame is pruned.
+pub const StateMorphs = struct {
+    entries: std.StringHashMapUnmanaged(Entry) = .empty,
+    frame: u64 = 0,
+
+    const Entry = struct {
+        origin: f32,
+        target: f32,
+        started: u64,
+        spec: MotionSpec,
+        seen: u64,
+
+        fn duration(e: Entry) u64 {
+            return e.spec.totalNs(1.0);
+        }
+
+        fn value(e: Entry, now: u64) f32 {
+            const span = e.duration();
+            const elapsed = now -| e.started;
+            if (span == 0 or elapsed >= span) return e.target;
+            const raw: f32 = @floatCast(@as(f64, @floatFromInt(elapsed)) / @as(f64, @floatFromInt(span)));
+            return lerp(e.origin, e.target, e.spec.progress(raw));
+        }
+
+        fn settled(e: Entry, now: u64) bool {
+            return e.origin == e.target or now -| e.started >= e.duration();
+        }
+    };
+
+    pub fn deinit(self: *StateMorphs, gpa: std.mem.Allocator) void {
+        var it = self.entries.keyIterator();
+        while (it.next()) |k| gpa.free(k.*);
+        self.entries.deinit(gpa);
+    }
+
+    /// Progress (0 = off, 1 = on) of `key` toward `on` at monotonic `now`
+    /// (ns); stamps liveness. Reduced motion snaps a flip to its endpoint.
+    pub fn valueAt(self: *StateMorphs, gpa: std.mem.Allocator, key: []const u8, on: bool, spec: MotionSpec, reduced: bool, now: u64) f32 {
+        const target: f32 = if (on) 1.0 else 0.0;
+        const e = self.entries.getPtr(key) orelse {
+            const owned = gpa.dupe(u8, key) catch return target;
+            self.entries.put(gpa, owned, .{ .origin = target, .target = target, .started = now, .spec = spec, .seen = self.frame }) catch gpa.free(owned);
+            return target;
+        };
+        if (e.target != target) {
+            const current = e.value(now);
+            e.* = .{ .origin = if (reduced) target else current, .target = target, .started = now, .spec = spec, .seen = self.frame };
+        }
+        e.seen = self.frame;
+        return e.value(now);
+    }
+
+    /// Once per frame: prune unmounted entries; true while any morph is
+    /// mid-flight (keep frames coming).
+    pub fn tick(self: *StateMorphs, gpa: std.mem.Allocator, now: u64) bool {
+        self.frame += 1;
+        var active = false;
+        var it = self.entries.iterator();
+        while (it.next()) |kv| {
+            const e = kv.value_ptr.*;
+            if (e.seen + 1 < self.frame) {
+                const k = kv.key_ptr.*;
+                self.entries.removeByPtr(kv.key_ptr);
+                gpa.free(k);
+                it = self.entries.iterator();
+                continue;
+            }
+            if (!e.settled(now)) active = true;
+        }
+        return active;
+    }
+};
+
 // ---- reduced motion ----
 
 /// The user's reduced-motion preference (`reduceMotion` in ui-settings.json).
@@ -650,6 +733,34 @@ test "hover fades" {
     _ = fades.tick(gpa, 0);
     _ = fades.tick(gpa, 0);
     try testing.expectEqual(@as(usize, 0), fades.entries.count());
+}
+
+test "state morph snaps on mount and reverses continuously" {
+    // motion.rs `state_morph_snaps_on_mount_and_reverses_continuously`.
+    const gpa = testing.allocator;
+    var morphs: StateMorphs = .{};
+    defer morphs.deinit(gpa);
+    const ms = std.time.ns_per_ms;
+    const t0: u64 = 1000 * ms;
+    // First sight lands on the state: no replay at mount.
+    try testing.expectEqual(@as(f32, 1), morphs.valueAt(gpa, "glyph", true, glyph_state, false, t0));
+    try testing.expect(!morphs.tick(gpa, t0));
+    // Flip: starts from 1, mid-flight strictly between, lands at 0.
+    try testing.expectEqual(@as(f32, 1), morphs.valueAt(gpa, "glyph", false, glyph_state, false, t0 + 10 * ms));
+    const mid = morphs.valueAt(gpa, "glyph", false, glyph_state, false, t0 + 80 * ms);
+    try testing.expect(mid > 0 and mid < 1);
+    try testing.expect(morphs.tick(gpa, t0 + 80 * ms));
+    // Reverse mid-flight re-anchors (no jump), then lands at 1.
+    const at_flip = morphs.valueAt(gpa, "glyph", true, glyph_state, false, t0 + 80 * ms);
+    try testing.expectApproxEqAbs(mid, at_flip, 1e-4);
+    try testing.expectEqual(@as(f32, 1), morphs.valueAt(gpa, "glyph", true, glyph_state, false, t0 + 400 * ms));
+    try testing.expect(!morphs.tick(gpa, t0 + 400 * ms));
+    // Reduced motion snaps a flip.
+    try testing.expectEqual(@as(f32, 0), morphs.valueAt(gpa, "glyph", false, glyph_state, true, t0 + 500 * ms));
+    // Unread for a full frame: pruned (a remount snaps again).
+    _ = morphs.tick(gpa, t0 + 600 * ms);
+    _ = morphs.tick(gpa, t0 + 700 * ms);
+    try testing.expectEqual(@as(usize, 0), morphs.entries.count());
 }
 
 test "manual tween" {

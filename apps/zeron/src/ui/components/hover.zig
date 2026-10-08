@@ -20,9 +20,12 @@ const HoverFades = zt.motion.HoverFades;
 pub const HoverGlobal = struct {
     gpa: std.mem.Allocator,
     fades: HoverFades = .{},
+    /// Two-state glyph morphs (`motion::state_t`), ticked with the fades.
+    morphs: zt.motion.StateMorphs = .{},
 
     pub fn deinit(self: *HoverGlobal) void {
         self.fades.deinit(self.gpa);
+        self.morphs.deinit(self.gpa);
     }
 };
 
@@ -60,10 +63,21 @@ pub fn blend(cx: anytype, key: []const u8, rest: zpui.Hsla, hover: zpui.Hsla) zp
     return global(app).fades.blend(key, rest, hover, now(app));
 }
 
+/// `motion::state_t`: morph progress (0..1) of `key` toward `on` this frame
+/// (first sight snaps; a flip eases over `spec`).
+pub fn stateT(cx: anytype, key: []const u8, on: bool, spec: zt.motion.MotionSpec, reduced: bool) f32 {
+    const app = appOf(cx);
+    const g = global(app);
+    return g.morphs.valueAt(g.gpa, key, on, spec, reduced, now(app));
+}
+
 /// Once per frame from the root view: prunes, and keeps frames coming while
-/// any fade is mid-flight.
+/// any fade or state morph is mid-flight (`hover_fades_active` +
+/// `state_morphs_active`).
 pub fn tick(window: *zpui.Window, cx: anytype) void {
     const app = appOf(cx);
     const g = global(app);
-    if (g.fades.tick(g.gpa, now(app))) window.requestAnimationFrame();
+    const fading = g.fades.tick(g.gpa, now(app));
+    const morphing = g.morphs.tick(g.gpa, now(app));
+    if (fading or morphing) window.requestAnimationFrame();
 }
