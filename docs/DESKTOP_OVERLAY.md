@@ -10,7 +10,8 @@ are unaffected; the `Window` / `Platform` wrapper methods treat null as unsuppor
 its entry. Existing window kinds keep their behavior.
 
 Status: macOS (`src/platform/mac/{window,desktop,mac}.zig`), Linux X11 + Wayland
-(`src/platform/linux/{x11,wayland,global_input,tray,linux}.zig`) and `TestPlatform`
+(`src/platform/linux/{x11,wayland,global_input,tray,linux}.zig`), Windows
+(`src/platform/windows/{window,windows}.zig`, see §9) and `TestPlatform`
 (`src/app/test_platform.zig`) implement everything below. Pure, unit-tested helpers shared by all
 backends live in `src/platform/desktop.zig` (`platform.desktop`).
 
@@ -30,7 +31,7 @@ backends live in `src/platform/desktop.zig` (`platform.desktop`).
 | macOS | `NSPanel` with only `NSWindowStyleMaskNonactivatingPanel` (borderless), `canBecomeKey/MainWindow` = NO, level `NSStatusWindowLevel`, collection behavior `canJoinAllSpaces \| fullScreenAuxiliary \| stationary \| ignoresCycle`, floating panel, `hidesOnDeactivate = NO`, no shadow, shown with `orderFrontRegardless`. Transparent: `CAMetalLayer.opaque = NO`, window `opaque = NO`, clear color alpha 0 |
 | X11 | 32-bit ARGB visual + colormap when transparent (needs a compositor for real alpha; without one the transparent pixels are black), `_NET_WM_WINDOW_TYPE_UTILITY`, `_NET_WM_STATE_ABOVE\|STICKY\|SKIP_TASKBAR\|SKIP_PAGER`, `_NET_WM_DESKTOP = 0xFFFFFFFF`, `WM_HINTS.input = False`, Motif no-decorations, `WM_NORMAL_HINTS` min = max = size + program position |
 | Wayland | `zwlr_layer_shell_v1` **overlay** layer (wlroots compositors: sway, Hyprland, river, labwc, Wayfire; KDE Plasma; COSMIC): anchors + margins, `keyboard_interactivity = none`, exclusive zone 0. Set `ZPUI_NO_LAYER_SHELL=1` to force the fallback. **Fallback without layer-shell (GNOME / Mutter, weston): a plain fixed-size `xdg_toplevel`** (min = max size, client-side "decorations" = none drawn). The compositor places it, it stacks like a normal window, it may take focus when clicked and it is not on every workspace — there is no Wayland protocol on GNOME to do better. `screenMousePosition` returns null there and `setAnchor` only records the anchor |
-| Windows | `WS_EX_TOPMOST\|WS_EX_TOOLWINDOW\|WS_EX_NOACTIVATE\|WS_EX_LAYERED` |
+| Windows | `WS_POPUP` + `WS_EX_TOPMOST\|WS_EX_TOOLWINDOW\|WS_EX_NOACTIVATE\|WS_EX_LAYERED\|WS_EX_NOREDIRECTIONBITMAP`, `WM_MOUSEACTIVATE` → `MA_NOACTIVATE`, shown with `SW_SHOWNOACTIVATE` + `HWND_TOPMOST`, DWM transitions and rounded corners off. Transparent: DirectComposition flip-model swapchain with `DXGI_ALPHA_MODE_PREMULTIPLIED` |
 
 Vulkan swapchains of transparent windows use `VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR` (else
 inherit / opaque, whatever the surface supports).
@@ -185,7 +186,7 @@ Backends:
 | macOS | **No permission, no TCC prompt.** `CGEventSourceCounterForEventType(kCGEventSourceStateHIDSystemState, kCGEventKeyDown)` polled from a GCD timer on the main queue; each increase becomes that many `key_down` events (`platform.desktop.CounterDecoder`, ≤ 32 per poll): `key = .other`, `key_x` alternating left / right with a little deterministic jitter, the matching `key_up` on the next poll. Gated by `CGEventSourceSecondsSinceLastEventType(…, keyDown)` (one cheap call when idle). Adaptive rate (`counterPollInterval`): 60 Hz for 2 s after a key, 20 Hz up to 6 s, then 4 Hz, leeway half the interval; suspended while every overlay window is hidden. `CGEventSourceKeyState` is sampled for letters / digits / space / enter / backspace / tab / arrows when keys are counted; `platform.desktop.KeySampler` probes whether it returns real states without permission (works once any key reads pressed, abandoned after 12 counting polls without one) — then keys keep their real class and position. Clicks and scrolls: `NSEvent addGlobalMonitorForEventsMatchingMask:` for mouse down / up and scroll (no permission). `inputPermission()` = `.not_applicable` | `setPreciseInput(true)`: listen-only `CGEventTapCreate` (`kCGSessionEventTap`, `kCGEventTapOptionListenOnly`) on the main run loop; needs Input Monitoring. `startGlobalInputMonitor` returns `.needs_permission` (checked with `CGPreflightListenEventAccess`, never prompting); `requestInputPermission` calls `CGRequestListenEventAccess` (or opens System Settings → Privacy → Input Monitoring when denied); `inputPermission` from `IOHIDCheckAccess`. The tap callback only classifies into a fixed ring and schedules one drain |
 | Linux X11 (and XWayland) | XInput2 `XI_RawKeyPress/Release`, `XI_RawButtonPress/Release` on the root window over a dedicated `Display` whose fd sits in the epoll loop; autorepeat skipped. `inputPermission` = `.not_applicable` | evdev when XInput2 is unavailable |
 | Linux Wayland (any compositor) | evdev: every readable `/dev/input/event*` with a keyboard (`KEY_A`) or pointer (`BTN_LEFT`) capability, non-blocking, read in batches of 64 `input_event`s into a stack buffer from the epoll loop; inotify on `/dev/input` for hotplug and permission changes. `.needs_permission` when devices exist but none is readable (user not in the `input` group; `requestInputPermission` logs the `usermod -aG input` hint), `inputPermission` = `.granted` / `.denied` | XInput2 against XWayland if `DISPLAY` is set (sees XWayland clients only) |
-| Windows | `SetWindowsHookExW(WH_KEYBOARD_LL / WH_MOUSE_LL)` on the UI thread | Raw Input `RIDEV_INPUTSINK` |
+| Windows | `SetWindowsHookExW(WH_KEYBOARD_LL / WH_MOUSE_LL)` on a dedicated hook thread with its own message loop (a busy UI thread can never make Windows time the hooks out); callbacks classify (scan code → `platform.desktop.evdevKey`, auto-repeat filtered), `PostMessage` one packed word to the UI thread and return `CallNextHookEx`. `inputPermission` = `.not_applicable`, `setPreciseInput` no-op | — |
 
 All backends push into a fixed 64-entry `platform.desktop.InputQueue` (oldest dropped when full) and
 drain it once per wakeup: bursts coalesce, nothing allocates, the callbacks run on the main thread.
@@ -293,3 +294,39 @@ Unit tests: `src/platform/desktop.zig` (anchor geometry incl. y-up and resize, a
 keycode tables, input ring, poll intervals, counter decoder, key sampler probe, autostart / plist
 contents), `src/platform/linux/global_input.zig` (evdev + XI2 decoding), `src/platform/linux/tray.zig`
 (SNI + dbusmenu), `src/app/desktop_tests.zig` (App API on `TestPlatform`).
+
+## 9. Windows backend
+
+`src/platform/windows/` (Win32, hand-written bindings in `win32.zig` / `dwrite.zig`), the D3D11
+renderer `src/renderer/d3d11/` and DirectWrite text `src/text/directwrite.zig`.
+
+- **Overlay input regions**: with `WS_EX_LAYERED`, `WS_EX_TRANSPARENT` is the only way to pass
+  clicks to windows of *other* processes (`HTTRANSPARENT` from `WM_NCHITTEST` only forwards within
+  the same thread). The style is toggled from the pointer position, which the low-level mouse hook
+  (hook thread, installed only while some visible overlay has a rect region or the monitor runs)
+  reports even while the window is click-through; `WM_NCHITTEST` still answers `HTTRANSPARENT`
+  outside the rects for the instant before the style flips. A button press inside keeps the window
+  opaque to input and takes `SetCapture`, so moves and the release arrive outside; capture loss
+  (`WM_CAPTURECHANGED`) synthesizes the `mouse_up`.
+- **Anchored resize**: `resize` computes the new rect from the anchor (`platform.desktop.anchoredOrigin`
+  in physical pixels), reports the size to the core and draws immediately (not at the next vblank,
+  `Present(0)`); `draw` resizes the swapchain synchronously (`ResizeBuffers`), presents, then applies
+  the rect with one `SetWindowPos(SWP_NOACTIVATE | SWP_NOZORDER)`. DirectComposition shows buffers 1:1
+  (never stretched). `overlay-demo` under Wine (no DirectComposition there, HWND swapchain fallback):
+  60 resizes in ~1 s, one frame per resize.
+- **Screen position**: `screenMousePosition` is `GetCursorPos` divided by the window's scale (the same
+  space as `bounds()`); `WM_DPICHANGED` on an overlay keeps the logical size and re-anchors on the new
+  monitor.
+- **Tray**: `Shell_NotifyIconW` (NOTIFYICON_VERSION_4) owned by a hidden tool window; the PNG becomes
+  an `HICON` (template icons tinted for the taskbar's light / dark theme); the menu is a
+  `TrackPopupMenu` built from the `MenuItem` model, re-added after Explorer restarts
+  (`TaskbarCreated`).
+- **Foreground app**: `SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT |
+  WINEVENT_SKIPOWNPROCESS)`; `id` = executable basename, `name` = its version-resource
+  FileDescription (else the basename without `.exe`).
+- **Launch at login**: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\<app_id>` = `"exe"`.
+- **Idle cost**: the UI thread blocks in `MsgWaitForMultipleObjectsEx` (timeout = next
+  `dispatchAfter` deadline, else infinite); the frame pacer thread waits on an event and only runs
+  `IDXGIOutput::WaitForVBlank` while a window has requested a frame; hidden windows release their
+  swapchains and intermediates and trim the driver. `windows-window` / `overlay-demo` smoke: 0
+  frames and 0 ms CPU over 2 s idle with the global input monitor running.
