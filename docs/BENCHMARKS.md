@@ -20,7 +20,7 @@ zeron maintainers?
 | Client binary (as shipped) | Rust 127 MB, which includes the engine (the engine alone is 39 MB). Zig ReleaseSafe 50 MB | Rust 164 MB, which includes the engine (the engine alone is 43 MB). Zig 130 MB unstripped, 50 MB stripped |
 | Bundle without the engine | Rust 129 MB (one Mach-O). Zig 52 MB | Rust 166 MB. Zig 129 MB (unstripped, plus the WebKitGTK helper) |
 | Warm start to first frame | Rust 925 ms, Zig 533 ms | Rust 247 ms, Zig 101 ms |
-| Warm start to interactive shell | **Rust 1.39 s, Zig 5.58 s** (a Zig bug, see below) | Rust 422 ms, Zig 347 ms |
+| Warm start to interactive shell | **Rust 1.39 s, Zig 5.58 s** (a Zig bug, since fixed; re-run: Rust 1.07 s, Zig ReleaseSafe 0.91 s; see below) | Rust 422 ms, Zig 347 ms |
 | RSS / footprint when idle | Rust 157 / 82 MB, Zig 137 / 82 MB | Rust 232 / 210 MB, Zig 160 / 136 MB (PSS) |
 | CPU when idle | Rust 2.8 %, Zig 0.9 % (powermetrics: 4.8 % vs 1.6 %) | Rust 15.6 %, Zig 0.0 % |
 | CPU while streaming | **Rust 12 %, Zig 60 %** | Rust 152 %, Zig 250 % (software GPU) |
@@ -288,9 +288,11 @@ attributes and Zig `test` blocks):
   diffs, subagents or terminals. Neither client opened the browser, terminal or files
   panes.
 - **Timeline differences.**
-  - Rust's own `boot_select_chat` lands on the short chat. The Zig client has no boot
-    landing yet (a parity gap), so its driver selects the short chat once chats sync. Both
-    drivers do the same thing when nothing is selected.
+  - Rust's own `boot_select_chat` lands on the short chat. In the runs above, the Zig
+    client had no boot landing yet (a parity gap), so its driver selected the short chat
+    once chats synced. Both drivers do the same thing when nothing is selected. The Zig
+    client now has the landing too (`d405d65`), so its driver's selection is only a
+    fallback, as in Rust.
   - Both drivers request a frame every vsync during scroll and stream, so the frame
     interval is a ceiling on smoothness. Draws only happen when a window is dirty.
 - **The Linux runs use openbox** (see the X11 finding below). The Zig client renders
@@ -310,15 +312,28 @@ attributes and Zig `test` blocks):
    frame in 533 ms against 925 ms on macOS, and 101 ms against 247 ms on Linux. Cold
    launches are dominated by page-in, roughly 3–9 s on the macOS VM for both.
 
-3. **Interactive shell on macOS: Zig is about 5 s late. This is a Zig bug, not a speed
+3. **Interactive shell on macOS: Zig was about 5 s late. This was a Zig bug, not a speed
    result.**
    - Every macOS Zig launch reaches `shell_loaded` almost exactly 5.0 s after its first
      frame. The chat list arrives 5 s late. Linux takes 0.25 s for the same step.
-   - The likely suspects are the 5 s timeouts in the Zig engine client
-     (`engine.zig` `EngineInfo`, `ws.zig` handshake), where a missed kqueue wake would
-     fall through to the timeout.
-   - The workflow now keeps the Zig client's own debug logs (`datalogs-*`) for diagnosis.
-   - Until that is fixed, Rust is faster to a usable window on macOS: 1.4 s against 5.6 s.
+   - **Root cause (fixed in `fd8dd41`):** the `ws.zig` handshake watchdog. It slept for
+     the 5 s `handshake_timeout` on its own thread and was stopped with
+     `Future.cancel`. `std.Io.Threaded` interrupts a sleeping thread by sending it
+     `SIGIO`. Worker threads inherit their creator's signal mask, and zpui's macOS
+     background executor runs on libdispatch workers, which block `SIGIO`. So the
+     cancel never reached the sleep and waited out all 5 s, after the handshake had
+     already succeeded. Linux's executor threads don't block `SIGIO`. The watchdog
+     (and the engine reap watchdogs) now stop through a futex (`StopTimer`), which needs
+     no signal.
+   - Re-measured after the fix on macos-26, with 3 rounds
+     ([37865225918](https://github.com/plyght/zpui/actions/runs/37865225918), zeron
+     037f4c1):
+     - Warm interactive shell: Rust 1068 ms; Zig 574 ms (fast), 907 ms (safe),
+       702 ms (safe-plain). The runs above measured 5.6–5.8 s for Zig.
+     - Cold: Rust 5246 ms; Zig 3781 / 4099 / 5395 ms.
+     - First frame to `shell_loaded` is about 160–190 ms. The Zig driver no longer
+       selects the chat itself: no `boot_select` marker appears, because the client's own
+       boot landing picks the short chat.
 
 4. **Memory: Zig uses less resident memory, with equal footprint on macOS.**
    - macOS: RSS 137 MB against 157 MB, and physical footprint about 82 MB for both.
@@ -404,8 +419,8 @@ against maintainer cost:
      instructions, nothing has been opened on zeronsh repos.
 
 4. **Offer the Zig client as an alternative.** Not recommended now.
-   - It is not at parity: missing boot landing, the 5 s macOS shell delay, and streaming
-     that redraws every vsync. Behaviour-for-behaviour parity is still being chased in
+   - It was not at parity in these runs: no boot landing, the 5 s macOS shell delay
+     (both fixed since), and streaming that redraws every vsync. Behaviour-for-behaviour parity is still being chased in
      `docs/PARITY.md`.
    - It still depends on the Rust engine.
    - It would ask the maintainers to review and own about 233 k lines in a second language
