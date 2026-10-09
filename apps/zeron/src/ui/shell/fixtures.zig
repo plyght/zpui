@@ -160,6 +160,9 @@ pub fn applyToState(f: *Fixtures, io: std.Io, app: *zpui.App, state: zpui.Entity
         if (f.meta.now) |n| w.now_override = model.time.parse(n);
         if (f.meta.localDeviceId) |d| w.local_device_id = f.gpa.dupe(u8, d) catch null;
         w.workspace_scope = f.meta.workspaceScope orelse .local;
+        // A capture shows exactly `selectedChat` (null = the canvas), never the boot
+        // landing: zeron's fixture examples set `auto_selected` the same way.
+        w.auto_selected = true;
     }
     if (readFile(io, a, f.dir, "devices.json")) |b| if (parseFrame([]protocol.Device, f.gpa, b)) |fr| ws.update(app, model.WorkspaceStore.applyDevices, .{fr});
     if (readFile(io, a, f.dir, "spaces.json")) |b| if (parseFrame([]protocol.Space, f.gpa, b)) |fr| ws.update(app, model.WorkspaceStore.applySpaces, .{fr});

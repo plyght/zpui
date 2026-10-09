@@ -234,9 +234,10 @@ fn frame(win: *Window, app: *App) void {
                 const vp = win.viewportSize();
                 emit("first_frame", "\"w\":{d},\"h\":{d},\"scale\":{d}", .{ vp.width, vp.height, win.scaleFactor() });
             }
-            // Boot landing on the most recent chat (Rust `Shell::boot_select_chat`) is
-            // not ported yet: land on it here, as the Rust driver does when nothing is
-            // selected, so both clients open the same chat at the same point.
+            // The shell's boot landing (`Shell.bootSelectChat`, Rust
+            // `Shell::boot_select_chat`) opens the most recent chat, the short one, in
+            // the same update that syncs chats, so this fallback only fires when nothing
+            // got selected, exactly as the Rust driver's.
             const ws_e = b.state.read(app).workspace;
             if (ws_e.read(app).chats_synced and ws_e.read(app).selected_chat == null and b.short_chat.len > 0) {
                 if (!b.boot_selected) emit("boot_select", "", .{});

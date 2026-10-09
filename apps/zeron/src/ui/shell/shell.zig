@@ -14,6 +14,7 @@ const model = @import("zeron_model");
 const engine = @import("zeron_engine");
 const zt = @import("zeron_theme");
 const actions = @import("zeron_actions");
+const composer_mod = @import("zeron_composer");
 const ui = @import("../components/root.zig");
 const app_update = @import("../../lifecycle/app_update.zig"); // [lifecycle]
 const prefs_mod = @import("prefs.zig");
@@ -272,10 +273,33 @@ pub const Shell = struct {
     }
 
     fn onWorkspaceChanged(self: *Shell, ws: Entity(model.WorkspaceStore), cx: *Context(Shell)) void {
+        // Boot landing: the most recent session once the first chats frame
+        // syncs (manual selection wins).
+        self.bootSelectChat(ws, cx);
         const selected = ws.read(cx).selected_chat;
         @import("appshots.zig").noteSelection(self, selected); // [appshots]
         self.recordNav(selected);
         cx.notify();
+    }
+
+    /// zeron `Shell::boot_select_chat`, run from the workspace observer like Rust's
+    /// state observer: open `bootSelectTarget` (the most recently active visible chat
+    /// once chats synced; manual selection wins; no chats leaves the new-session
+    /// canvas) and focus its composer (`focus_composer`).
+    pub fn bootSelectChat(self: *Shell, ws: Entity(model.WorkspaceStore), cx: *Context(Shell)) void {
+        const target = (ws.read(cx).bootSelectTarget(self.gpa) catch return) orelse return;
+        const id = self.gpa.dupe(u8, target) catch return;
+        defer self.gpa.free(id);
+        // `focus_composer` (focus once the destination composer renders): deferred,
+        // since the composer may be mid-update in the notify that got us here.
+        cx.deferUpdate(struct {
+            fn f(sh: *Shell, c: *Context(Shell)) void {
+                const w = c.app.windows.items[0] orelse return;
+                if (sh.settings_view != null) return; // a boot route into Settings keeps its focus
+                sh.main.read(c).slots.composer_view.update(c, composer_mod.ComposerView.focusInput, .{w});
+            }
+        }.f);
+        ws.update(cx, model.WorkspaceStore.selectChat, .{@as(?[]const u8, id)});
     }
 
     fn onOpenSettings(self: *Shell, _: Entity(sidebar_mod.Sidebar), _: *const sidebar_mod.OpenSettings, cx: *Context(Shell)) void {
@@ -335,6 +359,15 @@ pub const Shell = struct {
         const cur = self.nav.items[self.nav_ix];
         const same = if (cur) |c| (selected != null and std.mem.eql(u8, c, selected.?)) else selected == null;
         if (same) return;
+        // The very first selection off the untouched boot canvas REPLACES that entry
+        // (Rust: zeron's `/` route redirected into the last-used chat, leaving no dead
+        // Back target), so the boot landing leaves Back disabled.
+        if (self.nav.items.len == 1 and self.nav.items[0] == null) {
+            const copy: ?[]u8 = if (selected) |s| self.gpa.dupe(u8, s) catch return else null;
+            self.nav.items[0] = copy;
+            self.nav_ix = 0;
+            return;
+        }
         // Drop forward history.
         while (self.nav.items.len > self.nav_ix + 1) if (self.nav.pop()) |e| if (e) |s| self.gpa.free(s);
         const copy: ?[]u8 = if (selected) |s| self.gpa.dupe(u8, s) catch null else null;

@@ -645,6 +645,26 @@ pub const WorkspaceStore = struct {
         return out.toOwnedSlice(gpa);
     }
 
+    /// Boot landing (zeron `Shell::boot_select_chat`): the chat to open once the first
+    /// chats frame has synced, the head of `overviewChats` (the most recently active
+    /// non-archived top-level chat of a live space, or a project-less one). Null while
+    /// unsynced, when a chat is selected, once boot auto-select happened or a manual pick
+    /// (or `ZERON_OPEN_ROUTE=new`) superseded it, and when no chat is visible (the
+    /// new-session canvas shows; `auto_selected` stays unset, so a later frame that
+    /// brings a chat still lands on it). The id borrows from the current chats frame.
+    pub fn bootSelectTarget(self: *const WorkspaceStore, gpa: Allocator) Allocator.Error!?[]const u8 {
+        if (!self.chats_synced or self.selected_chat != null or self.auto_selected) return null;
+        const rows = try self.overviewChats(gpa, self.now());
+        defer gpa.free(rows);
+        return if (rows.len > 0) rows[0].chat.id else null;
+    }
+
+    /// An explicit new-session target (project picker, `ZERON_OPEN_ROUTE=new`): a late
+    /// opening chats frame must not boot-land on an old session over it.
+    pub fn suppressBootSelect(self: *WorkspaceStore, _: *Context(WorkspaceStore)) void {
+        self.auto_selected = true;
+    }
+
     /// `overviewChats` narrowed to the sidebar's project filter (what the jump
     /// shortcuts count).
     pub fn sidebarChats(self: *const WorkspaceStore, gpa: Allocator, n: Timestamp, space_filter: ?[]const u8) Allocator.Error![]view.ActiveRow {

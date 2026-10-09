@@ -308,6 +308,10 @@ fn openMainWindow(ctx: *anyopaque, app: *App, restored: ?lifecycle.window_state.
     const w = handle.window(app) orelse return null;
     // The settings' base size (14 px for an untouched system font; `applyTheme` keeps it current).
     w.setRemSize(settings_ui.store.effectiveUiFontSize(app, settings_ui.store.current(app)).pixels());
+    // `ZERON_OPEN_ROUTE=new` pins the new-chat canvas (suppresses the boot landing).
+    if (l.environ.get("ZERON_OPEN_ROUTE")) |route| if (std.mem.eql(u8, route, "new")) {
+        state.read(app).workspace.update(app, model.WorkspaceStore.suppressBootSelect, .{});
+    };
     // Dev/testing knob (Rust parity): `ZERON_OPEN_ROUTE=settings[/<section>]`
     // boots straight into a settings section (headless captures can't click there).
     if (l.environ.get("ZERON_OPEN_ROUTE")) |route| if (settingsRoute(route, settings_ui.store.current(app).settingsSection)) |section| {

@@ -582,6 +582,9 @@ pub const Pickers = struct {
         const w = self.state.read(cx).workspace;
         const copy: ?[]u8 = if (id) |s| self.gpa.dupe(u8, s) catch return else null;
         defer if (copy) |c| self.gpa.free(c);
+        // `pick_space` / `pick_no_project`: an explicit canvas target supersedes the
+        // boot landing (a late chats frame must not open an old session over it).
+        w.update(cx, model.WorkspaceStore.suppressBootSelect, .{});
         w.update(cx, model.WorkspaceStore.selectSpace, .{@as(?[]const u8, copy)});
         self.close(window, cx);
     }

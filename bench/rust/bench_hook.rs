@@ -182,7 +182,7 @@ fn frame(b: Shared, window: &mut Window, cx: &mut App) {
             }
             // `Shell::boot_select_chat` lands on the most recent chat (the short one)
             // by itself; select it only if nothing is selected once chats synced, as
-            // the Zig driver does (its boot landing is not ported yet).
+            // the Zig driver does (both clients' own boot landing makes this a no-op).
             let (synced, none_selected, short) = {
                 let s = b.borrow();
                 let st = s.state.read(cx);
