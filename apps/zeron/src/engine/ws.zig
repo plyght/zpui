@@ -13,6 +13,7 @@ const std = @import("std");
 const Io = std.Io;
 const net = std.Io.net;
 const Allocator = std.mem.Allocator;
+const StopTimer = @import("stop_timer.zig").StopTimer;
 
 pub const Opcode = enum(u4) {
     continuation = 0x0,
@@ -291,10 +292,14 @@ pub const Conn = struct {
         _ = std.base64.standard.Encoder.encode(&key, &raw_key);
 
         // Watchdog: shut the socket down if the upgrade stalls, which turns
-        // the blocked read into EndOfStream.
+        // the blocked read into EndOfStream. Stopped through `StopTimer`, never
+        // `Future.cancel`: on a thread with SIGIO blocked (any connect started
+        // from zpui's macOS background executor) `cancel` waited out the whole
+        // timeout, 5 s on every boot (stop_timer.zig).
         var fired = std.atomic.Value(bool).init(false);
-        var watchdog: ?Io.Future(void) = io.concurrent(watchdogMain, .{ io, stream, options.handshake_timeout, &fired }) catch null;
-        defer if (watchdog) |*w| w.cancel(io);
+        var timer: StopTimer = .{};
+        var watchdog: ?Io.Future(void) = io.concurrent(watchdogMain, .{ io, stream, options.handshake_timeout, &fired, &timer }) catch null;
+        defer if (watchdog) |*w| timer.stopAndAwait(io, w);
 
         handshake(&c.reader.interface, &c.writer.interface, host, options.path, &key) catch |err| {
             if (fired.load(.acquire)) return error.HandshakeTimeout;
@@ -307,8 +312,8 @@ pub const Conn = struct {
         return c;
     }
 
-    fn watchdogMain(io: Io, stream: net.Stream, timeout: Io.Duration, fired: *std.atomic.Value(bool)) void {
-        io.sleep(timeout, .awake) catch return; // canceled: handshake finished
+    fn watchdogMain(io: Io, stream: net.Stream, timeout: Io.Duration, fired: *std.atomic.Value(bool), timer: *StopTimer) void {
+        if (!timer.sleep(io, timeout)) return; // stopped: handshake finished
         fired.store(true, .release);
         stream.shutdown(io, .both) catch {};
     }

@@ -27,6 +27,7 @@ pub const methods = @import("methods.zig");
 pub const protocol = @import("protocol.zig");
 pub const transcript = @import("transcript.zig");
 pub const json_util = @import("json_util.zig");
+pub const StopTimer = @import("stop_timer.zig").StopTimer;
 
 pub const Client = rpc.Client;
 pub const Call = rpc.Call;
@@ -241,9 +242,12 @@ pub const Engine = struct {
             if (stop) {
                 // Reap after the drain; a watchdog SIGKILLs a child that
                 // ignores StopEngine. The pid cannot be reused before we reap.
-                var watchdog = e.io.concurrent(killAfter, .{ e.io, child.id.? }) catch null;
+                // `StopTimer`, not `Future.cancel`, ends the watchdog: a cancel
+                // from a thread with SIGIO blocked (macOS) waits the full 10 s.
+                var timer: StopTimer = .{};
+                var watchdog = e.io.concurrent(killAfter, .{ e.io, child.id.?, Io.Duration.fromSeconds(10), &timer }) catch null;
                 _ = child.wait(e.io) catch child.kill(e.io);
-                if (watchdog) |*w| w.cancel(e.io);
+                if (watchdog) |*w| timer.stopAndAwait(e.io, w);
             }
         }
     }
@@ -268,18 +272,14 @@ pub const Engine = struct {
     /// `grace` (an engine that ignores the request).
     pub fn reapChild(io: Io, child: *std.process.Child, grace: Io.Duration) void {
         const id = child.id orelse return;
-        var watchdog = io.concurrent(killAfterGrace, .{ io, id, grace }) catch null;
+        var timer: StopTimer = .{};
+        var watchdog = io.concurrent(killAfter, .{ io, id, grace, &timer }) catch null;
         _ = child.wait(io) catch child.kill(io);
-        if (watchdog) |*w| w.cancel(io);
+        if (watchdog) |*w| timer.stopAndAwait(io, w);
     }
 
-    fn killAfterGrace(io: Io, pid: std.process.Child.Id, grace: Io.Duration) void {
-        io.sleep(grace, .awake) catch return;
-        std.posix.kill(pid, .KILL) catch {};
-    }
-
-    fn killAfter(io: Io, pid: std.process.Child.Id) void {
-        io.sleep(.fromSeconds(10), .awake) catch return;
+    fn killAfter(io: Io, pid: std.process.Child.Id, grace: Io.Duration, timer: *StopTimer) void {
+        if (!timer.sleep(io, grace)) return; // reaped in time
         std.posix.kill(pid, .KILL) catch {};
     }
 
@@ -299,6 +299,50 @@ pub const Engine = struct {
 test {
     std.testing.refAllDecls(@This());
     _ = @import("protocol_test.zig");
+    _ = @import("stop_timer.zig");
+}
+
+/// The engine connect as zpui's macOS background executor runs it: on a thread
+/// that blocks SIGIO (a libdispatch worker), with an `Io.Threaded` whose
+/// workers inherit that mask. The handshake watchdog used to be stopped with
+/// `Future.cancel`, which could not interrupt the masked worker's sleep, so the
+/// connect returned only after the full 5 s `handshake_timeout`.
+fn connectFromMaskedThread(address: Io.net.IpAddress, elapsed: *?i96) void {
+    var all = std.posix.sigfillset();
+    std.posix.sigprocmask(std.posix.SIG.BLOCK, &all, null);
+    var threaded: Io.Threaded = .init(std.testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    const start = Io.Timestamp.now(io, .awake).nanoseconds;
+    const conn = ws.Conn.connect(std.testing.allocator, io, address, .{}) catch return;
+    elapsed.* = Io.Timestamp.now(io, .awake).nanoseconds - start;
+    conn.sendClose(1000);
+    conn.deinit();
+}
+
+test "ws connect from a thread that blocks SIGIO does not wait out the handshake timeout" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const testing = std.testing;
+    const io = testing.io;
+    const test_server = @import("test_server.zig");
+    var server = try test_server.Server.init(io);
+    defer server.deinit();
+    const Script = struct {
+        fn run(srv: *test_server.Server) !void {
+            const peer = try srv.accept(testing.allocator);
+            defer peer.deinit();
+            _ = peer.recv() catch {}; // the client's close
+        }
+    };
+    var script = try io.concurrent(Script.run, .{&server});
+    defer script.await(io) catch {};
+
+    var elapsed: ?i96 = null;
+    const th = try std.Thread.spawn(.{}, connectFromMaskedThread, .{ server.address(), &elapsed });
+    th.join();
+    try script.await(io);
+    const ns = elapsed orelse return error.ConnectFailed;
+    try testing.expect(ns < 2 * std.time.ns_per_s);
 }
 
 test "portFromEnv" {

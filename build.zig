@@ -82,7 +82,9 @@ fn addZeronEngine(
         .optimize = optimize,
     });
     const engine_tests = b.addTest(.{ .root_module = engine });
-    test_step.dependOn(&b.addRunArtifact(engine_tests).step);
+    const run_engine_tests = b.addRunArtifact(engine_tests);
+    test_step.dependOn(&run_engine_tests.step);
+    b.step("zeron-engine-test", "Run only the zeron engine client tests (ws, rpc, protocol, connect)").dependOn(&run_engine_tests.step);
 
     const probe = b.addExecutable(.{
         .name = "zeron-probe",
