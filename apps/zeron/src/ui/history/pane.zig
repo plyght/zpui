@@ -730,8 +730,7 @@ pub const HistoryPane = struct {
             .onClick(cx.listener(onSearchOpen)));
         const st = self.store.read(cx);
         const status: AnyElement = if (st.search_loading) blk: {
-            zt.pulse.frame(window);
-            break :blk zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(1.5, theme.glyph.rows(), ui.loaders.phaseOf(cx, zt.motion.gradient_spin)));
+            break :blk zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(1.5, theme.glyph.rows(), zt.pulse.activity(window)));
         } else zpui.intoAnyElement(ui.icon.of(.magnifer, 11, theme.text_faint));
         const control = div().id("history-search-expanded").h(px(control_size)).w(px(graph.search_width)).minW(px(80)).flexShrink(1)
             .overflowHidden().flex().itemsCenter().gap(px(6)).pl(px(edge_inset)).pr(px(2))
@@ -763,8 +762,7 @@ pub const HistoryPane = struct {
             .occlude().onMouseDown(.left, preventDefault);
         if (!fetching) b = b.cursorPointer().onHover(cx.listenerWith(@as([]const u8, key), onHoverKey)).onClick(cx.listener(onFetchAll));
         const glyph: AnyElement = if (fetching) blk: {
-            zt.pulse.frame(window);
-            break :blk zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(1.75, theme.glyph.rows(), ui.loaders.phaseOf(cx, zt.motion.gradient_spin)));
+            break :blk zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(1.75, theme.glyph.rows(), zt.pulse.activity(window)));
         } else zpui.intoAnyElement(ui.icon.of(.cloud, icon_size, theme.text_muted.opacity(0.75)));
         return b.child(glyph).child(div().whitespaceNowrap().textSize(px(11)).textColor(if (fetching) theme.text_faint else theme.text_muted)
             .child(if (fetching) "Fetching\u{2026}" else "Fetch all"));
@@ -1267,9 +1265,8 @@ pub const HistoryPane = struct {
         return blk: {
             if (st.target_key == null) break :blk zpui.intoAnyElement(div().flex1().flex().itemsCenter().justifyCenter().textSize(px(12)).textColor(theme.text_faint).child("No repository selected"));
             if (st.loading and st.commits.items.len == 0) {
-                zt.pulse.frameSlow(window);
                 break :blk zpui.intoAnyElement(div().flex1().flex().flexCol().itemsCenter().justifyCenter().gap(px(8))
-                    .child(ui.loaders.gradientSpinner(3, ui.loaders.phaseOf(cx, zt.motion.gradient_spin)))
+                    .child(ui.loaders.gradientSpinner(3, zt.pulse.activitySlow(window)))
                     .child(div().textSize(px(12)).textColor(theme.text_faint).child("Loading history\u{2026}")));
             }
             if (self.visible.len == 0) {

@@ -940,7 +940,7 @@ pub fn embedded(v: *SettingsView, h: HarnessId, t: *const Theme, now_s: i64, cx:
     if (refreshing) refresh = refresh.opacity(0.5);
     var header = div().flex().flexRow().itemsCenter().gap(px(4))
         .child(div().minH(px(32)).flex().flexRow().itemsCenter().textSize(rems(13)).lineHeight(rems(17)).textColor(t.text_muted).child("Accounts"));
-    if (st.refreshing and st.phase == .ready) header = header.child(div().ml(px(6)).flexNone().child(ui.loaders.miniGlyphSpinner(1.5, t.glyph.rows(), ui.loaders.phaseOf(cx, @import("zeron_theme").motion.gradient_spin))));
+    if (st.refreshing and st.phase == .ready) header = header.child(div().ml(px(6)).flexNone().child(ui.loaders.miniGlyphSpinner(1.5, t.glyph.rows(), @import("zeron_theme").pulse.activityFor(cx.app, cx.entityId(), @import("motion.zig").reduced(cx.app), 1))));
     header = header.child(div().flex1()).child(refresh);
     var block = div().id("accounts-embedded").wFull().minW0().flex().flexCol().child(header);
     if (st.err) |e| block = block.child(w.errorStrip(t, e).mt(px(4)).id("accounts-action-error").role(.button).ariaLabel("Dismiss account error").cursorPointer().onClick(cx.listener(onDismissError)));
@@ -972,9 +972,8 @@ pub fn loginDialog(v: *SettingsView, window: *Window, cx: *Context(SettingsView)
     switch (l.step) {
         .browser => {
             card = card.child(div().mt(px(16)).flex().flexRow().itemsCenter().gap(px(8))
-                .child(ui.loaders.gradientSpinner(3, ui.loaders.phaseOf(cx, @import("zeron_theme").motion.gradient_spin)))
+                .child(ui.loaders.gradientSpinner(3, @import("zeron_theme").pulse.activitySlow(window)))
                 .child(div().textSize(rems(12.5)).textColor(t.text_muted).child(l.status())));
-            @import("zeron_theme").pulse.frameSlow(window);
         },
         .paste_code => |p| {
             var col = div().mt(px(12)).flex().flexCol().gap(px(8))

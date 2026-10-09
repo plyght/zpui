@@ -448,20 +448,24 @@ pub const TranscriptView = struct {
                 if (sending) {
                     // Progress on the thumbnail: this transfer's percent, else
                     // the send-wide upload's, else the indeterminate spinner.
-                    const pulse = media.widgets.pulseWave(now);
+                    // `pulse_delta(&ZERON_PULSE)`: at rest (0) and unscheduled under reduced motion.
+                    const reduced = window.prefersReducedMotion();
+                    const pulse = if (reduced) 0 else media.widgets.pulseWave(now);
+                    if (!reduced) zt.pulse.frame(window);
                     const pct = att.Cache.of(cx.app).uploadPercent();
-                    const indicator = if (pct) |p| media.widgets.progressRing(p, 34) else media.widgets.miniGlyphSpinner(3, theme.glyph.rows(), media.widgets.phaseAt(now, zt.motion.gradient_spin));
+                    const indicator = if (pct) |p| media.widgets.progressRing(p, 34) else media.widgets.miniGlyphSpinner(3, theme.glyph.rows(), zt.pulse.activity(window));
                     thumb = thumb.child(div().absolute().inset0().rounded(px(7)).flex().itemsCenter().justifyCenter()
                         .bg(zpui.hsla(0, 0, 0, 0.38 + 0.05 * pulse)).child(indicator));
-                    zt.pulse.frame(window); // `pulse_delta(&ZERON_PULSE)`
                 }
                 return thumb;
             },
             .failed => return frame.border1().borderDashed().borderColor(theme.hairline(0.14)).bg(theme.ink(0.025)),
             .loading => {
-                zt.pulse.frame(window); // the skeleton's `pulse_delta(&ZERON_PULSE)`
+                // The skeleton's `pulse_delta(&ZERON_PULSE)`: at rest under reduced motion.
+                const reduced = window.prefersReducedMotion();
+                if (!reduced) zt.pulse.frame(window);
                 return frame.border1().borderColor(theme.hairline(0.08)).bg(theme.ink(0.055))
-                    .opacity(0.35 + 0.4 * media.widgets.pulseWave(now));
+                    .opacity(0.35 + 0.4 * (if (reduced) 0 else media.widgets.pulseWave(now)));
             },
         }
     }
@@ -1639,14 +1643,12 @@ pub const TranscriptView = struct {
         }
         const seed = rows.fnv1a(store.chat_id);
         const word = if (sending) "Sending" else rows.flavourWord(seed, elapsed);
-        const reduced = window.prefersReducedMotion();
-        const phase = spinPhase(cx.app.executor.now(), reduced);
         // The coarse cell loader rides the 15 Hz pulse clock (`gradient_spinner`
         // → `activity_pulse_slow`); a display-frame request here redrew the
         // whole window every vsync for the length of the turn.
-        if (!reduced) zt.pulse.frameSlow(window);
+        const pulse = zt.pulse.activitySlow(window);
         var t = div().flex().flexRow().itemsCenter().gap(px(layout.space_sm)).pt(px(layout.space_lg)).textSize(px(11))
-            .child(gradientSpinner(2.5, phase))
+            .child(gradientSpinner(2.5, pulse))
             .child(div().textSize(px(12)).textColor(theme.text_muted).child(zpui.fmt("{s}\u{2026}", .{word})));
         if (!sending) {
             var buf: [32]u8 = undefined;
@@ -1779,22 +1781,15 @@ pub fn userNeedsCollapse(text: []const u8) bool {
     return lines > user_collapsed_lines or chars > user_collapse_chars;
 }
 
-fn spinPhase(now_ns: u64, reduced: bool) f32 {
-    if (reduced) return 0;
-    // `pulse_phase(&GRADIENT_SPIN)`: one 750 ms cycle (loops are not scaled).
-    const period = motion.gradient_spin.duration_ms * std.time.ns_per_ms;
-    return @as(f32, @floatFromInt(now_ns % period)) / @as(f32, @floatFromInt(period));
-}
-
 /// The 3×3 gradient spinner (loaders.rs `gradient_spinner`).
-pub fn gradientSpinner(cell: f32, phase: f32) zpui.Div {
+pub fn gradientSpinner(cell: f32, pulse: zt.pulse.Activity) zpui.Div {
     var col = div().flex().flexCol().gap(px(cell / 2));
     const side = motion.matrix_side;
     for (0..side) |r| {
         var line = div().flex().flexRow().gap(px(cell / 2));
         const tint = zpui.rgb(motion.gspin_row_tints[r]).toHsla();
         for (0..side) |c| line = line.child(div().size(px(cell)).rounded(px(cell / 2)).bg(tint)
-            .opacity(motion.gspinOpacity(phase + motion.gspinCellPhase(r, c), motion.gspin_dim)));
+            .opacity(pulse.opacity(motion.gspinCellPhase(r, c), motion.gspin_dim)));
         col = col.child(line);
     }
     return col;

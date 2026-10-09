@@ -1670,8 +1670,8 @@ pub const ChangesPane = struct {
     }
 
     fn spinner(window: *Window, cx: *Context(ChangesPane)) zpui.Div {
-        zt.pulse.frameSlow(window); // `gradient_spinner` → `activity_pulse_slow`
-        return ui.loaders.gradientSpinner(3, ui.loaders.phaseOf(cx, zt.motion.gradient_spin));
+        _ = cx;
+        return ui.loaders.gradientSpinner(3, zt.pulse.activitySlow(window)); // `activity_pulse_slow`
     }
 
     pub fn render(self: *ChangesPane, window: *Window, cx: *Context(ChangesPane)) zpui.AnyElement {

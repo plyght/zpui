@@ -839,8 +839,7 @@ pub const HarnessUpdateIsland = struct {
         if (activity(list)) |kind| {
             const glyph = switch (kind) {
                 .spinner => blk: {
-                    zt.pulse.frame(window);
-                    break :blk zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(2, theme.glyph.rows(), ui.loaders.phaseOf(cx, motion.gradient_spin)));
+                    break :blk zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(2, theme.glyph.rows(), zt.pulse.activity(window)));
                 },
                 .check => zpui.intoAnyElement(ui.icon.of(.check, 14, theme.success)),
                 .danger => zpui.intoAnyElement(ui.icon.of(.danger_triangle, 14, theme.danger)),

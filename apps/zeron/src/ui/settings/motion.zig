@@ -62,6 +62,8 @@ pub fn sync(window: *Window, app: *App) void {
     if (active and !st.active) st.system = readSystem(app);
     st.active = active;
     window.prefers_reduced_motion = reducedFor(app, active);
+    const s = store.current(app).theme;
+    zt.pulse.setReducedActivityAnimates(app, zt.motion.activityAnimates(s.reduce_motion, st.system, s.pause_animations_in_background, active));
 }
 
 /// After a settings change: every window at once.

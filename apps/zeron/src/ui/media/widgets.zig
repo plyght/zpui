@@ -42,14 +42,14 @@ pub fn progressRing(percent: u8, diameter: f32) zpui.Div {
 }
 
 /// The 2×3 mini spinner whose brightness chases around the ring.
-pub fn miniGlyphSpinner(cell: f32, rows: [3]zpui.Hsla, phase: f32) zpui.Div {
+pub fn miniGlyphSpinner(cell: f32, rows: [3]zpui.Hsla, pulse: zt.pulse.Activity) zpui.Div {
     const ring = [3][2]usize{ .{ 0, 1 }, .{ 5, 2 }, .{ 4, 3 } };
     var col_div = div().flexNone().flex().flexCol().gap(px(cell / 2));
     for (0..3) |row| {
         var r = div().flex().flexRow().gap(px(cell / 2));
         for (0..2) |col| {
             const cell_phase = @as(f32, @floatFromInt(ring[row][col])) / 6.0;
-            const op = motion.gspinOpacity(phase + cell_phase, motion.gspin_dim);
+            const op = pulse.opacity(cell_phase, motion.gspin_dim);
             r = r.child(div().size(px(cell)).rounded(px(cell / 2)).bg(rows[row]).opacity(op));
         }
         col_div = col_div.child(r);

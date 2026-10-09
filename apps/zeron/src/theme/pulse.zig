@@ -22,6 +22,7 @@ const zpui = @import("zpui");
 const App = zpui.App;
 const Window = zpui.Window;
 const EntityId = zpui.EntityId;
+const motion = @import("motion.zig");
 
 /// Repeat-tick interval (`PULSE_TICK`, ~30 fps).
 pub const tick_ns: u64 = 33 * std.time.ns_per_ms;
@@ -53,6 +54,11 @@ const State = struct {
     task: zpui.Task(void) = .none,
     /// Ticks that notified at least one view (tests, diagnostics).
     fired: u64 = 0,
+    /// `MotionState`: activity loaders keep their subtle pulse while motion
+    /// is reduced (System preference + OS setting, not paused in the
+    /// background). Set by the settings layer (`ui/settings/motion.zig`
+    /// `sync`); false until then, as Rust without a `MotionState`.
+    reduced_activity_animates: bool = false,
 };
 
 /// App global owning the clock (heap state, so ticks mutate it without
@@ -98,6 +104,69 @@ pub fn frame(window: *Window) void {
 /// `pulse_delta_slow`: the coarse cell loaders).
 pub fn frameSlow(window: *Window) void {
     lease(window.app, window.currentView(), 2);
+}
+
+/// The settings layer reports whether activity loaders still animate (the
+/// subtle pulse) while motion is reduced: `motion.activityAnimates` for the
+/// current preference, OS setting and focus.
+pub fn setReducedActivityAnimates(app: *App, animates: bool) void {
+    const s = stateOf(app) orelse return;
+    s.reduced_activity_animates = animates;
+}
+
+/// An activity loader's frame (`motion::ActivityPulse`): the travelling chase
+/// at `phase` of GRADIENT_SPIN, or under reduced motion (`subtle`) a gentle
+/// uniform 2.4 s brightness pulse at `phase` of ZERON_PULSE.
+pub const Activity = struct {
+    phase: f32 = 0,
+    subtle: bool = false,
+
+    /// `ActivityPulse::opacity`.
+    pub fn opacity(self: Activity, cell_phase: f32, dim: f32) f32 {
+        return motion.activityOpacity(self.phase, cell_phase, dim, self.subtle);
+    }
+};
+
+/// `activity_pulse`: the chase at 30 Hz; under system reduced motion the
+/// subtle pulse at 15 Hz; explicit On or a background pause hold still and
+/// schedule nothing.
+pub fn activity(window: *Window) Activity {
+    return activityEvery(window, 1);
+}
+
+/// `activity_pulse_slow`: the coarse 3×3 matrix at 15 Hz (same rules).
+pub fn activitySlow(window: *Window) Activity {
+    return activityEvery(window, 2);
+}
+
+fn activityEvery(window: *Window, stride: u64) Activity {
+    return activityFor(window.app, window.currentView(), window.prefersReducedMotion(), stride);
+}
+
+/// `activity_pulse_every` for a view and reduced-motion flag at hand (a
+/// render with no window, or a lease taken after the rows were built).
+pub fn activityFor(app: *App, view: EntityId, reduced: bool, stride: u64) Activity {
+    const a = peekFor(app, reduced);
+    if (a.animates) lease(app, view, if (reduced) 2 else stride);
+    return a.pulse;
+}
+
+/// The frame without taking a lease (pair with `activityFor` / `activity`).
+pub fn peek(window: *Window) Activity {
+    return peekFor(window.app, window.prefersReducedMotion()).pulse;
+}
+
+fn peekFor(app: *App, subtle: bool) struct { pulse: Activity, animates: bool } {
+    const animate = !subtle or (if (app.tryGlobal(Clock)) |c| c.state.reduced_activity_animates else false);
+    if (!animate) return .{ .pulse = .{ .subtle = subtle }, .animates = false };
+    return .{ .pulse = .{ .phase = phaseAt(app.executor.now(), if (subtle) motion.zeron_pulse else motion.gradient_spin), .subtle = subtle }, .animates = true };
+}
+
+/// `pulse_phase`: 0..1 of a loop's period at `now_ns` (loops are not scaled).
+pub fn phaseAt(now_ns: u64, spec: motion.MotionSpec) f32 {
+    const period: u64 = (spec.delay_ms + spec.duration_ms) * std.time.ns_per_ms;
+    if (period == 0) return 0;
+    return @as(f32, @floatFromInt(now_ns % period)) / @as(f32, @floatFromInt(period));
 }
 
 /// Whether the clock is scheduled (tests).
@@ -153,6 +222,8 @@ const testing = std.testing;
 const Spinner = struct {
     animate: bool = true,
     slow: bool = false,
+    activity_loader: bool = false,
+    last: Activity = .{},
     renders: u32 = 0,
 
     fn init(_: *Window, _: *zpui.Context(Spinner)) Spinner {
@@ -161,7 +232,9 @@ const Spinner = struct {
 
     pub fn render(self: *Spinner, window: *Window, _: *zpui.Context(Spinner)) zpui.Div {
         self.renders += 1;
-        if (self.animate) {
+        if (self.activity_loader) {
+            self.last = activity(window);
+        } else if (self.animate) {
             if (self.slow) frameSlow(window) else frame(window);
         }
         return zpui.div().size(zpui.px(40)).bg(zpui.color.white);
@@ -226,4 +299,50 @@ test "the clock parks once the loader stops painting" {
     _ = vsyncs(app, w, 30); // the lease (300 ms) lapses
     try testing.expect(!running(app));
     try testing.expectEqual(@as(usize, 0), vsyncs(app, w, 60));
+}
+
+fn activityHarness(reduced: bool, animates_reduced: bool) !struct { draws: usize, subtle: bool, phases_moved: bool, opacity: f32 } {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(.{ .bounds = .{ .origin = .zero, .size = .{ .width = 100, .height = 100 } } }, Spinner, Spinner.init, .{});
+    const w = handle.window(app).?;
+    w.prefers_reduced_motion = reduced;
+    setReducedActivityAnimates(app, animates_reduced);
+    const Set = struct {
+        fn on(sp: *Spinner, cx: *zpui.Context(Spinner)) void {
+            sp.activity_loader = true;
+            cx.notify();
+        }
+    };
+    handle.rootView(app).?.update(app, Set.on, .{});
+    _ = vsyncs(app, w, 6);
+    const first = handle.rootView(app).?.read(app).last;
+    const draws = vsyncs(app, w, 120);
+    const last = handle.rootView(app).?.read(app).last;
+    return .{ .draws = draws, .subtle = last.subtle, .phases_moved = first.phase != last.phase, .opacity = last.opacity(0.5, motion.gspin_dim) };
+}
+
+test "activity loaders: chase at 30 Hz with motion" {
+    const r = try activityHarness(false, false);
+    try testing.expect(!r.subtle);
+    try testing.expect(r.phases_moved);
+    try testing.expect(r.draws >= 55 and r.draws <= 62);
+}
+
+test "activity loaders: subtle 2.4 s pulse at 15 Hz under system reduced motion" {
+    const r = try activityHarness(true, true);
+    try testing.expect(r.subtle);
+    try testing.expect(r.phases_moved);
+    try testing.expect(r.draws >= 28 and r.draws <= 32);
+    // A uniform brightness pulse between 0.6 and 0.8, whatever the cell.
+    try testing.expect(r.opacity >= 0.6 and r.opacity <= 0.8);
+    try testing.expectApproxEqAbs(@as(f32, 0.7), (Activity{ .phase = 0.25, .subtle = true }).opacity(0.9, motion.gspin_dim), 1e-5);
+}
+
+test "activity loaders: explicit On / background pause hold still, no frames" {
+    const r = try activityHarness(true, false);
+    try testing.expect(r.subtle);
+    try testing.expect(!r.phases_moved);
+    try testing.expectEqual(@as(usize, 0), r.draws);
+    try testing.expectApproxEqAbs(@as(f32, 0.6), r.opacity, 1e-6);
 }

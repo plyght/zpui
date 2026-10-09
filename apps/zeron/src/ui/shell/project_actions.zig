@@ -950,6 +950,12 @@ fn labelText(text: []const u8) zpui.Div {
 
 /// `render_project_actions_control`: null without a project (or when the
 /// host has no project actions). `liquid` wraps it as a titlebar capsule.
+/// The loading glyph's `activity_pulse` (this renders without a window at hand).
+fn loadingPulse(cx: *Ctx) zt.pulse.Activity {
+    if (cx.app.windows.items.len > 0) if (cx.app.windows.items[0]) |w| return zt.pulse.activityFor(cx.app, cx.entityId(), w.prefersReducedMotion(), 1);
+    return .{};
+}
+
 pub fn control(shell: *Shell, available_width: f32, theme: *const Theme, liquid: bool, cx: *Ctx) ?zpui.Div {
     ensure(shell, cx);
     const c = ctl(shell);
@@ -971,9 +977,8 @@ pub fn control(shell: *Shell, available_width: f32, theme: *const Theme, liquid:
     if (loading) {
         var seg = segment(theme, "project-action-loading", false).ariaLabel("Loading project actions").roundedL(px(control_radius)).opacity(0.45)
             .child(div().size(px(13)).flexNone().flex().itemsCenter().justifyCenter()
-            .child(ui.loaders.miniGlyphSpinner(2, .{ theme.text_muted, theme.text_muted, theme.text_muted }, ui.loaders.phaseOf(cx, zt.motion.gradient_spin))));
+            .child(ui.loaders.miniGlyphSpinner(2, .{ theme.text_muted, theme.text_muted, theme.text_muted }, loadingPulse(cx))));
         if (show_label) seg = seg.child(labelText("Loading…"));
-        if (cx.app.windows.items.len > 0) if (cx.app.windows.items[0]) |w| w.requestAnimationFrame();
         ctrl = ctrl.child(seg).child(divider(theme)).child(chevron(theme, false, cx));
     } else if (preferred) |action| {
         var main = segment(theme, "project-action-main", can_run).ariaLabel(zpui.fmt("Run {s}", .{action.name})).roundedL(px(control_radius));

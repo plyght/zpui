@@ -930,7 +930,7 @@ pub const Shell = struct {
             const frame = motion.splashOutFrame(t);
             root = root.child(div().absolute().inset0().top(px(frame.offset_y)).opacity(frame.opacity)
                 .bg(theme.glass()).flex().flexCol().itemsCenter().justifyCenter().gap(px(12))
-                .child(ui.loaders.gradientSpinner(2.5, ui.loaders.phaseOf(cx, motion.gradient_spin)))
+                .child(ui.loaders.gradientSpinner(2.5, zt.pulse.activitySlow(window)))
                 .child(div().textSize(ui.rems(12)).textColor(theme.text_muted.opacity(0.7)).child("Setting up Zeron environment")));
             window.requestAnimationFrame();
         }

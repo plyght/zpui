@@ -5,6 +5,7 @@ const zpui = @import("zpui");
 const model = @import("zeron_model");
 const engine_mod = @import("zeron_engine");
 const view = @import("view.zig");
+const zt = @import("zeron_theme");
 
 const App = zpui.App;
 const Context = zpui.Context;
@@ -135,7 +136,7 @@ const StreamRun = struct { draws: usize, commits: usize };
 
 /// Stream a reply for 4 s of 60 Hz vsyncs with a doc commit every ~117 ms
 /// (the engine's cadence) and count the frames drawn.
-fn streamFor4s(reduced: bool) !StreamRun {
+fn streamFor4s(reduced: bool, system_reduced: bool) !StreamRun {
     const app = try App.initTest(std.testing.allocator);
     defer app.deinit();
     const es = try makeStore(app);
@@ -157,6 +158,9 @@ fn streamFor4s(reduced: bool) !StreamRun {
     const handle = try app.openWindow(.{ .bounds = .{ .origin = .zero, .size = .{ .width = 1200, .height = 900 } } }, Root, Init.f, .{tv.retain(app)});
     const w = handle.window(app).?;
     w.prefers_reduced_motion = reduced;
+    // System reduced motion (vs explicit On / background pause): activity
+    // loaders keep the subtle pulse (`ui/settings/motion.zig` reports it).
+    zt.pulse.setReducedActivityAnimates(app, system_reduced);
     const tw = zpui.core.test_platform.TestWindow.of(w.platform_window);
     app.runUntilParked();
 
@@ -191,15 +195,23 @@ test "a streaming reply redraws at the pulse and commit cadence, not every vsync
     // asked for a frame on every vsync, so a 4 s reply drew a frame per vsync
     // (240 here). They now share the pulse clock (veil 30 Hz, spinner 15 Hz),
     // so the window draws on pulse ticks plus commits that miss one.
-    const run = try streamFor4s(false);
+    const run = try streamFor4s(false, false);
     try std.testing.expect(run.draws >= run.commits);
     try std.testing.expect(run.draws <= 4 * 30 + run.commits + 4);
     try std.testing.expect(run.draws < 200);
 }
 
-test "a streaming reply under reduced motion draws once per commit" {
+test "a streaming reply under system reduced motion keeps the trailer's subtle pulse at 15 Hz" {
+    // No veil; the Working matrix breathes (2.4 s brightness pulse) on the
+    // 15 Hz clock, as `activity_pulse_slow` with the OS asking for less motion.
+    const run = try streamFor4s(true, true);
+    try std.testing.expect(run.draws >= 4 * 14);
+    try std.testing.expect(run.draws <= 4 * 15 + run.commits + 4);
+}
+
+test "a streaming reply with motion explicitly reduced or paused draws once per commit" {
     // No veil, the spinner at rest: only the commits redraw.
-    const run = try streamFor4s(true);
+    const run = try streamFor4s(true, false);
     try std.testing.expect(run.draws >= run.commits);
     try std.testing.expect(run.draws <= run.commits + 4);
 }

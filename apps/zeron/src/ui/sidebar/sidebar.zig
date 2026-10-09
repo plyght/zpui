@@ -261,6 +261,8 @@ pub const Sidebar = struct {
 
     /// Custom sections, their menu / dialog, and session transfers (sections_ui.zig).
     sec: sections_ui.State = .{},
+    /// This render's Working-glyph frame (`zt.pulse.peek`).
+    working_pulse: zt.pulse.Activity = .{},
     /// The row drawn in the movement layer this frame.
     moving: ?struct { row: zpui.AnyElement, height: f32 } = null,
 
@@ -1138,6 +1140,7 @@ pub const Sidebar = struct {
         const ws = app_state.workspace.read(cx);
         const now = prefs.now(ws.io);
         self.sec.reduced = window.prefersReducedMotion();
+        self.working_pulse = zt.pulse.peek(window);
         const now_ns = cx.app.executor.now();
         const arena = zpui.window.arena_mod.frameAllocator();
         self.prs = app_state.change_requests.read(cx); // [pr-status]
@@ -1346,8 +1349,9 @@ pub const Sidebar = struct {
         // The Working glyphs ride the 30 Hz pulse clock (`mini_glyph_spinner`
         // → `activity_pulse`); a drag transfer still glides per display frame.
         if (transfer) window.requestAnimationFrame();
-        // Reduced motion: the glyphs rest at phase 0 and schedule nothing.
-        if (any_working and !self.sec.reduced) zt.pulse.frame(window);
+        // `activity_pulse`: the chase at 30 Hz, the subtle pulse at 15 Hz under
+        // system reduced motion, nothing when paused or explicitly reduced.
+        if (any_working) _ = zt.pulse.activity(window);
 
         const moving: ?zpui.AnyElement = if (self.moving) |m| sections_ui.renderMoving(self, m.row, m.height, theme) else null;
         const lists = ui.effects.edgeFaded(
@@ -1642,9 +1646,11 @@ pub const Sidebar = struct {
         return zpui.intoAnyElement(ui.badge.pullRequest(n, theme));
     }
 
-    /// The Working glyph's phase: the shared spin, at rest under reduced motion.
-    fn workingPhase(self: *const Sidebar, cx: *Context(Sidebar)) f32 {
-        return if (self.sec.reduced) 0 else ui.loaders.phaseOf(cx, zt.motion.gradient_spin);
+    /// The Working glyph's frame (`activity_pulse`; the lease is taken once
+    /// per render, after the rows, when any row is working).
+    fn workingPhase(self: *const Sidebar, cx: *Context(Sidebar)) zt.pulse.Activity {
+        _ = cx;
+        return self.working_pulse;
     }
 
     fn renderRow(self: *Sidebar, r: *const RowData, theme: *const Theme, prefs: *const prefs_mod.Prefs, cx: *Context(Sidebar)) zpui.StatefulDiv {

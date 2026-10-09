@@ -2,16 +2,17 @@
 //! splash), the 2×3 mini glyph spinner (sidebar "Working"), and the static /
 //! pulsing zeron mark.
 //!
-//! These are pure functions of a phase; a view that shows one keeps frames
-//! coming with the pulse clock (`zt.pulse.frame(window)` at 30 Hz, or
-//! `frameSlow` at 15 Hz for the 3×3 matrix, as `activity_pulse[_slow]`) and
-//! passes `phaseOf(app, spec)`. Never `window.requestAnimationFrame()`: that
-//! redraws the window at the display rate for as long as the loader shows.
+//! The activity grids are pure functions of a `zt.pulse.Activity`
+//! (`motion::ActivityPulse`). `zt.pulse.activity(window)` (30 Hz) /
+//! `activitySlow(window)` (15 Hz, the 3×3 matrix) returns it and keeps frames
+//! coming on the pulse clock: the chase, or under system reduced motion the
+//! gentle 2.4 s brightness pulse at 15 Hz; explicit On and a background pause
+//! hold still. Never `window.requestAnimationFrame()`: that redraws the
+//! window at the display rate for as long as the loader shows.
 //!
 //! ```zig
-//! const t = loaders.phaseOf(cx, zt.motion.gradient_spin);
-//! loaders.gradientSpinner(2.5, t)
-//! loaders.miniGlyphSpinner(2, theme.glyph.rows(), loaders.phaseOf(cx, zt.motion.gradient_spin))
+//! loaders.gradientSpinner(2.5, zt.pulse.activitySlow(window))
+//! loaders.miniGlyphSpinner(2, theme.glyph.rows(), zt.pulse.activity(window))
 //! ```
 
 const std = @import("std");
@@ -42,13 +43,13 @@ pub fn phaseOf(cx: anytype, spec: motion.MotionSpec) f32 {
 
 /// The boot splash's 3×3 matrix: rows tinted blue → amber → pink, a wave
 /// travelling up the diagonals once per 750ms.
-pub fn gradientSpinner(cell: f32, phase: f32) zpui.Div {
+pub fn gradientSpinner(cell: f32, pulse: zt.pulse.Activity) zpui.Div {
     var col_div = div().flex().flexCol().gap(px(cell / 2));
     for (0..motion.matrix_side) |row| {
         const tint = zpui.rgb(motion.gspin_row_tints[row]).toHsla();
         var r = div().flex().flexRow().gap(px(cell / 2));
         for (0..motion.matrix_side) |col| {
-            const op = motion.gspinOpacity(phase + motion.gspinCellPhase(row, col), motion.gspin_dim);
+            const op = pulse.opacity(motion.gspinCellPhase(row, col), motion.gspin_dim);
             r = r.child(div().size(px(cell)).rounded(px(cell / 2)).bg(tint).opacity(op));
         }
         col_div = col_div.child(r);
@@ -57,14 +58,14 @@ pub fn gradientSpinner(cell: f32, phase: f32) zpui.Div {
 }
 
 /// The 2×3 mini spinner whose brightness chases around the ring.
-pub fn miniGlyphSpinner(cell: f32, rows: [3]zpui.Hsla, phase: f32) zpui.Div {
+pub fn miniGlyphSpinner(cell: f32, rows: [3]zpui.Hsla, pulse: zt.pulse.Activity) zpui.Div {
     const ring = [3][2]usize{ .{ 0, 1 }, .{ 5, 2 }, .{ 4, 3 } };
     var col_div = div().flexNone().flex().flexCol().gap(px(cell / 2));
     for (0..3) |row| {
         var r = div().flex().flexRow().gap(px(cell / 2));
         for (0..2) |col| {
             const cell_phase = @as(f32, @floatFromInt(ring[row][col])) / 6.0;
-            const op = motion.gspinOpacity(phase + cell_phase, motion.gspin_dim);
+            const op = pulse.opacity(cell_phase, motion.gspin_dim);
             r = r.child(div().size(px(cell)).rounded(px(cell / 2)).bg(rows[row]).opacity(op));
         }
         col_div = col_div.child(r);
