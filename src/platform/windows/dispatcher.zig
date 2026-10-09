@@ -203,6 +203,12 @@ pub const WindowsDispatcher = struct {
         w.ReleaseSRWLockExclusive(&self.lock);
     }
 
+    /// A timer's deadline has passed. Main thread only.
+    pub fn timerDue(self: *const WindowsDispatcher) bool {
+        const t = self.timers.peek() orelse return false;
+        return t.deadline <= self.nowNs();
+    }
+
     /// Run due timers; returns the milliseconds until the next one (INFINITE if none).
     /// Main thread only.
     pub fn runTimers(self: *WindowsDispatcher) w.DWORD {

@@ -160,6 +160,11 @@ pub const WindowsPlatform = struct {
                 _ = w.TranslateMessage(&msg);
                 _ = w.DispatchMessageW(&msg);
                 if (self.quit_requested) break;
+                // The queue need not empty: while a window animates and a frame takes
+                // longer than a vblank, the next WM_APP_VSYNC is already posted when this
+                // one is done. Let due timers run between messages instead of starving
+                // them for as long as the animation lasts.
+                if (self.disp.timerDue()) break;
             }
             if (self.quit_requested) break;
             // Timers last: the messages above may have scheduled new ones.
