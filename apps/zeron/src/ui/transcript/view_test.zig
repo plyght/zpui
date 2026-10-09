@@ -3,6 +3,7 @@
 const std = @import("std");
 const zpui = @import("zpui");
 const model = @import("zeron_model");
+const engine_mod = @import("zeron_engine");
 const view = @import("view.zig");
 
 const App = zpui.App;
@@ -119,4 +120,86 @@ test "compact mode folds the work into one header that opens in place" {
     tv.update(app, Set.toggle, .{});
     app.runUntilParked();
     try std.testing.expectEqual(@as(usize, 5), tv.read(app).rowCount());
+}
+
+const stream_fixture =
+    \\[
+    \\ {"id":"u1","role":"user","createdAt":1782920700000,"deviceId":"d","status":"complete",
+    \\  "parts":[{"kind":"text","id":"t","text":"Tell me a story"}]},
+    \\ {"id":"a1","role":"assistant","createdAt":1782920701000,"deviceId":"d","status":"streaming",
+    \\  "parts":[{"kind":"text","id":"p","text":"Once"}]}
+    \\]
+;
+
+const StreamRun = struct { draws: usize, commits: usize };
+
+/// Stream a reply for 4 s of 60 Hz vsyncs with a doc commit every ~117 ms
+/// (the engine's cadence) and count the frames drawn.
+fn streamFor4s(reduced: bool) !StreamRun {
+    const app = try App.initTest(std.testing.allocator);
+    defer app.deinit();
+    const es = try makeStore(app);
+    defer es[0].release(app);
+    defer es[1].release(app);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const entries = try view.parseFixture(arena.allocator(), stream_fixture);
+    try view.loadEntries(es[1], entries, app);
+
+    const tv = try app.newWith(view.TranscriptView, view.TranscriptView.initWithStore, .{es[1]});
+    defer tv.release(app);
+    const Init = struct {
+        fn f(t: Entity(view.TranscriptView), _: *zpui.Window, _: *Context(Root)) Root {
+            return .{ .tv = t };
+        }
+    };
+    const handle = try app.openWindow(.{ .bounds = .{ .origin = .zero, .size = .{ .width = 1200, .height = 900 } } }, Root, Init.f, .{tv.retain(app)});
+    const w = handle.window(app).?;
+    w.prefers_reduced_motion = reduced;
+    const tw = zpui.core.test_platform.TestWindow.of(w.platform_window);
+    app.runUntilParked();
+
+    const gpa = std.testing.allocator;
+    const vsync_ns: u64 = 16_666_667;
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(gpa);
+    try text.appendSlice(gpa, "Once");
+    // Let the entrance fade settle, then count.
+    for (0..40) |_| {
+        app.advanceClock(vsync_ns);
+        if (tw.frame_requested) tw.frame(false);
+    }
+    const before = tw.present_count;
+    var commits: usize = 0;
+    for (0..240) |i| {
+        app.advanceClock(vsync_ns);
+        if (i % 7 == 0) {
+            const start = text.items.len;
+            try text.appendSlice(gpa, " upon a time, a word or two more.");
+            const ap = [_]engine_mod.protocol.TextAppend{.{ .entry = "a1", .part = "p", .text = text.items[start..], .len = text.items.len }};
+            view.applyFrame(es[1], .{ .delta = .{ .append = &ap, .count = 2 } }, app);
+            commits += 1;
+        }
+        if (tw.frame_requested) tw.frame(false);
+    }
+    return .{ .draws = tw.present_count - before, .commits = commits };
+}
+
+test "a streaming reply redraws at the pulse and commit cadence, not every vsync" {
+    // docs/BENCHMARKS.md: the Working trailer's spinner and the streaming veil
+    // asked for a frame on every vsync, so a 4 s reply drew a frame per vsync
+    // (240 here). They now share the pulse clock (veil 30 Hz, spinner 15 Hz),
+    // so the window draws on pulse ticks plus commits that miss one.
+    const run = try streamFor4s(false);
+    try std.testing.expect(run.draws >= run.commits);
+    try std.testing.expect(run.draws <= 4 * 30 + run.commits + 4);
+    try std.testing.expect(run.draws < 200);
+}
+
+test "a streaming reply under reduced motion draws once per commit" {
+    // No veil, the spinner at rest: only the commits redraw.
+    const run = try streamFor4s(true);
+    try std.testing.expect(run.draws >= run.commits);
+    try std.testing.expect(run.draws <= run.commits + 4);
 }

@@ -1192,7 +1192,7 @@ pub const PickerRow = struct {
         _ = l.value.scratch.reset(.retain_capacity);
         if (l.value.open != null) {
             // Animations and skeleton pulses run while a menu is up.
-            if (l.value.refs == .loading) window.requestAnimationFrame();
+            if (l.value.refs == .loading) zt.pulse.frame(window); // skeleton `pulse_delta`
         }
         return switch (self.which) {
             .target => zpui.intoAnyElement(l.value.renderTargetRow(&l.cx)),

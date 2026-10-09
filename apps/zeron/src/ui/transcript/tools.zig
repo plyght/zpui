@@ -331,7 +331,10 @@ pub fn renderGroup(self: *TranscriptView, row: *const rows.Row, theme: *const Th
     if (fp < 1) animating = true;
     const body_h = if (fold.toggled_at != null and fp < 1) lerp(fold.from, target_h, fp) else target_h;
     const disclosure: f32 = if (fold.toggled_at != null and fp < 1) (if (open) fp else 1 - fp) else if (open) 1 else 0;
-    if (animating or active or animate_worked) window.requestAnimationFrame();
+    // Reveals and folds run per display frame (Rust's `on_next_frame` canvas);
+    // the live title shimmer shares the 30 Hz pulse clock (`pulse_lease`).
+    if (animating or animate_worked) window.requestAnimationFrame();
+    if (active and !reduced) zt.pulse.frame(window);
 
     var group = div().relative().flex().flexCol().fontFamily(theme.font_sans_fixed);
     if (collapses) {

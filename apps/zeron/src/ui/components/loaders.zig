@@ -3,7 +3,10 @@
 //! pulsing zeron mark.
 //!
 //! These are pure functions of a phase; a view that shows one keeps frames
-//! coming with `window.requestAnimationFrame()` and passes `phaseOf(app, spec)`.
+//! coming with the pulse clock (`zt.pulse.frame(window)` at 30 Hz, or
+//! `frameSlow` at 15 Hz for the 3×3 matrix, as `activity_pulse[_slow]`) and
+//! passes `phaseOf(app, spec)`. Never `window.requestAnimationFrame()`: that
+//! redraws the window at the display rate for as long as the loader shows.
 //!
 //! ```zig
 //! const t = loaders.phaseOf(cx, zt.motion.gradient_spin);

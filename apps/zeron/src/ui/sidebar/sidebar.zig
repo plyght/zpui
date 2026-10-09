@@ -1343,7 +1343,11 @@ pub const Sidebar = struct {
             archived_section = sec;
         }
 
-        if (any_working or transfer) window.requestAnimationFrame();
+        // The Working glyphs ride the 30 Hz pulse clock (`mini_glyph_spinner`
+        // → `activity_pulse`); a drag transfer still glides per display frame.
+        if (transfer) window.requestAnimationFrame();
+        // Reduced motion: the glyphs rest at phase 0 and schedule nothing.
+        if (any_working and !self.sec.reduced) zt.pulse.frame(window);
 
         const moving: ?zpui.AnyElement = if (self.moving) |m| sections_ui.renderMoving(self, m.row, m.height, theme) else null;
         const lists = ui.effects.edgeFaded(
@@ -1638,6 +1642,11 @@ pub const Sidebar = struct {
         return zpui.intoAnyElement(ui.badge.pullRequest(n, theme));
     }
 
+    /// The Working glyph's phase: the shared spin, at rest under reduced motion.
+    fn workingPhase(self: *const Sidebar, cx: *Context(Sidebar)) f32 {
+        return if (self.sec.reduced) 0 else ui.loaders.phaseOf(cx, zt.motion.gradient_spin);
+    }
+
     fn renderRow(self: *Sidebar, r: *const RowData, theme: *const Theme, prefs: *const prefs_mod.Prefs, cx: *Context(Sidebar)) zpui.StatefulDiv {
         const ix = self.row_ids.items.len;
         if (self.gpa.dupe(u8, r.chat.id)) |id_copy| {
@@ -1675,7 +1684,7 @@ pub const Sidebar = struct {
                 const glyph: zpui.AnyElement = if (r.status == .completed)
                     zpui.intoAnyElement(icon.of(.check, 11, status_color))
                 else if (working)
-                    zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(2, theme.glyph.rows(), ui.loaders.phaseOf(cx, zt.motion.gradient_spin)))
+                    zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(2, theme.glyph.rows(), self.workingPhase(cx)))
                 else
                     zpui.intoAnyElement(div().size(px(6)).flexNone().roundedFull().bg(status_color));
                 break :blk zpui.intoAnyElement(div().flex().flexRow().itemsCenter().gap(px(4)).child(glyph)
@@ -1709,7 +1718,7 @@ pub const Sidebar = struct {
 
         if (compact) {
             const status_glyph: zpui.AnyElement = if (working)
-                zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(2, theme.glyph.rows(), ui.loaders.phaseOf(cx, zt.motion.gradient_spin)))
+                zpui.intoAnyElement(ui.loaders.miniGlyphSpinner(2, theme.glyph.rows(), self.workingPhase(cx)))
             else if (r.status == .completed)
                 zpui.intoAnyElement(icon.of(.check, 11, status_color))
             else

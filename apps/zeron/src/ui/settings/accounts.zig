@@ -974,7 +974,7 @@ pub fn loginDialog(v: *SettingsView, window: *Window, cx: *Context(SettingsView)
             card = card.child(div().mt(px(16)).flex().flexRow().itemsCenter().gap(px(8))
                 .child(ui.loaders.gradientSpinner(3, ui.loaders.phaseOf(cx, @import("zeron_theme").motion.gradient_spin)))
                 .child(div().textSize(rems(12.5)).textColor(t.text_muted).child(l.status())));
-            window.requestAnimationFrame();
+            @import("zeron_theme").pulse.frameSlow(window);
         },
         .paste_code => |p| {
             var col = div().mt(px(12)).flex().flexCol().gap(px(8))

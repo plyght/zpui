@@ -9,6 +9,7 @@
 //! - `colorspace`: OKLCH / HSL / WCAG helpers;
 //! - `layout`, `typography`: numeric design tokens;
 //! - `motion`: cubic-bezier easing, motion catalog, hover fades, reduced motion;
+//! - `pulse`: the throttled 30/15 Hz redraw clock for loaders and cosmetic motion;
 //! - `settings`: the theme subset of ui-settings.json;
 //! - `wallpaper`: wallpaper-derived tints.
 //!
@@ -32,6 +33,7 @@ pub const theme = @import("theme.zig");
 pub const layout = @import("layout.zig");
 pub const typography = @import("typography.zig");
 pub const motion = @import("motion.zig");
+pub const pulse = @import("pulse.zig");
 pub const settings = @import("settings.zig");
 pub const wallpaper = @import("wallpaper.zig");
 pub const vscode = @import("vscode.zig");

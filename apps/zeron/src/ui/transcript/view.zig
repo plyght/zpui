@@ -453,13 +453,13 @@ pub const TranscriptView = struct {
                     const indicator = if (pct) |p| media.widgets.progressRing(p, 34) else media.widgets.miniGlyphSpinner(3, theme.glyph.rows(), media.widgets.phaseAt(now, zt.motion.gradient_spin));
                     thumb = thumb.child(div().absolute().inset0().rounded(px(7)).flex().itemsCenter().justifyCenter()
                         .bg(zpui.hsla(0, 0, 0, 0.38 + 0.05 * pulse)).child(indicator));
-                    window.requestAnimationFrame();
+                    zt.pulse.frame(window); // `pulse_delta(&ZERON_PULSE)`
                 }
                 return thumb;
             },
             .failed => return frame.border1().borderDashed().borderColor(theme.hairline(0.14)).bg(theme.ink(0.025)),
             .loading => {
-                window.requestAnimationFrame();
+                zt.pulse.frame(window); // the skeleton's `pulse_delta(&ZERON_PULSE)`
                 return frame.border1().borderColor(theme.hairline(0.08)).bg(theme.ink(0.055))
                     .opacity(0.35 + 0.4 * media.widgets.pulseWave(now));
             },
@@ -1420,7 +1420,10 @@ pub const TranscriptView = struct {
             // The attach pass for this row is done: elements appearing from
             // the next pass on are newly streamed and fade normally.
             v.finishSeeding();
-            if (v.isFading()) window.requestAnimationFrame();
+            // Share the loaders' bounded clock (Rust `pulse_lease`): a
+            // display-frame request pinned the transcript to the display
+            // rate for the whole stream.
+            if (v.isFading()) zt.pulse.frame(window);
         }
 
         const entry_key = rows.hashStr(row.entry_id);
@@ -1636,8 +1639,12 @@ pub const TranscriptView = struct {
         }
         const seed = rows.fnv1a(store.chat_id);
         const word = if (sending) "Sending" else rows.flavourWord(seed, elapsed);
-        const phase = spinPhase(cx.app.executor.now(), window.prefersReducedMotion());
-        window.requestAnimationFrame();
+        const reduced = window.prefersReducedMotion();
+        const phase = spinPhase(cx.app.executor.now(), reduced);
+        // The coarse cell loader rides the 15 Hz pulse clock (`gradient_spinner`
+        // → `activity_pulse_slow`); a display-frame request here redrew the
+        // whole window every vsync for the length of the turn.
+        if (!reduced) zt.pulse.frameSlow(window);
         var t = div().flex().flexRow().itemsCenter().gap(px(layout.space_sm)).pt(px(layout.space_lg)).textSize(px(11))
             .child(gradientSpinner(2.5, phase))
             .child(div().textSize(px(12)).textColor(theme.text_muted).child(zpui.fmt("{s}\u{2026}", .{word})));
@@ -1774,7 +1781,8 @@ pub fn userNeedsCollapse(text: []const u8) bool {
 
 fn spinPhase(now_ns: u64, reduced: bool) f32 {
     if (reduced) return 0;
-    const period = motion.gradient_spin.totalNs(1.0) * 2;
+    // `pulse_phase(&GRADIENT_SPIN)`: one 750 ms cycle (loops are not scaled).
+    const period = motion.gradient_spin.duration_ms * std.time.ns_per_ms;
     return @as(f32, @floatFromInt(now_ns % period)) / @as(f32, @floatFromInt(period));
 }
 
