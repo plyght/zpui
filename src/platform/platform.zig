@@ -930,6 +930,10 @@ pub const Platform = struct {
         /// Fires on the main thread whenever the foreground app changes.
         setForegroundAppCallback: ?*const fn (ptr: *anyopaque, cb: Callback(void, void)) void = null,
         setLaunchAtLogin: ?*const fn (ptr: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void = null,
+        /// Whether the OS will launch `app_id` at login right now, read back from the same
+        /// mechanism `setLaunchAtLogin` writes (also seeing entries an installer or the
+        /// user created). Null = the backend cannot tell.
+        launchAtLoginEnabled: ?*const fn (ptr: *anyopaque, app_id: []const u8) anyerror!bool = null,
         /// The desktop whose look zpui-drawn native controls imitate (Linux: GNOME /
         /// libadwaita or KDE Plasma / Breeze) and its accent color. Null = none (the
         /// controls are real platform widgets, or the elements show their fallbacks).
@@ -968,6 +972,11 @@ pub const Platform = struct {
     pub fn setLaunchAtLogin(p: Platform, app_id: []const u8, exe_path: []const u8, on: bool) !void {
         const f = p.vtable.setLaunchAtLogin orelse return error.Unsupported;
         return f(p.ptr, app_id, exe_path, on);
+    }
+    /// See `VTable.launchAtLoginEnabled`; `error.Unsupported` when the backend has no query.
+    pub fn launchAtLoginEnabled(p: Platform, app_id: []const u8) !bool {
+        const f = p.vtable.launchAtLoginEnabled orelse return error.Unsupported;
+        return f(p.ptr, app_id);
     }
 
     /// The desktop look for drawn native controls (`DesktopTheme.style == .none` when the

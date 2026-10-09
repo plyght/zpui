@@ -120,6 +120,7 @@ pub const LinuxPlatform = struct {
         .foregroundApp = foregroundApp,
         .setForegroundAppCallback = setForegroundAppCallback,
         .setLaunchAtLogin = setLaunchAtLogin,
+        .launchAtLoginEnabled = launchAtLoginEnabled,
         .desktopTheme = desktopTheme,
     };
 
@@ -180,14 +181,18 @@ pub const LinuxPlatform = struct {
     }
     /// XDG autostart: `~/.config/autostart/<app_id>.desktop`.
     fn setLaunchAtLogin(_: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void {
-        const env = struct {
-            fn get(name: [*:0]const u8) ?[]const u8 {
-                return if (std.c.getenv(name)) |v| std.mem.span(v) else null;
-            }
-        };
         var path_buf: [4096]u8 = undefined;
-        const path = try platform.desktop.autostartPath(&path_buf, env.get("XDG_CONFIG_HOME"), env.get("HOME"), app_id);
+        const path = try platform.desktop.autostartPath(&path_buf, envVar("XDG_CONFIG_HOME"), envVar("HOME"), app_id);
         try writeOrRemove(path, if (on) .{ .app_id = app_id, .exe_path = exe_path } else null);
+    }
+    /// The autostart entry `setLaunchAtLogin` writes exists and is not switched off.
+    fn launchAtLoginEnabled(_: *anyopaque, app_id: []const u8) anyerror!bool {
+        var path_buf: [4096]u8 = undefined;
+        const path = try platform.desktop.autostartPath(&path_buf, envVar("XDG_CONFIG_HOME"), envVar("HOME"), app_id);
+        return autostartEntryActive(path);
+    }
+    fn envVar(name: [*:0]const u8) ?[]const u8 {
+        return if (std.c.getenv(name)) |v| std.mem.span(v) else null;
     }
 
     fn desktopTheme(ptr: *anyopaque) platform.DesktopTheme {
@@ -330,6 +335,38 @@ pub const LinuxPlatform = struct {
         self.gpa.destroy(self);
     }
 };
+
+/// Whether the autostart entry at `path` exists and is enabled (see
+/// `desktop.autostartEntryEnabled`). Entries are a few hundred bytes; only the first
+/// 16 KiB are read.
+fn autostartEntryActive(path: []const u8) !bool {
+    const linux = std.os.linux;
+    var zbuf: [4097]u8 = undefined;
+    if (path.len >= zbuf.len) return error.NameTooLong;
+    @memcpy(zbuf[0..path.len], path);
+    zbuf[path.len] = 0;
+    const fd_rc = linux.open(zbuf[0..path.len :0], .{ .ACCMODE = .RDONLY, .CLOEXEC = true }, 0);
+    switch (linux.errno(fd_rc)) {
+        .SUCCESS => {},
+        .NOENT, .NOTDIR => return false,
+        else => return error.ReadFailed,
+    }
+    const fd: linux.fd_t = @intCast(fd_rc);
+    defer _ = linux.close(fd);
+    var buf: [16 * 1024]u8 = undefined;
+    var len: usize = 0;
+    while (len < buf.len) {
+        const n = linux.read(fd, buf[len..].ptr, buf.len - len);
+        switch (linux.errno(n)) {
+            .SUCCESS => {},
+            .INTR => continue,
+            else => return error.ReadFailed,
+        }
+        if (n == 0) break;
+        len += n;
+    }
+    return platform.desktop.autostartEntryEnabled(buf[0..len]);
+}
 
 /// Writes the autostart entry (creating the directory) or deletes it.
 fn writeOrRemove(path: []const u8, entry: ?struct { app_id: []const u8, exe_path: []const u8 }) !void {

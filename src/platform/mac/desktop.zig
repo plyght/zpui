@@ -495,6 +495,33 @@ pub fn setLaunchAtLogin(app_id: []const u8, exe_path: []const u8, on: bool) !voi
     if (std.c.write(fd, data.ptr, data.len) != @as(isize, @intCast(data.len))) return error.WriteFailed;
 }
 
+/// Mirrors `setLaunchAtLogin`: the app is registered with `SMAppService` (status
+/// `.enabled`), or the per-user LaunchAgent fallback exists.
+pub fn launchAtLoginEnabled(app_id: []const u8) !bool {
+    const pool = objc.AutoreleasePool.push();
+    defer pool.pop();
+    if (smAppServiceEnabled()) return true;
+    var path_buf: [1024]u8 = undefined;
+    const home: ?[]const u8 = if (std.c.getenv("HOME")) |h| std.mem.span(h) else null;
+    const path = try desktop.launchAgentPath(&path_buf, home, app_id);
+    var z: [1025]u8 = undefined;
+    @memcpy(z[0..path.len], path);
+    z[path.len] = 0;
+    const fd = std.c.open(z[0..path.len :0], .{ .ACCMODE = .RDONLY, .CLOEXEC = true });
+    if (fd < 0) return false;
+    _ = std.c.close(fd);
+    return true;
+}
+
+/// `SMAppService.mainAppService.status == SMAppServiceStatusEnabled` (1); false when the
+/// framework is unavailable (macOS < 13) or the app is not registered / not approved.
+fn smAppServiceEnabled() bool {
+    _ = dlopen("/System/Library/Frameworks/ServiceManagement.framework/ServiceManagement", 1);
+    const cls = objc.getClass("SMAppService") orelse return false;
+    const svc = cls.msg(?id, "mainAppService", .{}) orelse return false;
+    return svc.msg(NSInteger, "status", .{}) == 1;
+}
+
 /// `SMAppService.mainAppService` register / unregister; false when unavailable or it
 /// failed (not an app bundle, not approved, ...).
 fn smAppService(on: bool) bool {

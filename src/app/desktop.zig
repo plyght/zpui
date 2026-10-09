@@ -11,6 +11,7 @@
 //!     .action("Quit typebud", Quit{}),
 //! } });
 //! try app.setLaunchAtLogin("typebud", exe_path, true);
+//! const on = app.launchAtLoginEnabled("typebud") catch saved_setting; // the real OS state
 //! ```
 //!
 //! Callbacks run on the main thread inside an update (entity changes flush afterwards).
@@ -184,4 +185,10 @@ pub fn trayAction(app: *App, tag: usize) ?*const AnyAction {
 
 pub fn setLaunchAtLogin(app: *App, app_id: []const u8, exe_path: []const u8, on: bool) !void {
     return app.platform.setLaunchAtLogin(app_id, exe_path, on);
+}
+
+/// Whether the OS currently launches `app_id` at login (`error.Unsupported` when the
+/// platform cannot tell). Reads only; never changes the registration.
+pub fn launchAtLoginEnabled(app: *App, app_id: []const u8) !bool {
+    return app.platform.launchAtLoginEnabled(app_id);
 }

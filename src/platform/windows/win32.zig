@@ -623,6 +623,9 @@ pub const REG_SZ: DWORD = 1;
 pub const REG_DWORD: DWORD = 4;
 pub const RRF_RT_REG_DWORD: DWORD = 0x10;
 pub const RRF_RT_REG_SZ: DWORD = 0x2;
+pub const RRF_RT_REG_BINARY: DWORD = 0x8;
+pub const RRF_RT_ANY: DWORD = 0xffff;
+pub const ERROR_FILE_NOT_FOUND: LONG = 2;
 pub const ERROR_SUCCESS: LONG = 0;
 
 // Processes.
@@ -913,6 +916,7 @@ pub extern "advapi32" fn RegGetValueW(HKEY, ?LPCWSTR, ?LPCWSTR, DWORD, ?*DWORD, 
 pub extern "advapi32" fn RegCreateKeyExW(HKEY, LPCWSTR, DWORD, ?LPWSTR, DWORD, DWORD, ?*anyopaque, *?HKEY, ?*DWORD) callconv(WINAPI) LONG;
 pub extern "advapi32" fn RegSetValueExW(HKEY, ?LPCWSTR, DWORD, DWORD, ?[*]const u8, DWORD) callconv(WINAPI) LONG;
 pub extern "advapi32" fn RegDeleteValueW(HKEY, ?LPCWSTR) callconv(WINAPI) LONG;
+pub extern "advapi32" fn RegDeleteKeyValueW(HKEY, ?LPCWSTR, ?LPCWSTR) callconv(WINAPI) LONG;
 pub extern "advapi32" fn RegCloseKey(HKEY) callconv(WINAPI) LONG;
 
 pub extern "dwmapi" fn DwmFlush() callconv(WINAPI) HRESULT;

@@ -240,6 +240,7 @@ Windows `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` + `QueryFullProcessImageNameW
 
 ```zig
 setLaunchAtLogin: ?*const fn (ptr: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void = null,
+launchAtLoginEnabled: ?*const fn (ptr: *anyopaque, app_id: []const u8) anyerror!bool = null,
 ```
 
 macOS `SMAppService.mainAppService` (macOS 13+, bundled apps), else a per-user LaunchAgent
@@ -247,6 +248,15 @@ macOS `SMAppService.mainAppService` (macOS 13+, bundled apps), else a per-user L
 `$XDG_CONFIG_HOME/autostart/<app_id>.desktop` (default `~/.config/autostart`,
 `platform.desktop.writeAutostartEntry`, `Exec` quoted per the Desktop Entry spec); Windows
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+
+`launchAtLoginEnabled` reads the real state back from the same places (so entries an installer
+or the user created count): macOS `SMAppService.mainAppService.status == .enabled` or the
+LaunchAgent plist exists; Linux the autostart entry exists without `Hidden=true` /
+`X-GNOME-Autostart-enabled=false` (`platform.desktop.autostartEntryEnabled`); Windows the `Run`
+value exists and `...\Explorer\StartupApproved\Run\<app_id>` does not mark it disabled
+(`platform.desktop.startupApprovedEnabled`). Enabling on Windows clears a stale "disabled" mark.
+Apps should show this rather than a saved preference, falling back to the preference on
+`error.Unsupported`.
 
 ## 6. App-level API (`src/app/desktop.zig`)
 
@@ -258,6 +268,7 @@ var buf: [256]u8 = undefined;
 if (app.foregroundApp(&buf)) |fg| hideWhen(fg.id);
 try app.setTray(.{ .icon_png = icon, .tooltip = "typebud", .items = &.{ .action("Quit typebud", Quit{}) } });
 try app.setLaunchAtLogin("typebud", exe_path, true);
+const on = app.launchAtLoginEnabled("typebud") catch saved_setting;
 ```
 
 Callbacks run inside an update on the main thread. Tray actions dispatch like menu bar picks and use
@@ -329,7 +340,8 @@ renderer `src/renderer/d3d11/` and DirectWrite text `src/text/directwrite.zig`.
 - **Foreground app**: `SetWinEventHook(EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT |
   WINEVENT_SKIPOWNPROCESS)`; `id` = executable basename, `name` = its version-resource
   FileDescription (else the basename without `.exe`).
-- **Launch at login**: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\<app_id>` = `"exe"`.
+- **Launch at login**: `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\<app_id>` = `"exe"`;
+  the query also honours Task Manager's `Explorer\StartupApproved\Run` disable flag.
 - **Idle cost**: the UI thread blocks in `MsgWaitForMultipleObjectsEx` (timeout = next
   `dispatchAfter` deadline, else infinite); the frame pacer thread waits on an event and only runs
   `IDXGIOutput::WaitForVBlank` while a window has requested a frame; hidden windows release their

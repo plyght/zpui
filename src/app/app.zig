@@ -478,6 +478,11 @@ pub const App = struct {
     pub fn setLaunchAtLogin(app: *App, app_id: []const u8, exe_path: []const u8, on: bool) !void {
         return desktop_mod.setLaunchAtLogin(app, app_id, exe_path, on);
     }
+    /// Whether the OS currently launches `app_id` at login; `error.Unsupported` when the
+    /// platform cannot tell.
+    pub fn launchAtLoginEnabled(app: *App, app_id: []const u8) !bool {
+        return desktop_mod.launchAtLoginEnabled(app, app_id);
+    }
 
     pub fn displays(app: *App, out: []platform.Display) usize {
         return app.platform.vtable.displays(app.platform.ptr, out);

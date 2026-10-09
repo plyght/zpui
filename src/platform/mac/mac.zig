@@ -125,6 +125,7 @@ pub const MacPlatform = struct {
         .foregroundApp = vForegroundApp,
         .setForegroundAppCallback = vSetForegroundAppCallback,
         .setLaunchAtLogin = vSetLaunchAtLogin,
+        .launchAtLoginEnabled = vLaunchAtLoginEnabled,
     };
 
     // -- desktop companion features (desktop.zig, docs/DESKTOP_OVERLAY.md) ---------------
@@ -175,6 +176,9 @@ pub const MacPlatform = struct {
     }
     fn vSetLaunchAtLogin(_: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void {
         return mac_desktop.setLaunchAtLogin(app_id, exe_path, on);
+    }
+    fn vLaunchAtLoginEnabled(_: *anyopaque, app_id: []const u8) anyerror!bool {
+        return mac_desktop.launchAtLoginEnabled(app_id);
     }
 
     fn vRenderSystemSymbol(_: *anyopaque, gpa: std.mem.Allocator, request: pf.SystemSymbolRequest) ?pf.SystemSymbolMask {

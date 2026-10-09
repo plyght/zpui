@@ -282,6 +282,10 @@ pub const TestPlatform = struct {
     /// The last `setLaunchAtLogin` request.
     launch_at_login: ?bool = null,
     launch_at_login_calls: usize = 0,
+    /// `launchAtLoginEnabled` answers `launch_at_login orelse false`;
+    /// `launch_at_login_query_supported = false` simulates a backend that cannot tell.
+    launch_at_login_query_supported: bool = true,
+    launch_at_login_queries: usize = 0,
 
     pub fn create(gpa: Allocator) Allocator.Error!*TestPlatform {
         const self = try gpa.create(TestPlatform);
@@ -447,6 +451,7 @@ pub const TestPlatform = struct {
         .foregroundApp = vForegroundApp,
         .setForegroundAppCallback = vSetForegroundAppCallback,
         .setLaunchAtLogin = vSetLaunchAtLogin,
+        .launchAtLoginEnabled = vLaunchAtLoginEnabled,
     };
 
     fn vStartGlobalInputMonitor(ptr: *anyopaque, cb: pf.Callback(pf.GlobalInputEvent, void)) pf.InputMonitorStatus {
@@ -487,6 +492,12 @@ pub const TestPlatform = struct {
         const self = cast(ptr);
         self.launch_at_login = on;
         self.launch_at_login_calls += 1;
+    }
+    fn vLaunchAtLoginEnabled(ptr: *anyopaque, _: []const u8) anyerror!bool {
+        const self = cast(ptr);
+        if (!self.launch_at_login_query_supported) return error.Unsupported;
+        self.launch_at_login_queries += 1;
+        return self.launch_at_login orelse false;
     }
 
     /// The fake symbol: a solid block 1.2 × the point size wide and 1 × tall (before

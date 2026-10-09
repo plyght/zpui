@@ -120,6 +120,7 @@ pub const WindowsPlatform = struct {
         .foregroundApp = foregroundApp,
         .setForegroundAppCallback = setForegroundAppCallback,
         .setLaunchAtLogin = setLaunchAtLogin,
+        .launchAtLoginEnabled = launchAtLoginEnabled,
     };
 
     fn cast(ptr: *anyopaque) *WindowsPlatform {
@@ -550,16 +551,19 @@ pub const WindowsPlatform = struct {
     fn setLaunchAtLogin(ptr: *anyopaque, app_id: []const u8, exe_path: []const u8, on: bool) anyerror!void {
         const self = cast(ptr);
         var key: ?w.HKEY = null;
-        if (w.RegCreateKeyExW(w.HKEY_CURRENT_USER, L("Software\\Microsoft\\Windows\\CurrentVersion\\Run"), 0, null, 0, w.KEY_SET_VALUE, null, &key, null) != w.ERROR_SUCCESS)
+        if (w.RegCreateKeyExW(w.HKEY_CURRENT_USER, run_key, 0, null, 0, w.KEY_SET_VALUE, null, &key, null) != w.ERROR_SUCCESS)
             return error.RegistryUnavailable;
         defer _ = w.RegCloseKey(key.?);
         const name = try w.utf8ToWide(self.gpa, app_id);
         defer self.gpa.free(name);
         if (!on) {
             const r = w.RegDeleteValueW(key.?, name.ptr);
-            if (r != w.ERROR_SUCCESS and r != 2) return error.RegistryWriteFailed; // 2 = not found
+            if (r != w.ERROR_SUCCESS and r != w.ERROR_FILE_NOT_FOUND) return error.RegistryWriteFailed;
             return;
         }
+        // An explicit enable overrides an earlier "Disabled" from Task Manager / Settings,
+        // which would otherwise keep the Run value from launching (best effort).
+        _ = w.RegDeleteKeyValueW(w.HKEY_CURRENT_USER, startup_approved_run, name.ptr);
         const cmd = try std.fmt.allocPrint(self.gpa, "\"{s}\"", .{exe_path});
         defer self.gpa.free(cmd);
         const value = try w.utf8ToWide(self.gpa, cmd);
@@ -567,6 +571,28 @@ pub const WindowsPlatform = struct {
         const bytes: [*]const u8 = @ptrCast(value.ptr);
         if (w.RegSetValueExW(key.?, name.ptr, 0, w.REG_SZ, bytes, @intCast((value.len + 1) * 2)) != w.ERROR_SUCCESS)
             return error.RegistryWriteFailed;
+    }
+
+    const run_key = L("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+    const startup_approved_run = L("Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run");
+
+    /// The HKCU `Run` value named `app_id` exists (whoever wrote it, e.g. the installer)
+    /// and Task Manager / Settings have not disabled it under `StartupApproved\Run`.
+    fn launchAtLoginEnabled(ptr: *anyopaque, app_id: []const u8) anyerror!bool {
+        const self = cast(ptr);
+        const name = try w.utf8ToWide(self.gpa, app_id);
+        defer self.gpa.free(name);
+        switch (w.RegGetValueW(w.HKEY_CURRENT_USER, run_key, name.ptr, w.RRF_RT_ANY, null, null, null)) {
+            w.ERROR_SUCCESS => {},
+            w.ERROR_FILE_NOT_FOUND => return false,
+            else => return error.RegistryUnavailable,
+        }
+        var data: [256]u8 = undefined; // normally 12 bytes; only the first matters
+        var size: w.DWORD = data.len;
+        return switch (w.RegGetValueW(w.HKEY_CURRENT_USER, startup_approved_run, name.ptr, w.RRF_RT_REG_BINARY, null, &data, &size)) {
+            w.ERROR_SUCCESS => platform.desktop.startupApprovedEnabled(data[0..@min(size, data.len)]),
+            else => true, // no StartupApproved entry: the Run value is live
+        };
     }
 
     // -----------------------------------------------------------------------------------

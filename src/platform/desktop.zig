@@ -380,6 +380,38 @@ pub fn writeAutostartEntry(w: *std.Io.Writer, app_id: []const u8, exe_path: []co
     try w.writeAll("\nTerminal=false\nNoDisplay=true\nX-GNOME-Autostart-enabled=true\n");
 }
 
+/// Whether an XDG autostart entry's contents leave it active: false when its
+/// `[Desktop Entry]` group sets `Hidden=true` (the spec's "deleted") or
+/// `X-GNOME-Autostart-enabled=false` (GNOME's / KDE's "off" switch). Keys in other groups
+/// (e.g. `[Desktop Action ...]`) and comments are ignored.
+pub fn autostartEntryEnabled(contents: []const u8) bool {
+    var in_main = false;
+    var lines = std.mem.splitScalar(u8, contents, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (line.len == 0 or line[0] == '#') continue;
+        if (line[0] == '[') {
+            in_main = std.mem.eql(u8, line, "[Desktop Entry]");
+            continue;
+        }
+        if (!in_main) continue;
+        const eq = std.mem.indexOfScalar(u8, line, '=') orelse continue;
+        const key = std.mem.trimEnd(u8, line[0..eq], " \t");
+        const value = std.mem.trimStart(u8, line[eq + 1 ..], " \t");
+        if (std.mem.eql(u8, key, "Hidden") and std.mem.eql(u8, value, "true")) return false;
+        if (std.mem.eql(u8, key, "X-GNOME-Autostart-enabled") and std.mem.eql(u8, value, "false")) return false;
+    }
+    return true;
+}
+
+/// Windows `...\Explorer\StartupApproved\Run` value data (written by Task Manager /
+/// Settings > Startup apps): the first byte is even (0x02, 0x06) when the `Run` entry is
+/// allowed and odd (0x03, 0x01) when the user disabled it. Empty data = no opinion.
+pub fn startupApprovedEnabled(data: []const u8) bool {
+    if (data.len == 0) return true;
+    return data[0] & 1 == 0;
+}
+
 /// `~/Library/LaunchAgents/<app_id>.plist` (macOS fallback when SMAppService is unavailable).
 pub fn launchAgentPath(buf: []u8, home: ?[]const u8, app_id: []const u8) ![]const u8 {
     const h = home orelse return error.NoHomeDirectory;
@@ -541,6 +573,29 @@ test "autostart desktop entry path and contents" {
     out.clearRetainingCapacity();
     try writeAutostartEntry(&out.writer, "t", "/a/$b\"c%d");
     try testing.expect(std.mem.indexOf(u8, out.written(), "\nExec=\"/a/\\$b\\\"c%%d\"\n") != null);
+}
+
+test "autostartEntryEnabled honours Hidden and X-GNOME-Autostart-enabled" {
+    var out: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer out.deinit();
+    try writeAutostartEntry(&out.writer, "typebud", "/usr/bin/typebud");
+    try testing.expect(autostartEntryEnabled(out.written()));
+    try testing.expect(autostartEntryEnabled(""));
+    try testing.expect(autostartEntryEnabled("[Desktop Entry]\nExec=t\nHidden=false\n"));
+    try testing.expect(!autostartEntryEnabled("[Desktop Entry]\nExec=t\nHidden=true\n"));
+    try testing.expect(!autostartEntryEnabled("[Desktop Entry]\r\nExec=t\r\nX-GNOME-Autostart-enabled = false\r\n"));
+    try testing.expect(!autostartEntryEnabled("# c\n  [Desktop Entry]  \n  Hidden =true\n"));
+    try testing.expect(autostartEntryEnabled("[Desktop Entry]\nExec=t\n#Hidden=true\n"));
+    try testing.expect(autostartEntryEnabled("[Desktop Entry]\nExec=t\n[Desktop Action x]\nHidden=true\n"));
+    try testing.expect(autostartEntryEnabled("[Desktop Entry]\nHidden[de]=true\nX-GNOME-Autostart-enabled=true\n"));
+}
+
+test "startupApprovedEnabled" {
+    try testing.expect(startupApprovedEnabled(&.{}));
+    try testing.expect(startupApprovedEnabled(&.{ 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }));
+    try testing.expect(startupApprovedEnabled(&.{6}));
+    try testing.expect(!startupApprovedEnabled(&.{ 3, 0, 0, 0, 0x10, 0x20, 0x30, 0x40, 0, 0, 0, 0 }));
+    try testing.expect(!startupApprovedEnabled(&.{1}));
 }
 
 test "launch agent plist" {

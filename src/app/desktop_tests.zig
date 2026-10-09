@@ -123,8 +123,17 @@ test "tray menu actions dispatch like the menu bar and never collide with its ta
     tp.tray_supported = false;
     try testing.expectError(error.Unsupported, app.setTray(.{ .icon_png = "", .items = &.{} }));
 
+    try testing.expectEqual(false, try app.launchAtLoginEnabled("typebud"));
     try app.setLaunchAtLogin("typebud", "/usr/bin/typebud", true);
     try testing.expectEqual(@as(?bool, true), tp.launch_at_login);
+    try testing.expectEqual(true, try app.launchAtLoginEnabled("typebud"));
+    const calls = tp.launch_at_login_calls;
+    try app.setLaunchAtLogin("typebud", "/usr/bin/typebud", false);
+    try testing.expectEqual(false, try app.launchAtLoginEnabled("typebud"));
+    try testing.expectEqual(calls + 1, tp.launch_at_login_calls); // queries never write
+    try testing.expectEqual(@as(usize, 3), tp.launch_at_login_queries);
+    tp.launch_at_login_query_supported = false;
+    try testing.expectError(error.Unsupported, app.launchAtLoginEnabled("typebud"));
 }
 
 const Blob = struct {
