@@ -149,6 +149,12 @@ top plane               transparent CAMetalLayer: foreground of floating glass
 * zpui API: `zpui.liquidGlass`, `zpui.liquidGlassGroup`, `zpui.overlayPlane`,
   `zpui.platformSupportsLiquidGlass`, `zpui.liquidGlassRevision`, `zpui.backdropHole`,
   `zpui.sidebarMaterial`, `zpui.liquid_glass.paintGlass`. See `docs/elements.md` §5c.
+  `sidebarMaterial(.., .{ .without_glass = true }, ..)` also attaches the classic
+  `.sidebar` vibrancy on macOS 11-15 (a pre-Tahoe sidebar fallback). Settings-style
+  windows: `TitlebarOptions{ .appears_transparent = true, .toolbar = .unified,
+  .separator = .none }` puts the traffic lights in a 52 pt toolbar band over the
+  sidebar, `WindowParams.frame_autosave_name` remembers the frame, and
+  `Window.systemColors` returns the resolved `NSColor` semantic colors.
 * Runtime gate: `NSClassFromString("NSGlassEffectView")`, `NSGlassEffectContainerView`,
   and `-[NSProcessInfo isOperatingSystemAtLeastVersion:{26,0,0}]`. The answer is cached.
   Optional selectors (`setEffectIsInteractive:`, `setStyle:`, `setTintColor:`,

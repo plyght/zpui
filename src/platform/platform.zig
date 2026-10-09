@@ -111,7 +111,46 @@ pub const TitlebarOptions = struct {
     appears_transparent: bool = false,
     /// macOS traffic light origin, in logical pixels from the window's top-left.
     traffic_light_position: ?Point = null,
+    /// macOS: attach an empty `NSToolbar` with this `toolbarStyle`, so the titlebar
+    /// becomes a toolbar band (52 pt `.unified`, 38 pt `.unified_compact`) with the
+    /// traffic lights centred in it, as in System Settings. With `appears_transparent`
+    /// the band is part of the content (draw the page title there yourself). Null = no
+    /// toolbar. Ignored elsewhere. Don't combine with `traffic_light_position`.
+    toolbar: ?ToolbarStyle = null,
+    /// macOS `titlebarSeparatorStyle` (the line under the titlebar / toolbar band).
+    separator: TitlebarSeparator = .automatic,
 };
+
+/// The platform's semantic UI colors for one window appearance (`Window.systemColors`),
+/// each 0xRRGGBBAA in sRGB. macOS: the `NSColor` of the same name, resolved in the
+/// window's effective appearance (light / dark, increased contrast).
+pub const SystemColors = struct {
+    label: u32,
+    secondary_label: u32,
+    tertiary_label: u32,
+    quaternary_label: u32,
+    separator: u32,
+    window_background: u32,
+    under_page_background: u32,
+    control_background: u32,
+    /// The user's accent color (`controlAccentColor`).
+    control_accent: u32,
+    /// Selected rows of a focused list / sidebar (`selectedContentBackgroundColor`).
+    selected_content_background: u32,
+    /// Selected rows of an unfocused list (`unemphasizedSelectedContentBackgroundColor`).
+    unemphasized_selected_content_background: u32,
+    /// Grouped-form section fill (`quaternarySystemFillColor`, macOS 14+; else
+    /// `controlBackgroundColor` at low alpha).
+    quaternary_fill: u32,
+    /// Text on an accent / selected-content fill (`alternateSelectedControlTextColor`).
+    alternate_selected_text: u32,
+};
+
+/// `NSWindowToolbarStyle`.
+pub const ToolbarStyle = enum(u8) { automatic = 0, expanded = 1, preference = 2, unified = 3, unified_compact = 4 };
+
+/// `NSTitlebarSeparatorStyle`.
+pub const TitlebarSeparator = enum(u8) { automatic = 0, none = 1, line = 2, shadow = 3 };
 
 pub const WindowParams = struct {
     bounds: Bounds,
@@ -136,6 +175,10 @@ pub const WindowParams = struct {
     /// of the display's visible (work-area) bounds, offset inward by `margin`.
     /// Wayland layer-shell maps this to anchors + margins (clients can't position themselves otherwise).
     anchor: ?OverlayAnchor = null,
+    /// macOS `setFrameAutosaveName:`: the window's frame is saved in the user defaults
+    /// under this name and restored the next time a window with it opens (`bounds` is
+    /// then only the first-launch frame). Null = not remembered.
+    frame_autosave_name: ?[]const u8 = null,
 };
 
 // ---- native popover containers (macOS: a borderless glass NSPanel) ---------------------
@@ -337,6 +380,10 @@ pub const Window = struct {
         attachLiquidGlass: ?*const fn (ptr: *anyopaque, options: LiquidGlassAttach) anyerror!NativeViewId = null,
         /// The window's own corner radius in logical pixels (macOS `_cornerRadius`), if known.
         windowCornerRadius: ?*const fn (ptr: *anyopaque) ?f32 = null,
+        /// The system's semantic colors resolved for this window's appearance, or for
+        /// light / dark when `dark` is set (macOS `NSColor.labelColor`, ...). Optional;
+        /// null = the platform has none.
+        systemColors: ?*const fn (ptr: *anyopaque, dark: ?bool) ?SystemColors = null,
         /// Apply style / tint / corner radius / interactivity / container spacing.
         configureLiquidGlass: ?*const fn (ptr: *anyopaque, view: NativeViewId, config: LiquidGlassConfig) void = null,
         /// [liquid-glass] Cut `hole` out of the window's behind-window material (macOS
@@ -462,6 +509,11 @@ pub const Window = struct {
     pub fn windowCornerRadius(w: Window) ?f32 {
         const f = w.vtable.windowCornerRadius orelse return null;
         return f(w.ptr);
+    }
+    /// See `VTable.systemColors`.
+    pub fn systemColors(w: Window, dark: ?bool) ?SystemColors {
+        const f = w.vtable.systemColors orelse return null;
+        return f(w.ptr, dark);
     }
     pub fn attachLiquidGlass(w: Window, options: LiquidGlassAttach) !NativeViewId {
         const f = w.vtable.attachLiquidGlass orelse return error.LiquidGlassUnsupported;
@@ -651,6 +703,9 @@ pub const LiquidGlassConfig = struct {
     /// Place the glass under the main surface (Ghostty's window glass): zpui paints its
     /// translucent content on top of it instead of on the overlay plane.
     behind_content: bool = false,
+    /// `.sidebar_material` only: attach it even where the OS has no Liquid Glass (macOS
+    /// 11-15 keep `NSVisualEffectView` `.sidebar`), for pre-Tahoe sidebars.
+    without_glass: bool = false,
 };
 
 // ---- native form controls (macOS: AppKit controls as native child views) ----------------

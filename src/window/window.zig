@@ -1029,6 +1029,14 @@ pub const Window = struct {
         return self.appearance;
     }
 
+    /// The platform's semantic UI colors (macOS `NSColor.labelColor`, `separatorColor`,
+    /// `controlAccentColor`, ...) resolved for this window's appearance, or for light /
+    /// dark when `dark` is set (an app theme, `glass_dark`); null where the platform has
+    /// none (Linux, Windows, the test platform).
+    pub fn systemColors(self: *const Window, dark: ?bool) ?platform.SystemColors {
+        return self.platform_window.systemColors(dark);
+    }
+
     pub fn isWindowActive(self: *const Window) bool {
         return self.active;
     }

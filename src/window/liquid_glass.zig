@@ -82,7 +82,9 @@ pub fn paint(w: *Window, element_key: u64, kind: platform.LiquidGlassKind, bound
     var config = config_in;
     if (config.dark == null) config.dark = w.glass_dark;
     std.debug.assert(w.phase == .paint);
-    if (!supported(w)) return null;
+    // A pre-Tahoe sidebar material needs only native views, not the OS's glass.
+    const material_only = kind == .sidebar_material and config.without_glass and w.platform_window.hasLiquidGlass();
+    if (!material_only and !supported(w)) return null;
     const pool = &w.liquid_glass;
     var key = element_key;
     var n: u64 = 0;
@@ -112,7 +114,7 @@ pub fn paint(w: *Window, element_key: u64, kind: platform.LiquidGlassKind, bound
         const z: platform.NativeViewZ = if (kind == .sidebar_material or config.behind_content) .below_content else if (tier == .base) .above_content else .above_overlay;
         const v = w.platform_window.attachLiquidGlass(.{ .kind = kind, .z = z, .parent = parent }) catch |err| {
             std.log.scoped(.liquid_glass).warn("attach failed ({t}); falling back", .{err});
-            pool.supported = false;
+            if (!material_only) pool.supported = false;
             return null;
         };
         w.platform_window.configureLiquidGlass(v, config);

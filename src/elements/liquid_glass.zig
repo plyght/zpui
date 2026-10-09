@@ -293,6 +293,10 @@ pub const MaterialOptions = struct {
     /// Uniform corner radius of the material.
     corner_radius: Pixels = 0,
     enabled: bool = true,
+    /// Also attach the material where the OS has no Liquid Glass (macOS 11-15 keep the
+    /// classic `.sidebar` vibrancy): the pre-Tahoe source-list sidebar. Default: only
+    /// alongside native glass.
+    without_glass: bool = false,
 };
 
 pub const SidebarMaterialData = struct {
@@ -337,7 +341,7 @@ const SidebarMaterialElement = struct {
     pub fn paint(self: *SidebarMaterialElement, gid: ?GlobalElementId, bounds: Bounds, _: *void, _: *void, window: *Window, cx: *App) void {
         const d = self.d;
         if (d.opts.enabled and gid != null)
-            _ = window.paintLiquidGlass(gid.?, .sidebar_material, bounds, .{ .corner_radius = d.opts.corner_radius });
+            _ = window.paintLiquidGlass(gid.?, .sidebar_material, bounds, .{ .corner_radius = d.opts.corner_radius, .without_glass = d.opts.without_glass });
         d.child.paint(window, cx);
     }
 };

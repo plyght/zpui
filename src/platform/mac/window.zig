@@ -330,6 +330,7 @@ pub const MacWindow = struct {
             native_window.msg(void, "setTitlebarAppearsTransparent:", .{YES});
             native_window.msg(void, "setTitleVisibility:", .{ak.NSWindowTitleHidden});
         }
+        if (params.titlebar) |tb| applyToolbar(native_window, tb);
 
         native_view.msg(void, "setAutoresizingMask:", .{ak.NSViewWidthSizable | ak.NSViewHeightSizable});
         // Make the view layer-backed up front; this calls -makeBackingLayer (the CAMetalLayer).
@@ -403,9 +404,30 @@ pub const MacWindow = struct {
             // The init origin can be off when the key screen differs from the main screen.
             if (popover_parent == null) native_window.msg(void, "setFrameTopLeftPoint:", .{top_left});
         }
+        // Last, so a saved frame replaces the initial placement.
+        if (params.frame_autosave_name) |name| if (name.len > 0 and params.popover == null and params.kind != .overlay) {
+            _ = native_window.msg(BOOL, "setFrameAutosaveName:", .{ak.nsString(name)});
+        };
         self.moveTrafficLight();
         self.startDisplayLink();
         return self;
+    }
+
+    /// `TitlebarOptions.toolbar` / `.separator`: an empty `NSToolbar` (the titlebar
+    /// becomes a toolbar band with the traffic lights centred in it) and the separator.
+    fn applyToolbar(native_window: id, tb: platform.TitlebarOptions) void {
+        if (tb.toolbar) |style| {
+            const toolbar = ak.class("NSToolbar").msg(id, "alloc", .{}).msg(id, "initWithIdentifier:", .{ak.nsString("zpui.toolbar")});
+            toolbar.msg(void, "setShowsBaselineSeparator:", .{objc.toBOOL(tb.separator != .none)});
+            toolbar.msg(void, "setAllowsUserCustomization:", .{NO});
+            toolbar.msg(void, "setDisplayMode:", .{@as(NSUInteger, 2)}); // NSToolbarDisplayModeIconOnly
+            native_window.msg(void, "setToolbar:", .{toolbar});
+            toolbar.release(); // retained by the window
+            if (native_window.msg(BOOL, "respondsToSelector:", .{objc.sel("setToolbarStyle:")}) == YES)
+                native_window.msg(void, "setToolbarStyle:", .{@as(NSInteger, @intFromEnum(style))});
+        }
+        if (tb.separator != .automatic and native_window.msg(BOOL, "respondsToSelector:", .{objc.sel("setTitlebarSeparatorStyle:")}) == YES)
+            native_window.msg(void, "setTitlebarSeparatorStyle:", .{@as(NSInteger, @intFromEnum(tb.separator))});
     }
 
     pub fn window(self: *MacWindow) platform.Window {
@@ -701,6 +723,7 @@ pub const MacWindow = struct {
         .drawLayered = vDrawLayered,
         .attachLiquidGlass = vAttachLiquidGlass, // [liquid-glass]
         .windowCornerRadius = vWindowCornerRadius,
+        .systemColors = vSystemColors,
         .configureLiquidGlass = vConfigureLiquidGlass,
         .setBackdropHole = vSetBackdropHole,
         .a11yUpdate = vA11yUpdate,
@@ -828,6 +851,62 @@ pub const MacWindow = struct {
         if (win.msg(objc.BOOL, "respondsToSelector:", .{objc.cachedSel("_cornerRadius")}) != objc.YES) return null;
         const r = win.msg(ak.CGFloat, "_cornerRadius", .{});
         return if (r > 0) @floatCast(r) else null;
+    }
+
+    fn vSystemColors(ptr: *anyopaque, pin_dark: ?bool) ?platform.SystemColors {
+        const self = cast(ptr);
+        if (self.closed) return null;
+        const pool = objc.AutoreleasePool.push();
+        defer pool.pop();
+        // Dynamic NSColors resolve against the current drawing appearance: make it the
+        // window's for the duration (restored after).
+        const NSAppearance = ak.class("NSAppearance");
+        const prev = NSAppearance.msg(?id, "currentAppearance", .{});
+        const appearance: ?id = if (pin_dark) |d|
+            NSAppearance.msg(?id, "appearanceNamed:", .{ak.nsString(if (d) "NSAppearanceNameDarkAqua" else "NSAppearanceNameAqua")})
+        else
+            self.native_window.msg(?id, "effectiveAppearance", .{});
+        if (appearance) |a| NSAppearance.msg(void, "setCurrentAppearance:", .{a});
+        defer NSAppearance.msg(void, "setCurrentAppearance:", .{prev});
+        const dark = pin_dark orelse switch (vAppearance(self)) {
+            .dark, .vibrant_dark => true,
+            .light, .vibrant_light => false,
+        };
+        return .{
+            .label = systemColor("labelColor", if (dark) 0xffffffd9 else 0x000000d9),
+            .secondary_label = systemColor("secondaryLabelColor", 0x00000080),
+            .tertiary_label = systemColor("tertiaryLabelColor", 0x00000040),
+            .quaternary_label = systemColor("quaternaryLabelColor", 0x0000001a),
+            .separator = systemColor("separatorColor", 0x0000001a),
+            .window_background = systemColor("windowBackgroundColor", 0xecececff),
+            .under_page_background = systemColor("underPageBackgroundColor", 0x969696e6),
+            .control_background = systemColor("controlBackgroundColor", 0xffffffff),
+            .control_accent = systemColor("controlAccentColor", 0x007affff),
+            .selected_content_background = systemColor("selectedContentBackgroundColor", 0x0064e1ff),
+            .unemphasized_selected_content_background = systemColor("unemphasizedSelectedContentBackgroundColor", 0xdcdcdcff),
+            .quaternary_fill = systemColor("quaternarySystemFillColor", if (dark) 0xffffff0d else 0x0000000d),
+            .alternate_selected_text = systemColor("alternateSelectedControlTextColor", 0xffffffff),
+        };
+    }
+
+    /// `+[NSColor <name>]` in sRGB as 0xRRGGBBAA, or `fallback` when this macOS lacks it.
+    fn systemColor(comptime name: [:0]const u8, fallback: u32) u32 {
+        const NSColor = ak.class("NSColor");
+        if (NSColor.msg(BOOL, "respondsToSelector:", .{objc.cachedSel(name)}) != YES) return fallback;
+        const c = NSColor.msg(?id, name, .{}) orelse return fallback;
+        const srgb = ak.class("NSColorSpace").msg(id, "sRGBColorSpace", .{});
+        const conv = c.msg(?id, "colorUsingColorSpace:", .{srgb}) orelse return fallback;
+        var r: ak.CGFloat = 0;
+        var g: ak.CGFloat = 0;
+        var b: ak.CGFloat = 0;
+        var a: ak.CGFloat = 0;
+        conv.msg(void, "getRed:green:blue:alpha:", .{ &r, &g, &b, &a });
+        const byte = struct {
+            fn f(v: ak.CGFloat) u32 {
+                return @intFromFloat(@round(@min(@max(v, 0), 1) * 255));
+            }
+        }.f;
+        return byte(r) << 24 | byte(g) << 16 | byte(b) << 8 | byte(a);
     }
 
     // [liquid-glass] NSGlassEffectView children (native_views.zig).

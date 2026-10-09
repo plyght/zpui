@@ -516,7 +516,9 @@ fn enableTop(w: *MacWindow) !void {
 }
 
 pub fn attachGlass(w: *MacWindow, options: platform.LiquidGlassAttach) !platform.NativeViewId {
-    if (!glassSupported()) return error.LiquidGlassUnsupported;
+    // The sidebar material is plain NSVisualEffectView (macOS 10.10+): callers ask for it
+    // without glass only via `LiquidGlassConfig.without_glass`.
+    if (!glassSupported() and options.kind != .sidebar_material) return error.LiquidGlassUnsupported;
     const cls_name: [:0]const u8 = switch (options.kind) {
         .glass => "NSGlassEffectView",
         .container => "NSGlassEffectContainerView",

@@ -291,3 +291,36 @@ test "without native glass sidebarMaterial attaches nothing" {
     const tw = TestWindow.of(handle.window(app).?.platform_window);
     try testing.expectEqual(@as(usize, 0), tw.glassCount());
 }
+
+const ClassicSidebarView = struct {
+    pub fn render(_: *ClassicSidebarView, _: *Window, _: *Context(ClassicSidebarView)) elements.Div {
+        return div().size(px(400)).relative()
+            .child(div().absolute().left(px(0)).top(px(0)).w(px(200)).h(px(300))
+            .child(lg.sidebarMaterial("material", .{ .without_glass = true }, div().sizeFull()))
+            .child(lg.liquidGlass("pane", .{ .shape = .{ .rounded = 12 } }, div().sizeFull())));
+    }
+};
+
+fn initClassicSidebar(_: *Window, _: *Context(ClassicSidebarView)) ClassicSidebarView {
+    return .{};
+}
+
+test "without native glass a without_glass sidebarMaterial still attaches (pre-Tahoe sidebar), glass does not" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    app.test_platform.?.liquid_glass_supported = false;
+    const handle = try app.openWindow(options, ClassicSidebarView, initClassicSidebar, .{});
+    const w = handle.window(app).?;
+    const tw = TestWindow.of(w.platform_window);
+    try testing.expectEqual(@as(usize, 1), tw.glassCount());
+    var ids: [4]pf.NativeViewId = undefined;
+    const n = glassIds(tw, &ids);
+    try testing.expectEqual(@as(usize, 1), n);
+    const a = tw.glass_attach[@intFromEnum(ids[0])].?;
+    try testing.expectEqual(pf.LiquidGlassKind.sidebar_material, a.kind);
+    try testing.expectEqual(pf.NativeViewZ.below_content, a.z);
+    try testing.expect(!w.supportsLiquidGlass());
+    // Stays attached across frames.
+    w.drawAndPresent();
+    try testing.expectEqual(@as(usize, 1), tw.glassCount());
+}
