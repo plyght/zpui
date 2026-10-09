@@ -204,6 +204,9 @@ pub const Shell = struct {
         try self.subs.add(cx.gpa(), try cx.subscribe(self.right_pane, onSurfacesEmptied));
         try self.subs.add(cx.gpa(), try cx.subscribe(self.right_pane, onOpenExplorer));
         try self.subs.add(cx.gpa(), try cx.observe(self.right_pane, onModelChanged));
+        // The sidebar is cached; it follows this view's notifications (Rust
+        // `SidebarPane` observes the shell): clock ticks, engine/auth frames.
+        try self.subs.add(cx.gpa(), try cx.observeSelf(onSelfNotified));
         if (fixtures) |f| if (f.meta.splash) {
             self.splash = .visible;
         } else {
@@ -270,6 +273,10 @@ pub const Shell = struct {
 
     fn onModelChanged(_: *Shell, _: anytype, cx: *Context(Shell)) void {
         cx.notify();
+    }
+
+    fn onSelfNotified(self: *Shell, cx: *Context(Shell)) void {
+        cx.app.notify(self.sidebar.id);
     }
 
     fn onWorkspaceChanged(self: *Shell, ws: Entity(model.WorkspaceStore), cx: *Context(Shell)) void {
@@ -1000,7 +1007,10 @@ pub const Shell = struct {
 
         const sidebar_col = div().hFull().flexNone().overflowHidden().w(px(sidebar_now))
             .child(div().hFull().pt(px(layout.titlebar_height))
-                .child(div().w(px(prefs.sidebar_width)).hFull().flexNone().child(self.sidebar)));
+                // A cached view (Rust `sidebar_pane.cached(..)`): reused while
+                // neither the sidebar nor this shell was notified, so a transcript
+                // scroll frame does not rebuild the 150-row column.
+                .child(self.sidebar.cached(sb.w(px(prefs.sidebar_width)).hFull().flexNone().refinement)));
 
         const sidebar_seam = div().w(px(0)).hFull().flexNone().relative()
             .child(if (sidebar_now > 0) resizeHandle(SidebarResize, "sidebar-resize", cx.listener(Shell.onSidebarSeamClick)) else null);

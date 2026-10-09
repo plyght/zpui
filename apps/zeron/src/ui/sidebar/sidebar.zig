@@ -1133,7 +1133,11 @@ pub const Sidebar = struct {
 
     // ---- render ---------------------------------------------------------------------
 
+    /// Renders so far (tests: scrolling the transcript must not rebuild the sidebar).
+    pub var render_count: usize = 0;
+
     pub fn render(self: *Sidebar, window: *Window, cx: *Context(Sidebar)) zpui.Div {
+        render_count += 1;
         const theme = ui.theme.get(cx);
         const prefs = prefs_mod.get(cx);
         const app_state = self.state.read(cx);

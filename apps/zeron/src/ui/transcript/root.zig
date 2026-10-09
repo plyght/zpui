@@ -24,6 +24,7 @@ pub const blobs = @import("blobs.zig");
 pub const badges = @import("badges.zig");
 pub const stick = @import("stick.zig");
 pub const tool_images = @import("tool_images.zig");
+pub const bench_fixture = @import("bench_fixture.zig");
 
 pub const TranscriptView = view.TranscriptView;
 pub const parseFixture = view.parseFixture;
@@ -38,4 +39,5 @@ test {
     _ = @import("parity_test.zig");
     _ = @import("badges.zig");
     _ = @import("stick.zig");
+    _ = @import("scroll_test.zig");
 }

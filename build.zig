@@ -1,5 +1,8 @@
 const std = @import("std");
 
+/// `-Dtest-filter` for the zeron app tests too (`zig build zeron-app-test -Dtest-filter=scroll`).
+var app_test_filters: []const []const u8 = &.{};
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -10,7 +13,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const test_filters = b.option([]const []const u8, "test-filter", "Only run zpui tests whose names contain this (repeatable)") orelse &.{};
+    const test_filters = b.option([]const []const u8, "test-filter", "Only run tests whose names contain this (repeatable; zpui-test, zeron-app-test)") orelse &.{};
+    app_test_filters = test_filters;
     const tests = b.addTest(.{ .root_module = zpui, .filters = test_filters });
     const run_tests = b.addRunArtifact(tests);
     const test_step = b.step("test", "Run zpui unit tests");
@@ -971,7 +975,7 @@ fn addZeronApp(
     b.step("glass-lab", "Run the Liquid Glass lab window (zeron, ZERON_GLASS_LAB=1)").dependOn(&lab.step);
 
     // Headless shell/sidebar tests (TestPlatform + checked-in fixtures).
-    const tests = b.addRunArtifact(b.addTest(.{ .name = "zeron_app", .root_module = root }));
+    const tests = b.addRunArtifact(b.addTest(.{ .name = "zeron_app", .root_module = root, .filters = app_test_filters }));
     tests.setCwd(b.path("."));
     test_step.dependOn(&tests.step);
     b.step("zeron-app-test", "Run the zeron shell/sidebar tests").dependOn(&tests.step);

@@ -310,4 +310,5 @@ test {
     _ = @import("shortcuts_test.zig");
     _ = @import("new_chat_test.zig");
     _ = @import("boot_select_test.zig");
+    _ = @import("scroll_test.zig");
 }
