@@ -190,6 +190,7 @@ pub const TranscriptStore = struct {
         if (!self.active) return;
         const conn = self.engine.read(cx).conn orelse return;
         self.retry_task.cancel();
+        zpui.boot_trace.mark("transcript_open");
         self.watch.open(conn, .WatchDocMessages, protocol.params.WatchDocMessages{
             .chatId = self.chat_id,
             .openingTail = true,
@@ -265,6 +266,7 @@ pub const TranscriptStore = struct {
             self.transcript.context_usage = self.context_usage;
             if (frame == .reset) {
                 reset = true;
+                zpui.boot_trace.mark(if (history_pending) "transcript_tail" else "transcript_replayed");
                 self.replayed = !history_pending;
             }
             changed = true;
