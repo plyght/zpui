@@ -21,6 +21,7 @@ const menu_mod = @import("menu.zig");
 const notify = @import("notify.zig");
 const mac_desktop = @import("desktop.zig");
 const boot_trace = @import("../../boot_trace.zig");
+const metal_renderer = @import("../../renderer/metal/renderer.zig");
 pub const window_capture = @import("window_capture.zig");
 const CoreTextSystem = @import("../../text/coretext.zig").CoreTextSystem;
 
@@ -65,6 +66,9 @@ pub const MacPlatform = struct {
     /// Create the platform (main thread). Instantiates `NSApplication`.
     pub fn create(gpa: std.mem.Allocator) !*MacPlatform {
         if (!dispatcher_mod.isMainThread()) return error.NotMainThread;
+        // Shader compile + pipeline states on a background queue while the app sets up;
+        // the first window's renderer waits for them (renderer/metal/renderer.zig `shared`).
+        metal_renderer.shared.prewarm();
         const self = try gpa.create(MacPlatform);
         errdefer gpa.destroy(self);
         const text_system = try CoreTextSystem.create(gpa);

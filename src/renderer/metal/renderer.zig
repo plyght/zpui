@@ -121,10 +121,6 @@ const Pipelines = struct {
     monochrome_sprites: id,
     polychrome_sprites: id,
     surfaces: id,
-
-    fn deinit(self: *Pipelines) void {
-        inline for (@typeInfo(Pipelines).@"struct".field_names) |name| @field(self, name).release();
-    }
 };
 
 /// Creates/destroys instance buffers for the pool.
@@ -354,19 +350,10 @@ pub const MetalRenderer = struct {
         const pool = objc.AutoreleasePool.push();
         defer pool.pop();
 
-        const device = selectDevice() orelse return error.NoMetalDevice;
-        errdefer device.release();
-        const is_unified_memory = mtl.Device.hasUnifiedMemory(device);
-        // Apple GPU families support memoryless render targets and shared textures.
-        const is_apple_gpu = mtl.Device.supportsFamily(device, .apple1);
-        boot_trace.mark("metal_device");
-
-        const library = try compileLibrary(device);
-        errdefer library.release();
-        boot_trace.mark("metal_library");
-        var pipelines = try buildPipelines(device, library);
-        errdefer pipelines.deinit();
-        boot_trace.mark("metal_pipelines");
+        const sh = try shared.acquire();
+        const device = sh.device;
+        const is_unified_memory = sh.is_unified_memory;
+        const is_apple_gpu = sh.is_apple_gpu;
 
         const command_queue = mtl.Device.newCommandQueue(device) orelse return error.ResourceCreationFailed;
         errdefer command_queue.release();
@@ -380,8 +367,8 @@ pub const MetalRenderer = struct {
             .gpa = gpa,
             .device = device,
             .command_queue = command_queue,
-            .library = library,
-            .pipelines = pipelines,
+            .library = sh.library,
+            .pipelines = sh.pipelines,
             .unit_vertices = unit_vertices,
             .is_apple_gpu = is_apple_gpu,
             .is_unified_memory = is_unified_memory,
@@ -394,7 +381,7 @@ pub const MetalRenderer = struct {
                 .max_size = @min(options.atlas.max_size, max_atlas_size),
             }),
             .blur_gpu = .{ .device = device },
-            .mps_supported = objc.fromBOOL(mtl.MPSSupportsMTLDevice(device)),
+            .mps_supported = sh.mps_supported,
         };
         errdefer self.sprite_atlas.deinit();
 
@@ -432,11 +419,9 @@ pub const MetalRenderer = struct {
         if (self.overlay_layer) |l| l.release();
         if (self.top_layer) |l| l.release();
         for (self.layer_captures) |c| if (c) |cap| self.gpa.free(cap.rgba);
-        self.pipelines.deinit();
+        // device, library and pipelines belong to `shared` (process lifetime).
         self.unit_vertices.release();
-        self.library.release();
         self.command_queue.release();
-        self.device.release();
         self.* = undefined;
     }
 
@@ -1210,6 +1195,91 @@ fn selectDevice() ?id {
     log.warn("unable to enumerate Metal devices; using the system default device", .{});
     return mtl.MTLCreateSystemDefaultDevice();
 }
+
+/// The device, shader library and pipeline states, built once per process and shared by
+/// every window's renderer (pipeline states are immutable and thread-safe; zui builds
+/// them per window, so each popover recompiled the shaders). `prewarm` starts the build
+/// on a background queue at launch, so the shader compile and pipeline creation overlap
+/// the app's own startup instead of blocking the first window; the first `init` waits.
+pub const shared = struct {
+    pub const State = struct {
+        device: id,
+        library: id,
+        pipelines: Pipelines,
+        is_unified_memory: bool,
+        /// Apple GPU families support memoryless render targets and shared textures.
+        is_apple_gpu: bool,
+        /// `MPSSupportsMTLDevice`; without it blurs composite the unblurred snapshot.
+        mps_supported: bool,
+    };
+
+    /// Main thread only, like `MetalRenderer.init`; `state` is written by the prewarm
+    /// job and read here only after `dispatch_group_wait` returned.
+    var state: ?State = null;
+    var pending: ?*anyopaque = null; // dispatch_group_t of the prewarm job
+
+    extern "c" fn dispatch_group_create() ?*anyopaque;
+    extern "c" fn dispatch_group_async_f(group: *anyopaque, queue: *anyopaque, ctx: ?*anyopaque, work: *const fn (?*anyopaque) callconv(.c) void) void;
+    extern "c" fn dispatch_group_wait(group: *anyopaque, timeout: u64) isize;
+    extern "c" fn dispatch_get_global_queue(identifier: isize, flags: usize) ?*anyopaque;
+    extern "c" fn dispatch_release(object: *anyopaque) void;
+    const DISPATCH_TIME_FOREVER: u64 = std.math.maxInt(u64);
+    const QOS_CLASS_USER_INTERACTIVE: isize = 0x21;
+
+    /// Start building on a background queue (once; call on the main thread before the
+    /// first window). Without it the first `init` builds synchronously.
+    pub fn prewarm() void {
+        if (state != null or pending != null) return;
+        const group = dispatch_group_create() orelse return;
+        const queue = dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0) orelse {
+            dispatch_release(group);
+            return;
+        };
+        pending = group;
+        dispatch_group_async_f(group, queue, null, &prewarmJob);
+    }
+
+    fn prewarmJob(_: ?*anyopaque) callconv(.c) void {
+        const pool = objc.AutoreleasePool.push();
+        defer pool.pop();
+        // A failure is retried (and reported) by the `acquire` that waits for it.
+        state = build() catch null;
+    }
+
+    /// The shared state, waiting for a pending prewarm; built here if there was none or
+    /// it failed.
+    pub fn acquire() Error!*const State {
+        if (pending) |group| {
+            _ = dispatch_group_wait(group, DISPATCH_TIME_FOREVER);
+            dispatch_release(group);
+            pending = null;
+            boot_trace.mark("metal_shared");
+        }
+        if (state == null) state = try build();
+        return &state.?;
+    }
+
+    fn build() Error!State {
+        const device = selectDevice() orelse return error.NoMetalDevice;
+        errdefer device.release();
+        const is_unified_memory = mtl.Device.hasUnifiedMemory(device);
+        const is_apple_gpu = mtl.Device.supportsFamily(device, .apple1);
+        boot_trace.mark("metal_device");
+        const library = try compileLibrary(device);
+        errdefer library.release();
+        boot_trace.mark("metal_library");
+        const pipelines = try buildPipelines(device, library);
+        boot_trace.mark("metal_pipelines");
+        return .{
+            .device = device,
+            .library = library,
+            .pipelines = pipelines,
+            .is_unified_memory = is_unified_memory,
+            .is_apple_gpu = is_apple_gpu,
+            .mps_supported = objc.fromBOOL(mtl.MPSSupportsMTLDevice(device)),
+        };
+    }
+};
 
 fn compileLibrary(device: id) Error!id {
     var err: ?id = null;
