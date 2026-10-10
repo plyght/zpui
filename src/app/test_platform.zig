@@ -1220,10 +1220,36 @@ pub const TestWindow = struct {
     }
     fn vDrawLayered(ptr: *anyopaque, scene: *const scene_mod.Scene, overlay: []const pf.OverlayRange, capture: bool) anyerror!void {
         const self = c(ptr);
+        if (overlay.len > 0) try checkPlaneSplit(scene, overlay);
         self.last_overlay_len = @min(overlay.len, self.last_overlay.len);
         @memcpy(self.last_overlay[0..self.last_overlay_len], overlay[0..self.last_overlay_len]);
         self.last_capture_input = capture;
         return vDraw(ptr, scene);
+    }
+
+    /// Split the scene into planes as the macOS backend does (`plane_cache.splitPlanes`)
+    /// and check that a plane-ordered scene's copied orders equal a replay of each plane.
+    fn checkPlaneSplit(scene: *const scene_mod.Scene, overlay: []const pf.OverlayRange) !void {
+        const plane_cache = @import("../platform/plane_cache.zig");
+        const gpa = std.heap.page_allocator;
+        var fast: [3]scene_mod.Scene = .{ .{}, .{}, .{} };
+        var slow: [3]scene_mod.Scene = .{ .{}, .{}, .{} };
+        defer for (&fast, &slow) |*f, *s| {
+            f.deinit(gpa);
+            s.deinit(gpa);
+        };
+        try plane_cache.splitPlanes(gpa, scene, overlay, &fast[0], &fast[1], &fast[2]);
+        var copy = scene.*;
+        copy.planes = false; // the replay path
+        try plane_cache.splitPlanes(gpa, &copy, overlay, &slow[0], &slow[1], &slow[2]);
+        for (fast, slow) |f, s| {
+            if (!std.mem.eql(u8, std.mem.sliceAsBytes(f.quads.items), std.mem.sliceAsBytes(s.quads.items)) or
+                !std.mem.eql(u8, std.mem.sliceAsBytes(f.monochrome_sprites.items), std.mem.sliceAsBytes(s.monochrome_sprites.items)) or
+                !std.mem.eql(u8, std.mem.sliceAsBytes(f.polychrome_sprites.items), std.mem.sliceAsBytes(s.polychrome_sprites.items)) or
+                !std.mem.eql(u8, std.mem.sliceAsBytes(f.shadows.items), std.mem.sliceAsBytes(s.shadows.items)) or
+                !std.mem.eql(u8, std.mem.sliceAsBytes(f.backdrop_blurs.items), std.mem.sliceAsBytes(s.backdrop_blurs.items)))
+                std.debug.panic("plane-ordered scene split differs from a replay of its planes", .{});
+        }
     }
 
     fn c(ptr: *anyopaque) *TestWindow {

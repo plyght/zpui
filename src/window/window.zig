@@ -531,6 +531,12 @@ pub const Window = struct {
     presented_native_views: std.ArrayList(platform.NativeViewId) = .empty,
     /// Merged overlay ranges handed to `drawLayered` (reused buffer).
     present_overlay: std.ArrayList(platform.OverlayRange) = .empty,
+    /// The last presented frame was layered (native views placed): paint the next one
+    /// with plane-local orders (`Scene.planes`), so `drawLayered` need not replay each
+    /// plane through a bounds tree.
+    plane_ordering: bool = false,
+    /// A plane-ordered frame presented unlayered after all is replayed into this.
+    unified_scene: scene_mod.Scene = .{},
     removed: bool = false,
     /// The platform window is gone (closed by the OS); never touch it again.
     platform_closed: bool = false,
@@ -653,6 +659,7 @@ pub const Window = struct {
         self.content_mask_stack.deinit(gpa);
         self.presented_native_views.deinit(gpa);
         self.present_overlay.deinit(gpa);
+        self.unified_scene.deinit(gpa);
         self.liquid_glass.deinit(gpa); // [liquid-glass] (views went with the platform window)
         self.native_controls.deinit(gpa);
         native_popover_mod.deinitWindow(self);
@@ -1305,6 +1312,7 @@ pub const Window = struct {
         const prev_tracking = app.entities.track_accessed;
         app.entities.track_accessed = true;
         self.dirty = false;
+        self.next_frame.scene.setPlanes(self.plane_ordering);
 
         if (self.root != null) self.drawRoots();
         const a11y_built = self.next_frame.a11y.built;
@@ -1333,7 +1341,8 @@ pub const Window = struct {
 
         self.layout_engine.clear();
         self.text_system.finishFrame();
-        self.next_frame.scene.finishWith(gpa);
+        // A plane-ordered scene is sorted per plane at present (or when drawn whole).
+        if (!self.next_frame.scene.planes) self.next_frame.scene.finishWith(gpa);
 
         self.phase = .focus;
         var prev_path = self.rendered_frame.focusPath(gpa);
@@ -1549,7 +1558,20 @@ pub const Window = struct {
             const layered = self.hasPlacedNativeViews();
             if (layered) self.mergeOverlayRanges() else self.present_overlay.clearRetainingCapacity();
             const capture = layered and self.rendered_frame.overlay_capture_input;
-            break :blk draw_layered(self.platform_window.ptr, &self.rendered_frame.scene, self.present_overlay.items, capture);
+            var scene: *const scene_mod.Scene = &self.rendered_frame.scene;
+            if (self.rendered_frame.scene.planes and self.present_overlay.items.len == 0) {
+                // Drawn whole: with nothing on the upper planes the base plane's orders
+                // are the scene's; otherwise replay it into one ordering.
+                if (self.rendered_frame.scene.hasUpperOps()) {
+                    const u = &self.unified_scene;
+                    u.clear(self.gpa);
+                    u.replay(self.gpa, 0, self.rendered_frame.scene.len(), &self.rendered_frame.scene) catch @panic("OOM");
+                    u.finishWith(self.gpa);
+                    scene = u;
+                } else self.rendered_frame.scene.finishWith(self.gpa);
+            }
+            self.plane_ordering = layered;
+            break :blk draw_layered(self.platform_window.ptr, scene, self.present_overlay.items, capture);
         } else self.platform_window.draw(&self.rendered_frame.scene);
         drawn catch |err| {
             std.log.err("window present failed: {t}", .{err});
@@ -2133,7 +2155,7 @@ pub const Window = struct {
         const r = &self.rendered_frame;
         const n = &self.next_frame;
         const scene_base = n.scene.len();
-        n.scene.replay(gpa, range[0].scene, range[1].scene, &r.scene) catch @panic("OOM");
+        self.replayOnPlanes(range[0].scene, range[1].scene);
         n.native_views.appendSlice(gpa, r.native_views.items[range[0].native_views..range[1].native_views]) catch @panic("OOM");
         n.popover_requests.appendSlice(gpa, r.popover_requests.items[range[0].popovers..range[1].popovers]) catch @panic("OOM");
         for (r.overlay_ranges.items[range[0].overlay_ranges..range[1].overlay_ranges]) |o| {
@@ -2155,6 +2177,41 @@ pub const Window = struct {
         self.text_system.reuseLayouts(range[0].line_layout, range[1].line_layout) catch @panic("OOM");
     }
 
+    /// Replay the rendered frame's operations `[start, end)` into the next frame's scene
+    /// (`reusePaint`). Plane-ordered, each goes on the plane it painted on there (its
+    /// overlay/top ranges: the pushes inside a reused view do not run again) or the
+    /// current plane if that is higher, as `drawLayered` will split them.
+    fn replayOnPlanes(self: *Window, start: usize, end: usize) void {
+        const gpa = self.gpa;
+        const n = &self.next_frame.scene;
+        const r = &self.rendered_frame;
+        if (!n.planes) return n.replay(gpa, start, end, &r.scene) catch @panic("OOM");
+        const ctx = n.plane;
+        defer n.plane = ctx;
+        var i = start;
+        while (i < end) {
+            const p = higherPlane(ctx, sourcePlane(r.overlay_ranges.items, i));
+            var j = i + 1;
+            while (j < end and higherPlane(ctx, sourcePlane(r.overlay_ranges.items, j)) == p) j += 1;
+            n.plane = p;
+            n.replay(gpa, i, j, &r.scene) catch @panic("OOM");
+            i = j;
+        }
+    }
+
+    fn sourcePlane(ranges: []const platform.OverlayRange, op: usize) scene_mod.Plane {
+        var plane: scene_mod.Plane = .base;
+        for (ranges) |rg| if (op >= rg.start and op < rg.end) {
+            if (rg.plane == .top) return .top;
+            plane = .overlay;
+        };
+        return plane;
+    }
+
+    fn higherPlane(a: scene_mod.Plane, b: scene_mod.Plane) scene_mod.Plane {
+        return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
+    }
+
     // ---- native child views + overlay plane (platform.NativeViewId) ----------------------
 
     /// Place native view `id` at `bounds` for this frame (paint phase), clipped to the
@@ -2174,11 +2231,18 @@ pub const Window = struct {
     pub fn pushOverlayPlane(self: *Window) void {
         if (self.overlay_depth == 0) self.overlay_open_start = self.next_frame.scene.len();
         self.overlay_depth += 1;
+        self.syncScenePlane();
+    }
+
+    /// The plane the next frame's scene orders new operations on (`Scene.planes`).
+    fn syncScenePlane(self: *Window) void {
+        self.next_frame.scene.plane = if (self.top_depth > 0) .top else if (self.overlay_depth > 0) .overlay else .base;
     }
 
     pub fn popOverlayPlane(self: *Window) void {
         std.debug.assert(self.overlay_depth > 0);
         self.overlay_depth -= 1;
+        self.syncScenePlane();
         if (self.overlay_depth != 0) return;
         const end = self.next_frame.scene.len();
         if (end > self.overlay_open_start)
@@ -2198,6 +2262,7 @@ pub const Window = struct {
         std.debug.assert(self.top_depth > 0);
         self.popOverlayPlane();
         self.top_depth -= 1;
+        self.syncScenePlane();
         if (self.top_depth != 0) return;
         const end = self.next_frame.scene.len();
         if (end > self.top_open_start)

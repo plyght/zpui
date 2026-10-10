@@ -49,6 +49,53 @@ pub const PlaneShown = struct {
 };
 
 
+/// Split `scene` into its presentation planes for `drawLayered`: each of `base`,
+/// `overlay` and `top` (null: skip that plane) gets the operations of its plane, ordered
+/// as if that plane alone were replayed into an empty scene, and finished. A
+/// plane-ordered scene (`Scene.planes`) whose operation planes agree with `ranges`
+/// already holds those orders: its operations are copied, not replayed through a
+/// bounds tree.
+pub fn splitPlanes(gpa: std.mem.Allocator, scene: *const scene_mod.Scene, ranges: []const platform.OverlayRange, base: *scene_mod.Scene, overlay: ?*scene_mod.Scene, top: ?*scene_mod.Scene) !void {
+    const fast = scene.planes and planesAgree(scene, ranges);
+    const n = scene.len();
+    var at: usize = 0;
+    for (ranges) |r| {
+        const start = @min(r.start, n);
+        const end = @min(r.end, n);
+        if (start > at) try copy(gpa, fast, base, at, start, scene);
+        if (end > start) if (if (r.plane == .top) top else overlay) |dst| try copy(gpa, fast, dst, start, end, scene);
+        at = @max(at, end);
+    }
+    if (n > at) try copy(gpa, fast, base, at, n, scene);
+    base.finishWith(gpa);
+    if (overlay) |o| o.finishWith(gpa);
+    if (top) |t| t.finishWith(gpa);
+}
+
+fn copy(gpa: std.mem.Allocator, fast: bool, dst: *scene_mod.Scene, start: usize, end: usize, src: *const scene_mod.Scene) !void {
+    if (fast) try dst.appendOrdered(gpa, start, end, src) else try dst.replay(gpa, start, end, src);
+}
+
+/// Every operation was ordered on the plane `ranges` puts it on (same walk as `splitPlanes`).
+fn planesAgree(scene: *const scene_mod.Scene, ranges: []const platform.OverlayRange) bool {
+    const planes = scene.op_planes.items;
+    const n = scene.len();
+    if (planes.len != n) return false;
+    var at: usize = 0;
+    for (ranges) |r| {
+        const start = @min(r.start, n);
+        const end = @min(r.end, n);
+        if (start > at) for (planes[at..start]) |p| if (p != .base) return false;
+        if (end > start) {
+            const want: scene_mod.Plane = if (r.plane == .top) .top else .overlay;
+            for (planes[@max(start, at)..end]) |p| if (p != want) return false;
+        }
+        at = @max(at, end);
+    }
+    if (n > at) for (planes[at..n]) |p| if (p != .base) return false;
+    return true;
+}
+
 const testing = std.testing;
 
 fn quadAt(x: f32) scene_mod.Quad {
@@ -97,4 +144,54 @@ test "an upper plane matches while its operations are unchanged, wherever they s
     // Invalidated: never matches.
     shown.valid = false;
     try testing.expect(!shown.matches(&s1, &r1, .overlay, size, 2));
+}
+
+test "splitting a plane-ordered scene copies orders that match a replay of each plane" {
+    const gpa = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x5917);
+    const rnd = prng.random();
+    for (0..40) |_| {
+        var sc: scene_mod.Scene = .{};
+        defer sc.deinit(gpa);
+        sc.setPlanes(true);
+        var ranges: [8]platform.OverlayRange = undefined;
+        var nr: usize = 0;
+        var open: ?usize = null;
+        for (0..rnd.intRangeAtMost(usize, 1, 120)) |_| {
+            // Open or close an upper-plane range now and then (disjoint, in order).
+            if (rnd.uintLessThan(u8, 12) == 0) {
+                if (open) |o| {
+                    if (sc.len() > o and nr < ranges.len) {
+                        ranges[nr] = .{ .start = o, .end = sc.len(), .plane = if (sc.plane == .top) .top else .overlay };
+                        nr += 1;
+                    }
+                    open = null;
+                    sc.plane = .base;
+                } else if (nr < ranges.len) {
+                    open = sc.len();
+                    sc.plane = if (rnd.boolean()) .top else .overlay;
+                }
+            }
+            const b: geometry.Bounds(geometry.ScaledPixels) = .{ .origin = .{ .x = rnd.float(f32) * 200, .y = rnd.float(f32) * 100 }, .size = .{ .width = 1 + rnd.float(f32) * 50, .height = 1 + rnd.float(f32) * 30 } };
+            if (rnd.uintLessThan(u8, 8) == 0) try sc.pushLayer(gpa, b) else if (rnd.uintLessThan(u8, 8) == 0) try sc.popLayer(gpa) else try sc.insertQuad(gpa, .{ .bounds = b, .content_mask = .{ .bounds = b } });
+        }
+        if (open) |o| if (sc.len() > o and nr < ranges.len) {
+            ranges[nr] = .{ .start = o, .end = sc.len(), .plane = if (sc.plane == .top) .top else .overlay };
+            nr += 1;
+        };
+        // Operations after the last closed range but painted on an upper plane would
+        // disagree with `ranges`; close every range before checking.
+        if (open != null and (nr == 0 or ranges[nr - 1].end != sc.len())) continue;
+        var fast: [3]scene_mod.Scene = .{ .{}, .{}, .{} };
+        var slow: [3]scene_mod.Scene = .{ .{}, .{}, .{} };
+        defer for (&fast, &slow) |*f, *s| {
+            f.deinit(gpa);
+            s.deinit(gpa);
+        };
+        try testing.expect(planesAgree(&sc, ranges[0..nr]));
+        try splitPlanes(gpa, &sc, ranges[0..nr], &fast[0], &fast[1], &fast[2]);
+        sc.planes = false; // force the replay path
+        try splitPlanes(gpa, &sc, ranges[0..nr], &slow[0], &slow[1], &slow[2]);
+        for (fast, slow) |f, s| try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(s.quads.items), std.mem.sliceAsBytes(f.quads.items));
+    }
 }

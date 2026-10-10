@@ -45,7 +45,8 @@ const std = @import("std");
 const objc = @import("objc.zig");
 const ak = @import("appkit.zig");
 const platform = @import("../platform.zig");
-const PlaneShown = @import("../plane_cache.zig").PlaneShown;
+const plane_cache = @import("../plane_cache.zig");
+const PlaneShown = plane_cache.PlaneShown;
 const scene_mod = @import("../../scene.zig");
 const window_mod = @import("window.zig");
 
@@ -443,13 +444,16 @@ pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges:
     const size = w.drawableSizePub();
     const scale = w.scaleFactor();
     const host = &w.natives;
+    const gpa = w.gpa;
     const overlay_view = host.overlay_view orelse {
         w.renderer.setPlaneBackdrops(false, false);
-        return w.renderer.drawScene(scene, size, scale, .{});
+        if (!scene.planes) return w.renderer.drawScene(scene, size, scale, .{});
+        // Plane-ordered but drawn whole: one ordering for everything.
+        host.base.clear(gpa);
+        try host.base.replay(gpa, 0, scene.len(), scene);
+        host.base.finishWith(gpa);
+        return w.renderer.drawScene(&host.base, size, scale, .{});
     };
-    const gpa = w.gpa;
-    var at: usize = 0;
-    const n = scene.len();
     // Upper-plane backdrop blurs sample the composited planes beneath (main [+ overlay]).
     var overlay_blur = false;
     var top_blur = false;
@@ -469,21 +473,7 @@ pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges:
     // ordered and sorted (a replay would rebuild the same orders primitive by primitive).
     var base: *const scene_mod.Scene = scene;
     if (overlay_ranges.len > 0) {
-        for (overlay_ranges) |r| {
-            const start = @min(r.start, n);
-            const end = @min(r.end, n);
-            if (start > at) try host.base.replay(gpa, at, start, scene);
-            if (end > start) {
-                const kept = if (r.plane == .top) keep_top else keep_overlay;
-                const dst = if (r.plane == .top) &host.top else &host.overlay;
-                if (!kept) try dst.replay(gpa, start, end, scene);
-            }
-            at = @max(at, end);
-        }
-        if (n > at) try host.base.replay(gpa, at, n, scene);
-        host.base.finishWith(gpa);
-        if (!keep_overlay) host.overlay.finishWith(gpa);
-        if (!keep_top) host.top.finishWith(gpa);
+        try plane_cache.splitPlanes(gpa, scene, overlay_ranges, &host.base, if (keep_overlay) null else &host.overlay, if (keep_top) null else &host.top);
         base = &host.base;
     }
     if (!host.top.isEmpty()) try enableTop(w);

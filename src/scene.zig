@@ -570,6 +570,10 @@ fn sameIgnoringOrder(a: anytype, b: @TypeOf(a)) bool {
     return std.mem.eql(u8, std.mem.asBytes(&x), std.mem.asBytes(&y));
 }
 
+/// The presentation plane an operation paints on (`Scene.planes`): the main surface, the
+/// overlay plane above native views, or the top plane above floating glass.
+pub const Plane = enum(u2) { base, overlay, top };
+
 /// Half-open index range into one of the scene's primitive lists.
 pub const Range = struct {
     start: usize,
@@ -640,12 +644,25 @@ pub const Scene = struct {
     /// renderer breaks its render pass at each blur's order to snapshot the
     /// framebuffer, then resumes with the batch whose first order >= blur.order.
     backdrop_blurs: std.ArrayList(BackdropBlur) = .empty,
+    /// Plane-local ordering (`setPlanes`, for layered presentation): every operation
+    /// takes its order from the plane it paints on (`plane`), as if each plane were
+    /// replayed into a scene of its own. `op_planes[i]` is the plane of operation i.
+    /// The primitive lists then hold plane orders, so the scene can only be drawn as
+    /// planes (`appendOrdered`) or after a `replay` into a fresh scene.
+    planes: bool = false,
+    plane: Plane = .base,
+    op_planes: std.ArrayList(Plane) = .empty,
+    upper_bounds: [2]BoundsTree(ScaledPixels) = .{ .{}, .{} },
+    upper_layers: [2]std.ArrayList(DrawOrder) = .{ .empty, .empty },
 
     pub fn deinit(self: *Scene, gpa: Allocator) void {
         self.freePathVertices(gpa);
         self.paint_operations.deinit(gpa);
         self.primitive_bounds.deinit(gpa);
         self.layer_stack.deinit(gpa);
+        self.op_planes.deinit(gpa);
+        for (&self.upper_bounds) |*t| t.deinit(gpa);
+        for (&self.upper_layers) |*l| l.deinit(gpa);
         self.shadows.deinit(gpa);
         self.quads.deinit(gpa);
         self.paths.deinit(gpa);
@@ -673,6 +690,74 @@ pub const Scene = struct {
         self.polychrome_sprites.clearRetainingCapacity();
         self.surfaces.clearRetainingCapacity();
         self.backdrop_blurs.clearRetainingCapacity();
+        self.planes = false;
+        self.plane = .base;
+        self.op_planes.clearRetainingCapacity();
+        for (&self.upper_bounds) |*t| t.clear();
+        for (&self.upper_layers) |*l| l.clearRetainingCapacity();
+    }
+
+    /// Switch an empty scene to plane-local ordering (see `planes`).
+    pub fn setPlanes(self: *Scene, on: bool) void {
+        std.debug.assert(self.paint_operations.items.len == 0);
+        self.planes = on;
+        self.plane = .base;
+    }
+
+    /// Whether any operation was painted on an upper plane (plane-local ordering).
+    pub fn hasUpperOps(self: *const Scene) bool {
+        for (self.op_planes.items) |p| if (p != .base) return true;
+        return false;
+    }
+
+    /// The bounds tree and layer stack orders come from: the current plane's.
+    fn orderTree(self: *Scene) *BoundsTree(ScaledPixels) {
+        if (!self.planes or self.plane == .base) return &self.primitive_bounds;
+        return &self.upper_bounds[@intFromEnum(self.plane) - 1];
+    }
+
+    fn orderLayers(self: *Scene) *std.ArrayList(DrawOrder) {
+        if (!self.planes or self.plane == .base) return &self.layer_stack;
+        return &self.upper_layers[@intFromEnum(self.plane) - 1];
+    }
+
+    /// Room for one more operation (and its plane).
+    fn reserveOp(self: *Scene, gpa: Allocator) Allocator.Error!void {
+        try self.paint_operations.ensureUnusedCapacity(gpa, 1);
+        if (self.planes) try self.op_planes.ensureUnusedCapacity(gpa, 1);
+    }
+
+    fn appendOp(self: *Scene, op: PaintOperation) void {
+        self.paint_operations.appendAssumeCapacity(op);
+        if (self.planes) self.op_planes.appendAssumeCapacity(self.plane);
+    }
+
+    /// Append `prev`'s operations `[start, end)` with the orders `prev` gave them (no
+    /// bounds tree): for a plane-ordered scene, those operations of one plane in order
+    /// give exactly what replaying them into an empty scene would. Call `finish` after.
+    pub fn appendOrdered(self: *Scene, gpa: Allocator, start: usize, end: usize, prev: *const Scene) Allocator.Error!void {
+        const ops = prev.paint_operations.items[start..end];
+        try self.paint_operations.ensureUnusedCapacity(gpa, ops.len);
+        for (ops) |op| switch (op) {
+            .primitive => |p_in| {
+                var p = p_in;
+                switch (p) {
+                    .path => |*path| {
+                        try self.paths.ensureUnusedCapacity(gpa, 1);
+                        path.vertices = try path.vertices.clone(gpa);
+                        path.id = self.paths.items.len;
+                        self.paths.appendAssumeCapacity(path.*);
+                    },
+                    inline else => |v, tag| try self.listFor(tag).append(gpa, v),
+                }
+                self.paint_operations.appendAssumeCapacity(.{ .primitive = p });
+            },
+            .backdrop_blur => |b| {
+                try self.backdrop_blurs.append(gpa, b);
+                self.paint_operations.appendAssumeCapacity(op);
+            },
+            .start_layer, .end_layer => self.paint_operations.appendAssumeCapacity(op),
+        };
     }
 
     fn freePathVertices(self: *Scene, gpa: Allocator) void {
@@ -696,21 +781,24 @@ pub const Scene = struct {
     /// Start a layer: everything inserted until `popLayer` shares one draw order,
     /// assigned from `bounds`.
     pub fn pushLayer(self: *Scene, gpa: Allocator, bounds: Bounds) Allocator.Error!void {
-        try self.paint_operations.ensureUnusedCapacity(gpa, 1);
-        try self.layer_stack.ensureUnusedCapacity(gpa, 1);
-        const order = try self.primitive_bounds.insert(gpa, bounds);
-        self.layer_stack.appendAssumeCapacity(order);
-        self.paint_operations.appendAssumeCapacity(.{ .start_layer = bounds });
+        try self.reserveOp(gpa);
+        const layers = self.orderLayers();
+        try layers.ensureUnusedCapacity(gpa, 1);
+        const order = try self.orderTree().insert(gpa, bounds);
+        layers.appendAssumeCapacity(order);
+        self.appendOp(.{ .start_layer = bounds });
     }
 
     pub fn popLayer(self: *Scene, gpa: Allocator) Allocator.Error!void {
-        _ = self.layer_stack.pop();
-        try self.paint_operations.append(gpa, .end_layer);
+        // Per plane, as a replay of that plane alone pops (a layer may straddle planes).
+        _ = self.orderLayers().pop();
+        try self.reserveOp(gpa);
+        self.appendOp(.end_layer);
     }
 
     fn nextOrder(self: *Scene, gpa: Allocator, clipped: Bounds) Allocator.Error!DrawOrder {
-        if (self.layer_stack.getLastOrNull()) |order| return order;
-        return self.primitive_bounds.insert(gpa, clipped);
+        if (self.orderLayers().getLastOrNull()) |order| return order;
+        return self.orderTree().insert(gpa, clipped);
     }
 
     /// Record a backdrop blur at the current order. Fully clipped blurs are dropped.
@@ -719,10 +807,10 @@ pub const Scene = struct {
         const clipped = blur.bounds.intersect(blur.content_mask.bounds);
         if (clipped.isEmpty()) return;
         try self.backdrop_blurs.ensureUnusedCapacity(gpa, 1);
-        try self.paint_operations.ensureUnusedCapacity(gpa, 1);
+        try self.reserveOp(gpa);
         blur.order = try self.nextOrder(gpa, clipped);
         self.backdrop_blurs.appendAssumeCapacity(blur);
-        self.paint_operations.appendAssumeCapacity(.{ .backdrop_blur = blur });
+        self.appendOp(.{ .backdrop_blur = blur });
     }
 
     /// Record a primitive; its `order` (and a path's `id`) is overwritten.
@@ -733,7 +821,7 @@ pub const Scene = struct {
         const clipped = primitive.bounds().intersect(primitive.contentMask().bounds);
         if (clipped.isEmpty()) return;
 
-        try self.paint_operations.ensureUnusedCapacity(gpa, 1);
+        try self.reserveOp(gpa);
         switch (primitive) {
             inline else => |_, tag| try self.listFor(tag).ensureUnusedCapacity(gpa, 1),
         }
@@ -754,7 +842,7 @@ pub const Scene = struct {
                 self.listFor(tag).appendAssumeCapacity(p.*);
             },
         }
-        self.paint_operations.appendAssumeCapacity(.{ .primitive = primitive });
+        self.appendOp(.{ .primitive = primitive });
     }
 
     fn ListFor(comptime kind: PrimitiveKind) type {
@@ -1352,4 +1440,68 @@ test "operations compare equal regardless of their scene's draw orders" {
     changed[2].primitive.monochrome_sprite.tile.tile_id = 8;
     try testing.expect(!sameOperationsIgnoringOrder(ops_a, changed));
     try testing.expect(!sameOperationsIgnoringOrder(ops_a, ops_b[0..3]));
+}
+
+test "plane-local orders equal a replay of each plane on its own" {
+    // Layered presentation draws each plane from the plane-ordered scene's own orders
+    // (`appendOrdered`) instead of replaying its operations through a bounds tree.
+    // Random paint sequences, with layers that straddle planes, must give the same
+    // per-plane scenes either way.
+    const gpa = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x91a7e);
+    const r = prng.random();
+    for (0..60) |_| {
+        var full: Scene = .{};
+        defer full.deinit(gpa);
+        full.setPlanes(true);
+        const n = r.intRangeAtMost(usize, 1, 160);
+        for (0..n) |_| {
+            if (r.uintLessThan(u8, 10) == 0) full.plane = @enumFromInt(r.uintLessThan(u2, 3));
+            const b = rectAt(r.float(f32) * 300, r.float(f32) * 200, 1 + r.float(f32) * 60, 1 + r.float(f32) * 30);
+            const mask: ContentMask = .{ .bounds = rectAt(0, 0, 400, 300) };
+            switch (r.uintLessThan(u8, 12)) {
+                0 => try full.pushLayer(gpa, b),
+                1 => try full.popLayer(gpa),
+                2 => try full.insertBackdropBlur(gpa, .{ .blur_radius = 4, .bounds = b, .content_mask = mask }),
+                3, 4, 5 => try full.insertQuad(gpa, .{ .bounds = b, .content_mask = mask }),
+                else => try full.insertMonochromeSprite(gpa, .{ .bounds = b, .content_mask = mask, .tile = testTile(0, r.uintLessThan(u32, 5)) }),
+            }
+        }
+        try testing.expectEqual(full.paint_operations.items.len, full.op_planes.items.len);
+        for ([_]Plane{ .base, .overlay, .top }) |plane| {
+            var fast: Scene = .{};
+            defer fast.deinit(gpa);
+            var slow: Scene = .{};
+            defer slow.deinit(gpa);
+            var i: usize = 0;
+            while (i < full.op_planes.items.len) {
+                var j = i;
+                while (j < full.op_planes.items.len and full.op_planes.items[j] == full.op_planes.items[i]) j += 1;
+                if (full.op_planes.items[i] == plane) {
+                    try fast.appendOrdered(gpa, i, j, &full);
+                    try slow.replay(gpa, i, j, &full);
+                }
+                i = j;
+            }
+            fast.finishWith(gpa);
+            slow.finishWith(gpa);
+            try testing.expectEqual(slow.paint_operations.items.len, fast.paint_operations.items.len);
+            try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(slow.quads.items), std.mem.sliceAsBytes(fast.quads.items));
+            try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(slow.monochrome_sprites.items), std.mem.sliceAsBytes(fast.monochrome_sprites.items));
+            try testing.expectEqualSlices(u8, std.mem.sliceAsBytes(slow.backdrop_blurs.items), std.mem.sliceAsBytes(fast.backdrop_blurs.items));
+        }
+    }
+}
+
+test "a scene without plane ordering assigns the same orders as before" {
+    // Plane-local ordering is opt-in: a plain scene ignores `plane` and records no planes.
+    const gpa = testing.allocator;
+    var a: Scene = .{};
+    defer a.deinit(gpa);
+    a.plane = .overlay;
+    try a.insertQuad(gpa, .{ .bounds = rectAt(0, 0, 10, 10), .content_mask = .{ .bounds = rectAt(0, 0, 100, 100) } });
+    a.plane = .base;
+    try a.insertQuad(gpa, .{ .bounds = rectAt(5, 5, 10, 10), .content_mask = .{ .bounds = rectAt(0, 0, 100, 100) } });
+    try testing.expectEqual(@as(DrawOrder, 2), a.quads.items[1].order);
+    try testing.expectEqual(@as(usize, 0), a.op_planes.items.len);
 }
