@@ -1297,6 +1297,8 @@ fn windowDidResize(this: id, _: SEL, _: id) callconv(.c) void {
 
 fn windowDidChangeOcclusionState(this: id, _: SEL, _: id) callconv(.c) void {
     const w = state(this) orelse return;
+    // Hidden layers may lose their contents: draw every plane on the next frame.
+    w.natives.invalidatePlanes();
     if (w.overlay) |o| if (o.hidden) return w.stopDisplayLink();
     if (w.native_window.msg(NSUInteger, "occlusionState", .{}) & ak.NSWindowOcclusionStateVisible != 0) {
         w.moveTrafficLight();

@@ -534,6 +534,42 @@ pub const PaintOperation = union(enum) {
     end_layer,
 };
 
+/// Whether `a` and `b` paint the same thing on their own: the same operations with the
+/// same primitives, ignoring the draw orders their whole scenes assigned. Replaying
+/// either into an empty scene gives the same scene. Paths and surfaces never compare
+/// equal (their payloads reference memory the operations do not own).
+pub fn sameOperationsIgnoringOrder(a: []const PaintOperation, b: []const PaintOperation) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |x, y| if (!sameOperation(x, y)) return false;
+    return true;
+}
+
+fn sameOperation(a: PaintOperation, b: PaintOperation) bool {
+    if (std.meta.activeTag(a) != std.meta.activeTag(b)) return false;
+    return switch (a) {
+        .primitive => |pa| switch (pa) {
+            .path, .surface => false,
+            inline else => |x, tag| blk: {
+                if (std.meta.activeTag(b.primitive) != tag) break :blk false;
+                break :blk sameIgnoringOrder(x, @field(b.primitive, @tagName(tag)));
+            },
+        },
+        .backdrop_blur => |x| sameIgnoringOrder(x, b.backdrop_blur),
+        .start_layer => |x| std.meta.eql(x, b.start_layer),
+        .end_layer => true,
+    };
+}
+
+/// Byte equality of two extern primitives with their `order` cleared.
+fn sameIgnoringOrder(a: anytype, b: @TypeOf(a)) bool {
+    comptime std.debug.assert(@typeInfo(@TypeOf(a)).@"struct".layout == .@"extern");
+    var x = a;
+    var y = b;
+    x.order = 0;
+    y.order = 0;
+    return std.mem.eql(u8, std.mem.asBytes(&x), std.mem.asBytes(&y));
+}
+
 /// Half-open index range into one of the scene's primitive lists.
 pub const Range = struct {
     start: usize,
@@ -1289,4 +1325,31 @@ test "finish sorts like a stable sort by (order, tile)" {
             try testing.expectEqual(w.border_widths.top, g.border_widths.top);
         }
     };
+}
+
+test "operations compare equal regardless of their scene's draw orders" {
+    const gpa = testing.allocator;
+    var a: Scene = .{};
+    defer a.deinit(gpa);
+    var b: Scene = .{};
+    defer b.deinit(gpa);
+    // `b` has extra content underneath, so the same quads get higher orders there.
+    try b.insertQuad(gpa, .{ .bounds = rectAt(0, 0, 100, 100), .content_mask = .{ .bounds = rectAt(0, 0, 100, 100) } });
+    const start = b.len();
+    for ([_]*Scene{ &a, &b }) |sc| {
+        try sc.insertQuad(gpa, .{ .bounds = rectAt(10, 10, 20, 20), .content_mask = .{ .bounds = rectAt(0, 0, 100, 100) } });
+        try sc.pushLayer(gpa, rectAt(0, 0, 50, 50));
+        try sc.insertMonochromeSprite(gpa, .{ .bounds = rectAt(12, 12, 5, 5), .content_mask = .{ .bounds = rectAt(0, 0, 100, 100) }, .tile = testTile(0, 7) });
+        try sc.popLayer(gpa);
+    }
+    const ops_a = a.paint_operations.items;
+    const ops_b = b.paint_operations.items[start..];
+    try testing.expect(ops_a[0].primitive.quad.order != ops_b[0].primitive.quad.order);
+    try testing.expect(sameOperationsIgnoringOrder(ops_a, ops_b));
+    // Any other difference counts.
+    var changed = try gpa.dupe(PaintOperation, ops_b);
+    defer gpa.free(changed);
+    changed[2].primitive.monochrome_sprite.tile.tile_id = 8;
+    try testing.expect(!sameOperationsIgnoringOrder(ops_a, changed));
+    try testing.expect(!sameOperationsIgnoringOrder(ops_a, ops_b[0..3]));
 }

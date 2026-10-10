@@ -45,6 +45,7 @@ const std = @import("std");
 const objc = @import("objc.zig");
 const ak = @import("appkit.zig");
 const platform = @import("../platform.zig");
+const PlaneShown = @import("../plane_cache.zig").PlaneShown;
 const scene_mod = @import("../../scene.zig");
 const window_mod = @import("window.zig");
 
@@ -97,6 +98,10 @@ pub const Host = struct {
     top_view: ?id = null,
     top_capture: bool = false,
     top: scene_mod.Scene = .{},
+    /// What the overlay and top planes last presented (`drawLayered` leaves an unchanged
+    /// plane as it is).
+    overlay_shown: PlaneShown = .{},
+    top_shown: PlaneShown = .{},
     /// [liquid-glass] The hole cut out of the window's `ZPUIBlurredView` (`setBackdropHole`)
     /// and the geometry its current mask image was built for.
     backdrop_hole: ?platform.BackdropHole = null,
@@ -137,6 +142,15 @@ pub const Host = struct {
         self.base.deinit(w.gpa);
         self.overlay.deinit(w.gpa);
         self.top.deinit(w.gpa);
+        self.overlay_shown.ops.deinit(w.gpa);
+        self.top_shown.ops.deinit(w.gpa);
+    }
+
+    /// Redraw the upper planes on the next frame even if their content is unchanged
+    /// (the window was hidden, resized or rescaled).
+    pub fn invalidatePlanes(self: *Host) void {
+        self.overlay_shown.valid = false;
+        self.top_shown.valid = false;
     }
 };
 
@@ -434,9 +448,6 @@ pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges:
         return w.renderer.drawScene(scene, size, scale, .{});
     };
     const gpa = w.gpa;
-    host.base.clear(gpa);
-    host.overlay.clear(gpa);
-    host.top.clear(gpa);
     var at: usize = 0;
     const n = scene.len();
     // Upper-plane backdrop blurs sample the composited planes beneath (main [+ overlay]).
@@ -446,6 +457,14 @@ pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges:
         .overlay => overlay_blur = true,
         .top => top_blur = true,
     };
+    // An upper plane is kept as presented when its content is unchanged and nothing
+    // on it samples the planes beneath (those change under it).
+    const keep = !overlay_blur and !top_blur and !w.renderer.layer_capture_armed;
+    const keep_overlay = keep and overlay_ranges.len > 0 and host.overlay_shown.matches(scene, overlay_ranges, .overlay, size, scale);
+    const keep_top = keep and overlay_ranges.len > 0 and host.top_view != null and host.top_shown.matches(scene, overlay_ranges, .top, size, scale);
+    host.base.clear(gpa);
+    if (!keep_overlay) host.overlay.clear(gpa);
+    if (!keep_top) host.top.clear(gpa);
     // Nothing on the upper planes: the base plane is the whole scene, already
     // ordered and sorted (a replay would rebuild the same orders primitive by primitive).
     var base: *const scene_mod.Scene = scene;
@@ -455,15 +474,16 @@ pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges:
             const end = @min(r.end, n);
             if (start > at) try host.base.replay(gpa, at, start, scene);
             if (end > start) {
+                const kept = if (r.plane == .top) keep_top else keep_overlay;
                 const dst = if (r.plane == .top) &host.top else &host.overlay;
-                try dst.replay(gpa, start, end, scene);
+                if (!kept) try dst.replay(gpa, start, end, scene);
             }
             at = @max(at, end);
         }
         if (n > at) try host.base.replay(gpa, at, n, scene);
         host.base.finishWith(gpa);
-        host.overlay.finishWith(gpa);
-        host.top.finishWith(gpa);
+        if (!keep_overlay) host.overlay.finishWith(gpa);
+        if (!keep_top) host.top.finishWith(gpa);
         base = &host.base;
     }
     if (!host.top.isEmpty()) try enableTop(w);
@@ -478,10 +498,18 @@ pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges:
 
     w.renderer.setPlaneBackdrops(overlay_blur and visible, top_blur and top_visible);
     try w.renderer.drawScene(base, size, scale, .{});
-    if (visible) try w.renderer.drawOverlay(&host.overlay, size, scale);
+    if (visible and !keep_overlay) {
+        try w.renderer.drawOverlay(&host.overlay, size, scale);
+        host.overlay_shown.record(gpa, scene, overlay_ranges, .overlay, size, scale);
+    }
+    if (!visible) host.overlay_shown.valid = false;
     overlay_view.msg(void, "setHidden:", .{objc.toBOOL(!visible)});
     if (host.top_view) |tv| {
-        if (top_visible) try w.renderer.drawTop(&host.top, size, scale);
+        if (top_visible and !keep_top) {
+            try w.renderer.drawTop(&host.top, size, scale);
+            host.top_shown.record(gpa, scene, overlay_ranges, .top, size, scale);
+        }
+        if (!top_visible) host.top_shown.valid = false;
         tv.msg(void, "setHidden:", .{objc.toBOOL(!top_visible)});
     }
     ak.class("CATransaction").msg(void, "flush", .{});
