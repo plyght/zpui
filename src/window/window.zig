@@ -537,6 +537,10 @@ pub const Window = struct {
     plane_ordering: bool = false,
     /// A plane-ordered frame presented unlayered after all is replayed into this.
     unified_scene: scene_mod.Scene = .{},
+    /// When the last frame was presented, and the timer that gives the element arena's
+    /// peak-sized blocks back once the window has been idle for `arena_idle_trim_ns`.
+    last_present_ns: u64 = 0,
+    arena_trim_task: @import("../app/executor.zig").Task(void) = .none,
     removed: bool = false,
     /// The platform window is gone (closed by the OS); never touch it again.
     platform_closed: bool = false,
@@ -660,6 +664,7 @@ pub const Window = struct {
         self.presented_native_views.deinit(gpa);
         self.present_overlay.deinit(gpa);
         self.unified_scene.deinit(gpa);
+        self.arena_trim_task.cancel();
         self.liquid_glass.deinit(gpa); // [liquid-glass] (views went with the platform window)
         self.native_controls.deinit(gpa);
         native_popover_mod.deinitWindow(self);
@@ -1578,7 +1583,38 @@ pub const Window = struct {
         };
         self.needs_present = false;
         self.element_arena.clear();
+        self.armArenaTrim();
     }
+
+    /// Idle this long and the element arena (sized for the busiest frame, megabytes for
+    /// a long transcript) is freed; the next frame grows it again.
+    pub const arena_idle_trim_ns: u64 = 2 * std.time.ns_per_s;
+
+    fn armArenaTrim(self: *Window) void {
+        self.last_present_ns = self.app.executor.now();
+        if (self.arena_trim_task.header != null) return;
+        self.arena_trim_task = self.app.foregroundExecutor().timer(arena_idle_trim_ns, ArenaTrim{ .app = self.app, .window = self.id }) catch .none;
+    }
+
+    const ArenaTrim = struct {
+        app: *App,
+        window: WindowId,
+
+        pub fn finish(self: *ArenaTrim) void {
+            const w = self.app.windowById(self.window) orelse return;
+            w.arena_trim_task.detach();
+            w.arena_trim_task = .none;
+            const idle = self.app.executor.now() -| w.last_present_ns;
+            if (idle < arena_idle_trim_ns) {
+                // Frames since: check again once the window has been idle long enough.
+                w.arena_trim_task = self.app.foregroundExecutor().timer(arena_idle_trim_ns - idle, ArenaTrim{ .app = self.app, .window = self.window }) catch .none;
+                return;
+            }
+            // Only between a present and the next draw, when the arena is empty.
+            if (w.in_frame or w.phase != .none or w.needs_present) return;
+            w.element_arena.trim();
+        }
+    };
 
     /// `draw` + `present` (used by tests and on demand).
     pub fn drawAndPresent(self: *Window) void {

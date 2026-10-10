@@ -1651,3 +1651,21 @@ test "paintGlyphRasterTransformed falls back to a composite transform when the b
     try testing.expectApproxEqAbs(@as(f32, 10 * s), o.x, 1e-4);
     try testing.expectApproxEqAbs(@as(f32, 30 * s), o.y, 1e-4);
 }
+
+test "an idle window gives the element arena's memory back" {
+    // The arena keeps its busiest frame's blocks for reuse while frames come; after
+    // `arena_idle_trim_ns` without a present it frees them, and drawing still works.
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, StaticStyleView, StaticStyleView.init, .{});
+    const w = handle.window(app).?;
+    const tw = testWindow(w);
+    try testing.expect(w.element_arena.capacity() > 0);
+    app.advanceClock(Window.arena_idle_trim_ns / 2);
+    try testing.expect(w.element_arena.capacity() > 0);
+    app.advanceClock(Window.arena_idle_trim_ns);
+    try testing.expectEqual(@as(usize, 0), w.element_arena.capacity());
+    w.refresh();
+    tw.frame(false);
+    try testing.expect(quadColorAt(w, 50, 50).?.eql(color.red));
+}

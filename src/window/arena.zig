@@ -64,6 +64,19 @@ pub const ElementArena = struct {
         self.generation += 1;
     }
 
+    /// Give the arena's memory back (between frames, when nothing lives in it): the
+    /// next frame starts small again. No-op while elements are alive.
+    pub fn trim(self: *ElementArena) void {
+        if (self.destructors.items.len > 0 or current_arena == self) return;
+        _ = self.arena.reset(.free_all);
+        self.destructors.clearAndFree(self.gpa);
+    }
+
+    /// Bytes the arena holds (in use or kept for reuse).
+    pub fn capacity(self: *const ElementArena) usize {
+        return self.arena.queryCapacity();
+    }
+
     fn hasDeinit(comptime T: type) bool {
         return switch (@typeInfo(T)) {
             .@"struct", .@"union", .@"enum" => @hasDecl(T, "deinit") and
