@@ -35,6 +35,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from zeron_rpc import Rpc, wait_ready  # noqa: E402
 
 IS_MAC = sys.platform == "darwin"
+# --profile: marker -> (phase, seconds of `sample`), inside each phase's span.
+PROFILE_PHASES = {"idle_start": ("idle", 5), "scroll_start": ("scroll", 4), "stream_start": ("stream", 3)}
 CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
 
 
@@ -340,6 +342,13 @@ def launch(a, fixture, run_ix, cold, workdir):
                 threading.Timer(2.0, memory_report, args=(pid, rep_path)).start()
             if name == "stream_ready":
                 threading.Thread(target=queue_stream, args=(port, fixture), daemon=True).start()
+            # --profile (macOS, warm launches): a call-stack profile of each phase with
+            # `sample`, written next to the app log. It perturbs the CPU figures.
+            if a.profile and IS_MAC and not cold and name in PROFILE_PHASES:
+                phase, secs = PROFILE_PHASES[name]
+                out = os.path.join(workdir, f"sample-{phase}-{run_ix}.log")
+                subprocess.Popen(["sample", str(pid), str(secs), "1", "-mayDie", "-file", out],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if name in ("done", "error"):
                 done.set()
 
@@ -455,6 +464,7 @@ def main():
     ap.add_argument("--nominal-ms", type=float, default=1000.0 / 60)
     ap.add_argument("--timeout-s", type=float, default=240)
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--profile", action="store_true", help="macOS: `sample` the client per phase (warm runs)")
     a = ap.parse_args()
 
     fixture = json.load(open(os.path.join(a.fixture, "bench-fixture.json")))

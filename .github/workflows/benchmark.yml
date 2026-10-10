@@ -16,6 +16,9 @@ on:
       platforms:
         description: "Comma-separated runners (available: macos-15-intel, macos-26, macos-26-intel, ubuntu-24.04)"
         default: "macos-15-intel,macos-26,ubuntu-24.04"
+      profile:
+        description: "1 = macOS call-stack profiles (`sample`) of the idle, scroll and stream phases, uploaded with the logs (perturbs CPU figures)"
+        default: "0"
 
 env:
   LINUX_DEPS: >-
@@ -241,6 +244,7 @@ jobs:
           OUT: ${{ github.workspace }}/bench-out
           STATIC: ${{ github.workspace }}/bench-out/static.json
           TITLE: "${{ matrix.os }} (zeron ${{ steps.pin.outputs.sha }})"
+          BENCH_ARGS: ${{ inputs.profile == '1' && '--profile' || '' }}
         run: bash bench/run_all.sh
       - name: Job summary
         if: always()
