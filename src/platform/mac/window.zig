@@ -19,6 +19,7 @@
 
 const std = @import("std");
 const boot_trace = @import("../../boot_trace.zig");
+const memory_relief = @import("memory_relief.zig");
 const builtin = @import("builtin");
 const objc = @import("objc.zig");
 const ak = @import("appkit.zig");
@@ -1282,6 +1283,7 @@ fn step(ctx: ?*anyopaque) callconv(.c) void {
         if (self.idle_ticks >= idle_ticks_before_park) {
             self.stopDisplayLink();
             self.renderer.trimIdleResources();
+            memory_relief.schedule();
         }
     }
 }
