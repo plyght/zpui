@@ -34,9 +34,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 mimalloc = { version = "0.1", features = ["v2"] }
 
-# zeron's [profile.release].
+# zeron's [profile.release] (thin LTO, stripped), plus whole-program LTO in one codegen
+# unit: the helper ships on its own, so the longer link buys a smaller, faster-loading
+# binary. Unwinding stays (panic = "unwind"): tokio isolates a panicking task.
 [profile.release]
-lto = "thin"
+lto = "fat"
+codegen-units = 1
 strip = "symbols"
 
 [profile.dev]
