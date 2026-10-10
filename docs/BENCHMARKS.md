@@ -23,8 +23,8 @@ zeron maintainers?
 | Warm start to interactive shell | **Rust 1.39 s, Zig 5.58 s** (a Zig bug, since fixed; re-run: Rust 1.07 s, Zig ReleaseSafe 0.91 s; see below) | Rust 422 ms, Zig 347 ms |
 | RSS / footprint when idle | Rust 157 / 82 MB, Zig 137 / 82 MB | Rust 232 / 210 MB, Zig 160 / 136 MB (PSS) |
 | CPU when idle | Rust 2.8 %, Zig 0.9 % (powermetrics: 4.8 % vs 1.6 %) | Rust 15.6 %, Zig 0.0 % |
-| CPU while streaming | **Rust 12 %, Zig 60 %** | Rust 152 %, Zig 250 % (software GPU) |
-| Draws per streamed reply (about 4 s) | **Rust about 50, Zig about 250 (every vsync)** | Rust 55, Zig 118 (GPU-bound) |
+| CPU while streaming | **Rust 12 %, Zig 60 %; after the pulse-clock fix (`2993f91`): Rust 12.5 %, Zig 6.5–10 %** | Rust 152 %, Zig 250 % (software GPU) |
+| Draws per streamed reply (about 4 s) | **Rust about 50, Zig about 250 (every vsync); fixed in `2993f91` (30/15 Hz pulse clock)** | Rust 55, Zig 118 (GPU-bound) |
 | Scroll frame interval p50 / p95 / p99 | Rust 17.7 / 36.8 / 58.7 ms, Zig 16.7 / 25.3 / 37.7 ms | Rust 48 / 64 / 64 ms, Zig 33.5 / 34.9 / 36.5 ms |
 | CPU while scrolling | **Rust 54 %, Zig 69–75 %; after the scroll fixes (`9229e41`): Rust 50 %, Zig 24–26 %** (see "Scrolling CPU" below) | Rust 170 %, Zig 257–273 % (not re-measured) |
 | Clean release build (both clients) | Rust 18 min (thin LTO), Zig 9.4 min (ReleaseSafe) | Rust 10 min, Zig 8 min |
@@ -348,14 +348,16 @@ attributes and Zig `test` blocks):
    backend drives a 60 Hz refresh timer while the window is visible even when nothing
    changes. zpui only wakes on demand and idles at 0 %.
 
-6. **Streaming: Rust is far more efficient.** This is the biggest gap in Rust's favour.
-   - While a reply streams, Rust draws about 50 frames per reply: it coalesces to the
-     engine's ~120 ms commit cadence and redraws only what changed (prepared transcripts
-     and cached views).
-   - The Zig port redraws on every vsync, about 250 frames, so it uses 4–5 times the CPU
-     (60 % against 12 %) and energy impact (36 against 8).
-   - This is a port gap to fix on the Zig side: find what keeps the window dirty while a
-     row streams. There is nothing to propose upstream here.
+6. **Streaming: fixed, Zig now at or below Rust.**
+   - Originally, while a reply streamed, Rust drew about 50 frames per reply and the Zig
+     port redrew on every vsync (about 250), using 4–5 times the CPU (60 % against 12 %)
+     and energy impact (36 against 8).
+   - Cause: the Working spinner, the streaming veil fade and the sidebar Working glyphs each
+     requested a frame on every render. Rust drives these from `motion.rs`'s `PulseClock`
+     (a shared 33 ms timer leased while a loader paints). `2993f91` ports that clock and
+     `bdfe093` its reduced-motion behaviour.
+   - After the fix (runs 37865225918 and 38007438600): Zig 6.5–10 % CPU while streaming
+     against Rust's 10.6–12.5 %. A port gap only; nothing to propose upstream.
 
 7. **Scrolling: Zig now uses about half Rust's CPU, with an equal or better tail.**
    The runs above had Zig at 63 % CPU against Rust's 53 % while scrolling. Frame pacing
