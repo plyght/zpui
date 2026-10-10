@@ -3207,6 +3207,8 @@ pub const Interactivity = struct {
     tracked_scroll_handle: ?ScrollHandle = null,
     group: ?[]const u8 = null,
     base_style: StyleRefinement = .{},
+    /// `computeStyle`'s result for an element without state-dependent styles (this frame).
+    static_style: ?*const Style = null,
     focus_style: ?*StyleRefinement = null,
     in_focus_style: ?*StyleRefinement = null,
     focus_visible_style: ?*StyleRefinement = null,
@@ -3322,15 +3324,27 @@ pub const Interactivity = struct {
         } else if (self.wantsScroll()) if (st) |s| {
             self.scroll_offset = &s.scroll_offset;
         };
+        self.static_style = null; // layout starts from the current refinements
         const computed = self.computeStyle(null, st, window, cx);
         self.a11y_hidden = computed.display == .none;
         return computed;
     }
 
     /// gpui `compute_style_internal`.
-    pub fn computeStyle(self: *const Interactivity, hitbox: ?Hitbox, st: ?*InteractiveElementState, window: *Window, cx: *App) Style {
+    pub fn computeStyle(self: *Interactivity, hitbox: ?Hitbox, st: ?*InteractiveElementState, window: *Window, cx: *App) Style {
+        // Without state-dependent styles (focus, hover, active, drag-over) the result is
+        // the same in every phase: compute it once per frame, not at layout, prepaint
+        // and paint each.
+        const static = self.focus_style == null and self.in_focus_style == null and self.focus_visible_style == null and
+            self.hover_style == null and self.group_hover_style == null and self.active_style == null and
+            self.group_active_style == null and cx.active_drag == null;
+        if (static) if (self.static_style) |memo| return memo.*;
         var s: Style = .{};
         refine.refine(&s, self.base_style);
+        if (static) {
+            if (arena_mod.currentOrNull()) |a| self.static_style = a.create(Style, s);
+            return s;
+        }
         if (self.tracked_focus_handle) |fh| {
             if (self.in_focus_style) |r| if (fh.withinFocused(window)) refine.refine(&s, r.*);
             if (self.focus_style) |r| if (fh.isFocused(window)) refine.refine(&s, r.*);

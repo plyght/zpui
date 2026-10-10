@@ -326,6 +326,40 @@ test "hover and active styles follow the mouse" {
     try testing.expect(quadColorAt(w, 50, 50).?.eql(color.red));
 }
 
+const StaticStyleView = struct {
+    c: color.Hsla = color.red,
+    fn init(_: *Window, _: *Context(StaticStyleView)) StaticStyleView {
+        return .{};
+    }
+    pub fn render(self: *StaticStyleView, _: *Window, _: *Context(StaticStyleView)) elements.Div {
+        return div().size(px(300)).child(div().id("static").size(px(100)).bg(self.c))
+            .child(div().size(px(50)).mt(px(10)).bg(color.black).hover(sb.bg(color.white)));
+    }
+};
+
+test "static element styles are computed once per frame and follow the next render" {
+    // `Interactivity.computeStyle` memoizes the style of an element without
+    // state-dependent styles for its frame; a new render must not see it.
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, StaticStyleView, StaticStyleView.init, .{});
+    const w = handle.window(app).?;
+    const tw = testWindow(w);
+    try testing.expect(quadColorAt(w, 50, 50).?.eql(color.red));
+    const view = handle.rootView(app).?;
+    view.update(app, struct {
+        fn f(v: *StaticStyleView, cx: *Context(StaticStyleView)) void {
+            v.c = color.green;
+            cx.notify();
+        }
+    }.f, .{});
+    tw.frame(false);
+    try testing.expect(quadColorAt(w, 50, 50).?.eql(color.green));
+    // A hover style beside it still follows the mouse.
+    tw.moveMouse(20, 130);
+    try testing.expect(quadColorAt(w, 20, 130).?.eql(color.white));
+}
+
 // ---------------------------------------------------------------------------------------
 // Focus, keyboard, actions
 // ---------------------------------------------------------------------------------------
