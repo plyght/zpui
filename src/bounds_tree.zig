@@ -40,13 +40,75 @@ pub fn BoundsTree(comptime T: type) type {
         max_item: ?u32 = null,
         insert_path: std.ArrayList(usize) = .empty,
         search_stack: std.ArrayList(usize) = .empty,
+        /// The run's bounds in lanes (scanned by every insert).
+        run_boxes: Boxes(max_run) = .{},
         /// Tree items intersecting `cache_region` (valid until the next flush).
-        cache: std.ArrayList(Item) = .empty,
+        cache: Boxes(max_cache) = .{},
         cache_region: ?B = null,
         /// Inserts left before another neighbourhood is tried (after one overflowed).
         cache_backoff: u8 = 0,
 
         const Item = struct { bounds: B, order: u32 };
+
+        /// A few bounds and their orders in structure-of-arrays lanes: the max order
+        /// among those intersecting a query is a handful of vector compares.
+        fn Boxes(comptime cap: usize) type {
+            return struct {
+                const lanes = 8;
+                const n = (cap + lanes - 1) / lanes * lanes;
+                const V = @Vector(lanes, T);
+                const U = @Vector(lanes, u32);
+
+                x0: [n]T = undefined,
+                y0: [n]T = undefined,
+                x1: [n]T = undefined,
+                y1: [n]T = undefined,
+                order: [n]u32 = undefined,
+                len: usize = 0,
+
+                fn full(self: *const @This()) bool {
+                    return self.len == cap;
+                }
+
+                fn push(self: *@This(), b: B, order: u32) void {
+                    std.debug.assert(self.len < cap);
+                    // `right()`/`bottom()` as `B.intersects` computes them.
+                    self.x0[self.len] = b.origin.x;
+                    self.y0[self.len] = b.origin.y;
+                    self.x1[self.len] = b.right();
+                    self.y1[self.len] = b.bottom();
+                    self.order[self.len] = order;
+                    self.len += 1;
+                }
+
+                /// Max order of the boxes intersecting `q` (`q.intersects(box)`), or 0.
+                fn maxIntersecting(self: *const @This(), q: B) u32 {
+                    const qx0: V = @splat(q.origin.x);
+                    const qy0: V = @splat(q.origin.y);
+                    const qx1: V = @splat(q.right());
+                    const qy1: V = @splat(q.bottom());
+                    const none: @Vector(lanes, bool) = @splat(false);
+                    const zero: U = @splat(0);
+                    const iota = std.simd.iota(u32, lanes);
+                    var best = zero;
+                    var i: usize = 0;
+                    while (i < self.len) : (i += lanes) {
+                        const x0: V = self.x0[i..][0..lanes].*;
+                        const y0: V = self.y0[i..][0..lanes].*;
+                        const x1: V = self.x1[i..][0..lanes].*;
+                        const y1: V = self.y1[i..][0..lanes].*;
+                        const ord: U = self.order[i..][0..lanes].*;
+                        const live = iota < @as(U, @splat(@intCast(self.len - i)));
+                        var m = @select(bool, live, x0 < qx1, none);
+                        m = @select(bool, m, x1 > qx0, none);
+                        m = @select(bool, m, y0 < qy1, none);
+                        m = @select(bool, m, y1 > qy0, none);
+                        best = @max(best, @select(u32, m, ord, zero));
+                    }
+                    return @reduce(.Max, best);
+                }
+            };
+        }
 
         /// Most bounds a run holds before it becomes a leaf (each later insert scans it).
         const max_run = 24;
@@ -86,7 +148,6 @@ pub fn BoundsTree(comptime T: type) type {
             self.nodes.deinit(gpa);
             self.insert_path.deinit(gpa);
             self.search_stack.deinit(gpa);
-            self.cache.deinit(gpa);
             self.* = undefined;
         }
 
@@ -98,7 +159,8 @@ pub fn BoundsTree(comptime T: type) type {
             self.max_item = null;
             self.insert_path.clearRetainingCapacity();
             self.search_stack.clearRetainingCapacity();
-            self.cache.clearRetainingCapacity();
+            self.run_boxes.len = 0;
+            self.cache.len = 0;
             self.cache_region = null;
             self.cache_backoff = 0;
         }
@@ -106,14 +168,12 @@ pub fn BoundsTree(comptime T: type) type {
         /// Insert `bounds` and return its order (1 + max order of intersecting bounds).
         pub fn insert(self: *Self, gpa: Allocator, bounds: B) Allocator.Error!u32 {
             try self.items.ensureUnusedCapacity(gpa, 1);
-            var max_found = try self.treeMax(gpa, bounds);
-            const run = self.items.items[self.run_start..];
-            for (run) |it| {
-                if (it.order > max_found and it.bounds.intersects(bounds)) max_found = it.order;
-            }
+            const max_found = @max(try self.treeMax(gpa, bounds), self.run_boxes.maxIntersecting(bounds));
             const ordering = max_found + 1;
-            if (run.len > 0 and (run.len >= max_run or !near(self.run_bounds, bounds))) try self.flushRun(gpa);
+            const run_len = self.items.items.len - self.run_start;
+            if (run_len > 0 and (self.run_boxes.full() or !near(self.run_bounds, bounds))) try self.flushRun(gpa);
             self.items.appendAssumeCapacity(.{ .bounds = bounds, .order = ordering });
+            self.run_boxes.push(bounds, ordering);
             self.run_bounds = if (self.items.items.len - self.run_start == 1) bounds else self.run_bounds.unionWith(bounds);
             return ordering;
         }
@@ -132,7 +192,7 @@ pub fn BoundsTree(comptime T: type) type {
                 const it = self.items.items[m];
                 if (query.intersects(it.bounds)) return it.order;
             }
-            if (self.cache_region) |r| if (contains(r, query)) return scanMax(self.cache.items, query);
+            if (self.cache_region) |r| if (contains(r, query)) return self.cache.maxIntersecting(query);
             if (self.cache_backoff > 0) {
                 self.cache_backoff -= 1;
                 return self.search(gpa, query);
@@ -143,9 +203,9 @@ pub fn BoundsTree(comptime T: type) type {
                 .origin = .{ .x = query.origin.x - h, .y = query.origin.y - h / 2 },
                 .size = .{ .width = query.size.width + 18 * h, .height = query.size.height + h },
             };
-            if (try self.collect(gpa, region)) {
+            if (self.collect(gpa, region)) {
                 self.cache_region = region;
-                return scanMax(self.cache.items, query);
+                return self.cache.maxIntersecting(query);
             }
             self.cache_backoff = 16;
             return self.search(gpa, query);
@@ -157,23 +217,14 @@ pub fn BoundsTree(comptime T: type) type {
                 b.right() <= outer.right() and b.bottom() <= outer.bottom();
         }
 
-        fn scanMax(items: []const Item, query: B) u32 {
-            var max_found: u32 = 0;
-            for (items) |it| {
-                if (it.order > max_found and it.bounds.intersects(query)) max_found = it.order;
-            }
-            return max_found;
-        }
-
         /// Gather the tree items intersecting `region` into `cache`; false (cache
         /// invalid) when there are more than `max_cache`.
-        fn collect(self: *Self, gpa: Allocator, region: B) Allocator.Error!bool {
+        fn collect(self: *Self, gpa: Allocator, region: B) bool {
             self.cache_region = null;
-            self.cache.clearRetainingCapacity();
-            try self.cache.ensureTotalCapacity(gpa, max_cache);
+            self.cache.len = 0;
             const nodes = self.nodes.items;
             self.search_stack.clearRetainingCapacity();
-            try self.search_stack.ensureTotalCapacity(gpa, nodes.len);
+            self.search_stack.ensureTotalCapacity(gpa, nodes.len) catch return false;
             const stack = self.search_stack.allocatedSlice();
             stack[0] = self.root.?;
             var len: usize = 1;
@@ -184,8 +235,8 @@ pub fn BoundsTree(comptime T: type) type {
                 switch (node.kind) {
                     .leaf => |l| for (self.items.items[l.start..l.end]) |it| {
                         if (!it.bounds.intersects(region)) continue;
-                        if (self.cache.items.len == max_cache) return false;
-                        self.cache.appendAssumeCapacity(it);
+                        if (self.cache.full()) return false;
+                        self.cache.push(it.bounds, it.order);
                     },
                     .internal => |*children| for (children.slice()) |child| {
                         stack[len] = child;
@@ -243,6 +294,7 @@ pub fn BoundsTree(comptime T: type) type {
             }
             try self.insertLeaf(gpa, .{ .bounds = self.run_bounds, .max_order = max_order, .kind = .{ .leaf = .{ .start = start, .end = end } } });
             self.run_start = end;
+            self.run_boxes.len = 0;
             if (self.max_item) |m| {
                 if (self.items.items[m].order < max_order) self.max_item = max_ix;
             } else self.max_item = max_ix;
