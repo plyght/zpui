@@ -811,11 +811,16 @@ pub const Scene = struct {
     fn sortByOrder(comptime T: type, items: []T, gpa: Allocator) void {
         if (items.len < 2) return;
         var prev = sortKey(T, &items[0]);
-        const sorted = for (items[1..]) |*it| {
+        var max_order: u64 = items[0].order;
+        var max_tile: u64 = if (comptime @hasField(T, "tile")) items[0].tile.tile_id else 0;
+        var sorted = true;
+        for (items[1..]) |*it| {
             const k = sortKey(T, it);
-            if (k < prev) break false;
+            if (k < prev) sorted = false;
             prev = k;
-        } else true;
+            max_order = @max(max_order, it.order);
+            if (comptime @hasField(T, "tile")) max_tile = @max(max_tile, it.tile.tile_id);
+        }
         if (sorted) return;
         const Ctx = struct {
             fn lt(_: void, a: T, b: T) bool {
@@ -823,14 +828,39 @@ pub const Scene = struct {
             }
         };
         if (items.len > std.math.maxInt(u32)) return std.mem.sort(T, items, {}, Ctx.lt);
-        const keys = gpa.alloc(u128, items.len) catch return std.mem.sort(T, items, {}, Ctx.lt);
-        defer gpa.free(keys);
         const tmp = gpa.alloc(T, items.len) catch return std.mem.sort(T, items, {}, Ctx.lt);
         defer gpa.free(tmp);
-        for (items, keys, 0..) |*it, *k, i| k.* = @as(u128, sortKey(T, it)) << 32 | i;
-        std.sort.pdq(u128, keys, {}, std.sort.asc(u128));
-        for (keys, tmp) |k, *dst| dst.* = items[@as(u32, @truncate(k))];
+        // (order, tile, index) usually fits one u64 (a few thousand orders, tiles and
+        // primitives), which sorts much faster than the general u128 words.
+        const order_bits = bitsFor(max_order);
+        const tile_bits = bitsFor(max_tile);
+        const ix_bits = bitsFor(items.len - 1);
+        if (order_bits + tile_bits + ix_bits <= 64) {
+            const keys = gpa.alloc(u64, items.len) catch return std.mem.sort(T, items, {}, Ctx.lt);
+            defer gpa.free(keys);
+            const tile_shift: u6 = @intCast(ix_bits);
+            const order_shift: u6 = @intCast(@min(ix_bits + tile_bits, 63));
+            for (items, keys, 0..) |*it, *k, i| {
+                const tile: u64 = if (comptime @hasField(T, "tile")) it.tile.tile_id else 0;
+                const order: u64 = it.order;
+                k.* = (if (order_bits == 0) 0 else order << order_shift) | (if (tile_bits == 0) 0 else tile << tile_shift) | i;
+            }
+            std.sort.pdq(u64, keys, {}, std.sort.asc(u64));
+            const ix_mask: u64 = if (ix_bits == 64) std.math.maxInt(u64) else (@as(u64, 1) << @intCast(ix_bits)) - 1;
+            for (keys, tmp) |k, *dst| dst.* = items[@intCast(k & ix_mask)];
+        } else {
+            const keys = gpa.alloc(u128, items.len) catch return std.mem.sort(T, items, {}, Ctx.lt);
+            defer gpa.free(keys);
+            for (items, keys, 0..) |*it, *k, i| k.* = @as(u128, sortKey(T, it)) << 32 | i;
+            std.sort.pdq(u128, keys, {}, std.sort.asc(u128));
+            for (keys, tmp) |k, *dst| dst.* = items[@as(u32, @truncate(k))];
+        }
         @memcpy(items, tmp);
+    }
+
+    /// Bits needed to hold `v` (0 for 0).
+    fn bitsFor(v: u64) u7 {
+        return 64 - @as(u7, @clz(v));
     }
 
     /// Iterate batches in draw order. Call after `finish`.
@@ -1221,14 +1251,16 @@ test "finish sorts like a stable sort by (order, tile)" {
     const gpa = testing.allocator;
     var prng = std.Random.DefaultPrng.init(0x5ce4e);
     const r = prng.random();
-    for ([_]usize{ 0, 1, 2, 17, 600 }) |n| {
+    // Narrow keys sort as packed u64 words, wide ones (huge orders and tile ids) as u128.
+    for ([_]bool{ false, true }) |wide| for ([_]usize{ 0, 1, 2, 17, 600 }) |n| {
+        const high: u32 = if (wide) 0xf000_0000 else 0;
         var scene: Scene = .{};
         defer scene.deinit(gpa);
         for (0..n) |i| {
             // Runs in order with jumps back, like a frame's paint order; `texture_id`
             // records the insertion index to check stability.
-            const order: u32 = @intCast((i / 7) % 13 + r.uintLessThan(u32, 3));
-            try scene.monochrome_sprites.append(gpa, .{ .order = order, .tile = testTile(@intCast(i), r.uintLessThan(u32, 4)) });
+            const order: u32 = high + @as(u32, @intCast((i / 7) % 13 + r.uintLessThan(u32, 3)));
+            try scene.monochrome_sprites.append(gpa, .{ .order = order, .tile = testTile(@intCast(i), high + r.uintLessThan(u32, 4)) });
             try scene.quads.append(gpa, .{ .order = order, .border_widths = .{ .top = @floatFromInt(i), .right = 0, .bottom = 0, .left = 0 } });
         }
         const want_sprites = try gpa.dupe(MonochromeSprite, scene.monochrome_sprites.items);
@@ -1256,5 +1288,5 @@ test "finish sorts like a stable sort by (order, tile)" {
             try testing.expectEqual(w.order, g.order);
             try testing.expectEqual(w.border_widths.top, g.border_widths.top);
         }
-    }
+    };
 }
