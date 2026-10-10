@@ -366,6 +366,11 @@ pub const WindowTextSystem = struct {
     glyph_atlas: ?*const atlas_mod.Atlas = null,
     glyph_atlas_generation: u64 = 0,
 
+    /// `shapeTextImpl`'s working lists, kept between calls (no allocation per shape).
+    scratch_runs: std.ArrayList(TextRun) = .empty,
+    scratch_font_runs: std.ArrayList(FontRun) = .empty,
+    scratch_decorations: std.ArrayList(DecorationRun) = .empty,
+
     const CachedSprite = struct { tile: atlas_mod.AtlasTile, raster_origin: geometry.Point(DevicePixels) };
     /// Entries kept before the map starts over (distinct glyph, size and subpixel variants).
     const max_glyph_sprites = 16 * 1024;
@@ -377,6 +382,9 @@ pub const WindowTextSystem = struct {
     pub fn deinit(self: *WindowTextSystem) void {
         self.cache.deinit();
         self.glyph_sprites.deinit(self.gpa());
+        self.scratch_runs.deinit(self.gpa());
+        self.scratch_font_runs.deinit(self.gpa());
+        self.scratch_decorations.deinit(self.gpa());
     }
 
     /// `TextSystem.rasterizeToAtlas` for this window's `atlas`, remembering the result.
@@ -509,8 +517,8 @@ pub const WindowTextSystem = struct {
     fn shapeTextImpl(self: *WindowTextSystem, text: []const u8, font_size: Pixels, runs_in: []const TextRun, wrap_width: ?Pixels, line_clamp: ?usize) ![]WrappedLine {
         const alloc = self.gpa();
         // Mutable copy of non-empty runs; lengths are consumed as lines are processed.
-        var runs: std.ArrayList(TextRun) = .empty;
-        defer runs.deinit(alloc);
+        const runs = &self.scratch_runs;
+        runs.clearRetainingCapacity();
         for (runs_in) |r| if (r.len > 0) try runs.append(alloc, r);
         var run_ix: usize = 0;
 
@@ -519,10 +527,8 @@ pub const WindowTextSystem = struct {
             for (lines.items) |l| l.deinit(alloc);
             lines.deinit(alloc);
         }
-        var font_runs: std.ArrayList(FontRun) = .empty;
-        defer font_runs.deinit(alloc);
-        var decorations: std.ArrayList(DecorationRun) = .empty;
-        defer decorations.deinit(alloc);
+        const font_runs = &self.scratch_font_runs;
+        const decorations = &self.scratch_decorations;
         var wrapped_lines: usize = 0;
 
         var line_start: usize = 0;
