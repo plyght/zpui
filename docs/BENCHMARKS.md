@@ -17,11 +17,11 @@ zeron maintainers?
 
 | | macOS 26, Apple Silicon (Metal) | Linux (Xvfb + lavapipe, software GPU) |
 |---|---|---|
-| Client binary (as shipped) | Rust 127 MB, which includes the engine (the engine alone is 39 MB). Zig ReleaseSafe 50 MB | Rust 164 MB, which includes the engine (the engine alone is 43 MB). Zig 130 MB unstripped, 50 MB stripped |
+| Client binary (as shipped) | Rust 127 MB, which includes the engine (the engine alone is 39 MB; 27 MB as the Zig bundle builds it since `b80018a`). Zig ReleaseSafe 50 MB | Rust 164 MB, which includes the engine (the engine alone is 43 MB). Zig 130 MB unstripped, 50 MB stripped |
 | Bundle without the engine | Rust 129 MB (one Mach-O). Zig 52 MB | Rust 166 MB. Zig 129 MB (unstripped, plus the WebKitGTK helper) |
 | Warm start to first frame | Rust 925 ms, Zig 533 ms | Rust 247 ms, Zig 101 ms |
 | Warm start to interactive shell | **Rust 1.39 s, Zig 5.58 s** (a Zig bug, since fixed; re-run: Rust 1.07 s, Zig ReleaseSafe 0.91 s; see below) | Rust 422 ms, Zig 347 ms |
-| RSS / footprint when idle | Rust 157 / 82 MB, Zig 137 / 82 MB | Rust 232 / 210 MB, Zig 160 / 136 MB (PSS) |
+| RSS / footprint when idle | Rust 157 / 82 MB, Zig 137 / 82 MB (after the startup and memory changes: Rust 158 / 83, Zig 133 / 79) | Rust 232 / 210 MB, Zig 160 / 136 MB (PSS) |
 | CPU when idle | Rust 2.8 %, Zig 0.9 % (powermetrics: 4.8 % vs 1.6 %) | Rust 15.6 %, Zig 0.0 % |
 | CPU while streaming | **Rust 12 %, Zig 60 %; after the pulse-clock fix (`2993f91`): Rust 12.5 %, Zig 6.5–10 %** | Rust 152 %, Zig 250 % (software GPU) |
 | Draws per streamed reply (about 4 s) | **Rust about 50, Zig about 250 (every vsync); fixed in `2993f91` (30/15 Hz pulse clock)** | Rust 55, Zig 118 (GPU-bound) |
@@ -443,6 +443,118 @@ What was ruled out:
 
 The streaming numbers above also include the earlier pulse-clock fixes (`2993f91`,
 `bdfe093`). They already put Zig's streaming CPU at Rust's level before these changes.
+
+## Startup, memory and size (macos-26, before and after)
+
+Two macos-26 runs with 3 rounds each (6 launches per configuration, 3 cold and 3 warm),
+at zeron 037f4c1:
+
+- **Before**: [38079608613](https://github.com/plyght/zpui/actions/runs/38079608613) at `22a5772`.
+- **After**: [38086790370](https://github.com/plyght/zpui/actions/runs/38086790370) at the
+  commits below. An intermediate run,
+  [38080207417](https://github.com/plyght/zpui/actions/runs/38080207417), had the
+  same changes without the transcript markers and gave the same picture.
+
+| Metric | Run | rust | zig-fast | zig-safe | zig-safe-plain |
+|---|---|---:|---:|---:|---:|
+| Startup, warm: first frame (ms) | before | 839 | 577 | 508 | 818 |
+| | after | 821 | 347 | 349 | 351 |
+| Startup, warm: interactive shell (ms) | before | 1385 | 871 | 820 | 981 |
+| | after | 1500 | 477 | 480 | 534 |
+| Startup, cold: first frame (ms) | before | 5880 | 5355 | 4057 | 4829 |
+| | after | 6458 | 4064 | 3837 | 3670 |
+| Startup, cold: interactive shell (ms) | before | 7275 | 5848 | 4515 | 5763 |
+| | after | 7307 | 4429 | 4196 | 4329 |
+| RSS idle (MB) | before | 158 | 135 | 136 | 136 |
+| | after | 158 | 132 | 133 | 132 |
+| Footprint idle (MB) | before | 82 | 80 | 81 | 77 |
+| | after | 83 | 76 | 79 | 75 |
+| Footprint after scrolling (MB) | before | 82 | 82 | 84 | 78 |
+| | after | 82 | 80 | 81 | 76 |
+| Peak RSS (MB) | before | 169 | 139 | 141 | 139 |
+| | after | 169 | 136 | 137 | 136 |
+| Engine RSS at end (MB) | before | 57 | 57 | 58 | 55 |
+| | after | 51 | 52 | 52 | 52 |
+
+Startup medians on these hosted VMs move by 100–300 ms between runs; Rust's own figures
+moved by up to 600 ms with no change to it. Treat the startup rows as "no worse, likely
+better". The memory and size rows are stable from run to run.
+
+Sizes (macOS arm64):
+
+| | before | after |
+|---|---:|---:|
+| `zeron-engine` (bundled engine host) | 38.9 MB | 26.7 MB |
+| Zeron.app, engine included | 90.9 MB | 78.8 MB |
+| Zig `zeron` ReleaseSafe (client only) | 49.9 MB | 49.9 MB |
+| Zeron.app without the engine | 52.2 MB | 52.2 MB |
+| Engine release build on CI (warm cargo cache) | 269 s | 610 s |
+
+**Changes.**
+
+1. **Metal device, shader library and pipelines are built once, in the background (`50c2dfb`).**
+   `MacPlatform.create` starts compiling the shaders and the ten pipeline states on a
+   user-interactive queue. That work used to block the first window's renderer and ran
+   again for every popover or menu window. It finishes 30–40 ms (warm) or 200–400 ms
+   (cold) after `main`, long before the window is created, so the window no longer
+   waits for it. Every window now shares the same pipeline states.
+2. **Embedded fonts are registered without a heap copy (`b5a08c8`).** CoreText now reads
+   the 16 Geist faces (2.3 MB) in place from the binary through
+   `CFDataCreateWithBytesNoCopy`, as the FreeType backend already did. This accounts for
+   most of the 2–4 MB lower RSS and footprint.
+3. **The engine helper is built with fat LTO in one codegen unit (`b80018a`).** It is
+   31 % smaller (38.9 → 26.7 MB) and uses about 5 MB less RSS. Panic strategy and
+   opt-level are unchanged. The cost is the engine's link time on CI.
+4. **Startup timeline (`40363f0`, `e7ce15c`).** With `ZERON_BENCH=1`, `boot:<phase>`
+   markers record each step from `main` to the loaded shell (`zpui.boot_trace`, zeron
+   main and model). `run_bench.py` saves them as `boot_ms`, `summarize.py` prints the
+   medians, and the first warm launch also gets a `footprint` / `vmmap` / `heap`
+   breakdown (`memory-0.log`).
+
+**Where startup goes now.** zig-safe medians, ms from spawn (warm; cold in brackets):
+
+| Step | Warm | Cold |
+|---|---:|---:|
+| `main` (dyld, page-in) | 30 | 530–800 |
+| `NSApplication sharedApplication` | +80 | +700 |
+| AppKit finishes launching (`applicationDidFinishLaunching`) | +70 | +600–1000 |
+| App setup: fonts, settings, theme, model, lifecycle | +15 | +150 |
+| `NSWindow` creation | +70 | +500–900 |
+| First draw | 287–297 | |
+| Engine attached → chats → boot landing → transcript replayed | 301 → 309 | |
+| First present (`first_frame`) | 349 | |
+| Shell loaded | 480 | |
+
+Most of the remaining time is AppKit's own work on the main thread, which Rust pays
+too. The app's own setup is about 15 ms warm. The engine round trips finish before the
+first present. The one app-side cost left is the frame that first shows the
+transcript: about 130 ms from the first present to `shell_loaded`. It is the first
+shaping and rasterizing of the transcript, composer and SF Symbols glyphs. That is the
+next startup target. It belongs to the render path, so it was left alone here.
+
+**Memory breakdown (zig-safe, idle, 62 MB footprint).**
+
+| Region | Size | Notes |
+|---|---:|---|
+| Zig heap (`MALLOC_SMALL`) | 22 MB | |
+| `MALLOC_LARGE` | 8 MB | Mostly the per-frame element arena, which keeps its peak capacity (one 6.6 MB block) |
+| Freed large blocks malloc still keeps resident (`MALLOC_LARGE (empty)`) | 4.8 MB | |
+| CAMetalLayer drawables (`IOSurface`) | 11 MB | |
+| GPU allocations (`IOAccelerator`) | 8 MB | |
+
+An idle-time `malloc_zone_pressure_relief` was tried. It did not reduce the resident
+freed blocks before the idle snapshot, so it was dropped.
+
+**Not done, and why.**
+
+- About 30 MB of the client binary is tree-sitter parse tables. They compress about
+  9×, but unpacking a language on first use would add several MB of footprint
+  whenever code is highlighted.
+- `strip -x` would save 2.2 MB but removes the function names in the crash log's panic
+  traces.
+- Starting the engine connect at `main` only helps when no engine is running yet. The
+  benchmark starts one beforehand, so it can't measure that, and the connect already
+  completes before the first draw.
 
 ## Fixes found during the port: do any also exist in Rust?
 
