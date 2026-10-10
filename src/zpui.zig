@@ -36,6 +36,8 @@ pub const Scene = scene.Scene;
 pub const input = @import("input.zig");
 pub const platform = @import("platform/platform.zig");
 pub const renderer = @import("renderer/renderer.zig");
+/// Startup timeline hook (src/boot_trace.zig).
+pub const boot_trace = @import("boot_trace.zig");
 /// Linux backend (Wayland/X11); an empty namespace on other targets.
 pub const linux_platform = if (@import("builtin").os.tag == .linux) @import("platform/linux/linux.zig") else struct {};
 /// macOS backend (AppKit + Metal + CoreText); an empty namespace on other targets.

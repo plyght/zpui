@@ -56,6 +56,29 @@ const Bench = struct {
 
 var bench: ?Bench = null;
 
+/// Startup timeline (`boot:<phase>` markers, ZERON_BENCH=1): main.zig and zpui
+/// (`zpui.boot_trace`) mark the steps from `main` to the loaded shell; the harness
+/// reports each relative to the spawn (bench/run_bench.py `boot_ms`).
+var boot_io: ?std.Io = null;
+
+pub fn bootInit(io: std.Io, env: *const std.process.Environ.Map) void {
+    const on = env.get("ZERON_BENCH") orelse return;
+    if (!std.mem.eql(u8, on, "1")) return;
+    boot_io = io;
+    zpui.boot_trace.hook = bootHook;
+}
+
+/// One startup step reached (no-op unless `bootInit` armed the timeline).
+pub fn bootMark(phase: []const u8) void {
+    zpui.boot_trace.mark(phase);
+}
+
+fn bootHook(phase: []const u8) void {
+    const io = boot_io orelse return;
+    const t = @divTrunc(std.Io.Timestamp.now(io, .real).nanoseconds, 1000);
+    std.debug.print("zeron-bench {{\"ev\":\"boot:{s}\",\"t\":{d}}}\n", .{ phase, t });
+}
+
 fn envNum(env: *const std.process.Environ.Map, name: []const u8, default: f64) f64 {
     const v = env.get(name) orelse return default;
     return std.fmt.parseFloat(f64, v) catch default;
@@ -90,6 +113,7 @@ fn emitIntervals(ev: []const u8, rows: usize) void {
 
 fn frameObserver(end: bool) void {
     const b = &(bench orelse return);
+    if (b.phase == .boot and b.frames < 2) bootMark(if (end) "draw_end" else "draw_start");
     const now = monoNs(b.io);
     if (!end) {
         b.draw_start_ns = now;
@@ -247,6 +271,7 @@ fn frame(win: *Window, app: *App) void {
             const info = transcriptInfo(app);
             const ok = info.replayed and info.rows > 0 and (b.short_chat.len == 0 or eqlOpt(info.selected, b.short_chat));
             if (b.ready_seen) {
+                zpui.boot_trace.hook = null; // the startup timeline ends with the loaded shell
                 emit("shell_loaded", "\"selected\":\"{s}\",\"rows\":{d}", .{ info.selected orelse "", info.rows });
                 emit("idle_start", "", .{});
                 return after(b.idle_ns, .open_long);

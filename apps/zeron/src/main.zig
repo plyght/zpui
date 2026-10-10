@@ -104,7 +104,9 @@ fn registerFonts(app: *App) void {
 }
 
 fn onLaunch(l: *Launch, app: *App) void {
+    bench.bootMark("launch");
     registerFonts(app);
+    bench.bootMark("fonts");
     if (l.glass_lab) { // [glass-lab] diagnostics window (glass_lab.zig)
         const bg = l.environ.get("ZERON_GLASS_LAB_BG") orelse "opaque";
         glass_lab.open(l.gpa, l.io, app, .{
@@ -118,6 +120,7 @@ fn onLaunch(l: *Launch, app: *App) void {
     actions.registerAll(app) catch |err| log.err("actions: {t}", .{err});
     // Control icons as SF Symbols on macOS (ui/components/icon_symbols.zig).
     ui.icon.installSystemSymbols(app);
+    bench.bootMark("actions");
 
     // Settings (skipped in fixture mode so screenshots are reproducible).
     var prefs: prefs_mod.Prefs = .{ .gpa = l.gpa };
@@ -150,12 +153,14 @@ fn onLaunch(l: *Launch, app: *App) void {
         model.ui_font_size_choice.initMemoryFrom(app, l.io, dir) catch |err| log.warn("ui font size choice: {t}", .{err});
         settings_ui.theme_library.init(app, l.io, dir, false);
     }
+    bench.bootMark("settings");
     actions.keymap.applyKeymap(app, &keymap_cfg, send) catch |err| log.err("keymap: {t}", .{err});
     // Settings → Appearance → Native menus (macOS; its own native-menus.json, Rust drops unknown ui-settings keys).
     // Fixture runs (no data dir) keep the default (on), never written.
     if (l.data_dir) |dir| model.native_menus.init(app, l.io, dir) catch |err| log.warn("native menus: {t}", .{err}) else model.native_menus.initMemory(app, model.native_menus.default) catch |err| log.warn("native menus: {t}", .{err});
     // [dictation] the voice model + the composer's dictation service (voice/service.zig).
     voice_service.install(app, l.io, l.environ, if (l.fixtures_dir == null) l.data_dir else null);
+    bench.bootMark("voice");
 
     if (l.fixtures_dir) |dir| {
         l.fixtures = fixtures_mod.load(l.gpa, l.io, dir) catch |err| blk: {
@@ -182,6 +187,7 @@ fn onLaunch(l: *Launch, app: *App) void {
         .surface = .frosted,
     });
     ui.theme.install(app, theme) catch @panic("theme");
+    bench.bootMark("theme");
     // [motion] ZERON_MOTION_SCALE: stretch every motion timeline (measurement knob).
     zt.motion.speed_scale = zt.motion.parseSpeedScale(l.environ.get("ZERON_MOTION_SCALE"));
     // [liquid-glass] ZERON_LIQUID_GLASS=1: Liquid Glass for this run (not persisted);
@@ -226,6 +232,7 @@ fn onLaunch(l: *Launch, app: *App) void {
         }
     }
     prefs_mod.install(app, prefs) catch @panic("prefs");
+    bench.bootMark("settings_boot");
 
     // Model.
     const config: model.engine_state.Config = if (l.fixtures != null)
@@ -238,6 +245,7 @@ fn onLaunch(l: *Launch, app: *App) void {
         return;
     };
     l.state = state;
+    bench.bootMark("state");
     if (l.fixtures) |f| fixtures_mod.applyToState(f, l.io, app, state);
 
     // [lifecycle] menus, quit/close gate, reopen, deep links, banners + sounds, updater.
@@ -251,12 +259,14 @@ fn onLaunch(l: *Launch, app: *App) void {
         .open_main = openMainWindow,
         .persist_geometry = l.fixtures == null and !l.size_set,
     }) catch |err| log.err("lifecycle: {t}", .{err});
+    bench.bootMark("lifecycle");
     // [appshots] Global capture shortcut + `zeron appshot` activation (not in fixture runs).
     if (l.fixtures == null) appshot_service.install(app, .{
         .io = l.io,
         .data_dir = l.data_dir,
         .sound_disabled = l.environ.get("ZERON_DISABLE_SOUND") != null,
     }) catch |err| log.err("appshots: {t}", .{err});
+    bench.bootMark("appshots");
     const window = lifecycle.openMainWindow(app) orelse {
         app.quit();
         return;
@@ -336,6 +346,8 @@ fn settingsRoute(route: []const u8, remembered: model.settings.SettingsSection) 
 }
 
 pub fn main(init: std.process.Init) !void {
+    bench.bootInit(init.io, init.environ_map);
+    bench.bootMark("main");
     const gpa = if (is_mac) std.heap.c_allocator else init.gpa;
     const arena = init.arena.allocator();
     const argv = try init.minimal.args.toSlice(arena);
@@ -434,6 +446,7 @@ pub fn main(init: std.process.Init) !void {
     } else |_| {};
     lifecycle.log_file.installCrashHandlers(); // fatal signals / NSExceptions into the log
     log.info("zeron {s} starting", .{lifecycle.build_info.version});
+    bench.bootMark("log");
 
     const plat = if (is_linux)
         try zpui.linux_platform.create(gpa, .{ .io = init.io, .backend = backend })
@@ -441,7 +454,9 @@ pub fn main(init: std.process.Init) !void {
         try zpui.mac_platform.create(gpa)
     else
         @compileError("zeron: unsupported OS");
+    bench.bootMark("platform");
     const app = try App.init(gpa, plat);
+    bench.bootMark("app_init");
     defer app.deinit();
     app.run(&launch, onLaunch);
     if (launch.state) |s| s.release(app);

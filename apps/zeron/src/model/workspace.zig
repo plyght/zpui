@@ -293,6 +293,7 @@ pub const WorkspaceStore = struct {
         if (self.chats_frame) |old| old.deinit();
         self.chats_frame = frame;
         self.link_roots_revision +%= 1;
+        if (!self.chats_synced) zpui.boot_trace.mark("chats_synced");
         self.chats_synced = true;
         if (self.selected_chat) |selected| {
             if (self.chat(selected) == null) {

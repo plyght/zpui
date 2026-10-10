@@ -20,6 +20,7 @@ const file_dialog = @import("file_dialog.zig");
 const menu_mod = @import("menu.zig");
 const notify = @import("notify.zig");
 const mac_desktop = @import("desktop.zig");
+const boot_trace = @import("../../boot_trace.zig");
 pub const window_capture = @import("window_capture.zig");
 const CoreTextSystem = @import("../../text/coretext.zig").CoreTextSystem;
 
@@ -67,6 +68,7 @@ pub const MacPlatform = struct {
         const self = try gpa.create(MacPlatform);
         errdefer gpa.destroy(self);
         const text_system = try CoreTextSystem.create(gpa);
+        boot_trace.mark("text_system");
         self.* = .{ .gpa = gpa, .text_system = text_system, .app = ak.sharedApp() };
         window_mod.registerClasses();
         current = self;
@@ -288,6 +290,7 @@ pub const MacPlatform = struct {
         self.app.msg(void, "setDelegate:", .{delegate});
         if (!self.menus_set) self.app.msg(void, "setMainMenu:", .{buildMainMenu()});
 
+        boot_trace.mark("nsapp_run");
         self.app.msg(void, "run", .{});
 
         self.app.msg(void, "setDelegate:", .{@as(?id, null)});
@@ -513,6 +516,7 @@ fn activationPolicy() NSInteger {
 }
 
 fn didFinishLaunching(this: id, _: SEL, _: id) callconv(.c) void {
+    boot_trace.mark("did_finish_launching");
     const app = ak.sharedApp();
     _ = app.msg(BOOL, "setActivationPolicy:", .{activationPolicy()});
 

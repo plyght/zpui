@@ -28,6 +28,7 @@
 //! after `backdrop.scratch_release_after_frames` frames without use.
 
 const std = @import("std");
+const boot_trace = @import("../../boot_trace.zig");
 const Allocator = std.mem.Allocator;
 
 const objc = @import("../../platform/mac/objc.zig");
@@ -358,11 +359,14 @@ pub const MetalRenderer = struct {
         const is_unified_memory = mtl.Device.hasUnifiedMemory(device);
         // Apple GPU families support memoryless render targets and shared textures.
         const is_apple_gpu = mtl.Device.supportsFamily(device, .apple1);
+        boot_trace.mark("metal_device");
 
         const library = try compileLibrary(device);
         errdefer library.release();
+        boot_trace.mark("metal_library");
         var pipelines = try buildPipelines(device, library);
         errdefer pipelines.deinit();
+        boot_trace.mark("metal_pipelines");
 
         const command_queue = mtl.Device.newCommandQueue(device) orelse return error.ResourceCreationFailed;
         errdefer command_queue.release();

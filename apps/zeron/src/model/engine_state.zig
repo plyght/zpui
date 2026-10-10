@@ -456,6 +456,7 @@ pub const EngineState = struct {
         data_dir: ?[]const u8,
 
         pub fn run(j: *ConnectJob) ConnectResult {
+            zpui.boot_trace.mark("connect_start");
             const options: engine_mod.ConnectOptions = .{
                 .port = j.port,
                 .zeron_path = j.zeron_path,
@@ -469,6 +470,7 @@ pub const EngineState = struct {
             const engine = engine_mod.Engine.connect(j.gpa, j.io, options) catch |err| {
                 return .{ .err = err };
             };
+            zpui.boot_trace.mark("connect_done");
             const c = j.gpa.create(Connection) catch {
                 var e = engine;
                 e.deinitWith(.{ .stop_spawned = j.stop_spawned });
@@ -515,6 +517,7 @@ pub const EngineState = struct {
         self.connect_task.detach();
         switch (result) {
             .ok => |c| {
+                zpui.boot_trace.mark("engine_attached");
                 self.dropConnection();
                 self.generation += 1;
                 c.generation = self.generation;

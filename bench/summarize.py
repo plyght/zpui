@@ -39,6 +39,14 @@ def summarize(res):
     for kind, sel in (("cold", True), ("warm", False)):
         rs = [r for r in runs if r["cold"] == sel]
         out[f"startup_{kind}"] = {k: med([get(r, "startup_ms", k) for r in rs]) for k in ("window_open", "first_frame", "shell_loaded")}
+        # Startup steps (Zig client's boot:<phase> markers), in the order first reached.
+        steps = []
+        for r in rs:
+            for k in (r.get("boot_ms") or {}):
+                if k not in steps:
+                    steps.append(k)
+        if steps:
+            out[f"boot_{kind}"] = {k: med([get(r, "boot_ms", k) for r in rs]) for k in steps}
     out["open_long_ms"] = med([r.get("open_long_ms") for r in runs])
     out["memory_mb"] = {}
     for phase in ("idle", "after_open_long", "after_scroll"):
@@ -141,6 +149,12 @@ def main():
         s0 = sums[0]
         md += f"Platform: `{s0.get('platform')}` ({s0.get('machine')}). Fixture: {json.dumps(s0.get('fixture'))}.\n\n"
         md += "Median over completed runs, (min–max) in brackets.\n\n" + table(sums) + "\n"
+    for s in sums:
+        for kind in ("cold", "warm"):
+            steps = s.get(f"boot_{kind}")
+            if steps:
+                md += f"Startup steps, {s['client']}, {kind} (ms from spawn): " + ", ".join(
+                    f"{k} {fmt(v)}" for k, v in steps.items()) + "\n\n"
     if a.static and os.path.exists(a.static):
         st = json.load(open(a.static))
         doc["static"] = st

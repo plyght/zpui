@@ -77,6 +77,24 @@ def proc_sample(pid):
         return None
 
 
+def memory_report(pid, path):
+    """macOS: a memory breakdown of the idle client (footprint categories, vmmap regions,
+    malloc zones and the largest allocation classes) for the first warm launch's logs."""
+    if not IS_MAC:
+        return
+    with open(path, "w") as f:
+        for cmd in (["footprint", "-v", str(pid)], ["vmmap", "-summary", str(pid)], ["heap", "-s", str(pid)]):
+            f.write(f"$ {' '.join(cmd)}\n")
+            f.flush()
+            try:
+                out = subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout
+            except (OSError, subprocess.TimeoutExpired) as e:
+                out = f"{e}\n"
+            if cmd[0] == "heap":  # the zone summary and the 60 largest classes
+                out = "\n".join(out.splitlines()[:120])
+            f.write(out + "\n")
+
+
 def footprint_kb(pid):
     """macOS phys_footprint (what Activity Monitor shows as Memory); Linux PSS."""
     if IS_MAC:
@@ -203,6 +221,7 @@ class Follower(threading.Thread):
         super().__init__(daemon=True)
         self.stream, self.logf, self.on_marker = stream, logf, on_marker
         self.markers = {}
+        self.boot = {}  # "boot:<phase>" startup steps, first occurrence (apps/zeron/src/bench.zig)
         self.order = []
         self.phase = "boot"
         self.draws = {}  # phase -> [ms]
@@ -224,6 +243,9 @@ class Follower(threading.Thread):
                 continue
             name = ev.get("ev")
             ev["t_s"] = ev["t"] / 1e6
+            if name.startswith("boot:"):
+                self.boot.setdefault(name[5:], ev["t_s"])
+                continue
             self.markers[name] = ev
             self.order.append(name)
             self.phase = {"scroll_start": "scroll", "scroll_end": "after_scroll", "stream_start": "stream",
@@ -312,6 +334,10 @@ def launch(a, fixture, run_ix, cold, workdir):
             pid = proc_holder["p"].pid
             if name in ("idle_end", "settle1_end", "settle2_end", "done", "shell_loaded"):
                 snapshots[name] = {"footprint_kb": footprint_kb(pid), "rss_kb": (proc_sample(pid) or (None,))[0]}
+            if name == "idle_start" and run_ix == 0 and not cold:
+                # Inside the idle window (other tools only read the process; its CPU is unaffected).
+                rep_path = os.path.join(workdir, f"memory-{run_ix}.log")
+                threading.Timer(2.0, memory_report, args=(pid, rep_path)).start()
             if name == "stream_ready":
                 threading.Thread(target=queue_stream, args=(port, fixture), daemon=True).start()
             if name in ("done", "error"):
@@ -345,6 +371,8 @@ def launch(a, fixture, run_ix, cold, workdir):
         res["viewport"] = {k: ff.get(k) for k in ("w", "h", "scale")}
         res["startup_ms"] = {"window_open": rel("window_open"), "first_frame": rel("first_frame"),
                              "shell_loaded": rel("shell_loaded")}
+        # Startup steps (Zig client only): ms from the spawn, in the order reached.
+        res["boot_ms"] = {k: (t - t_spawn) * 1000.0 for k, t in sorted(follower.boot.items(), key=lambda kv: kv[1])}
         if "open_long" in mk and "long_loaded" in mk:
             res["open_long_ms"] = (mk["long_loaded"]["t_s"] - mk["open_long"]["t_s"]) * 1000.0
 

@@ -18,6 +18,7 @@
 //! on the stack can observe freed memory.
 
 const std = @import("std");
+const boot_trace = @import("../../boot_trace.zig");
 const builtin = @import("builtin");
 const objc = @import("objc.zig");
 const ak = @import("appkit.zig");
@@ -246,6 +247,7 @@ pub const MacWindow = struct {
     // -- construction ---------------------------------------------------------
 
     pub fn open(gpa: std.mem.Allocator, params: platform.WindowParams) !*MacWindow {
+        boot_trace.mark("window_create");
         registerClasses();
         const pool = objc.AutoreleasePool.push();
         defer pool.pop();
@@ -315,6 +317,7 @@ pub const MacWindow = struct {
             .transparent_titlebar = if (params.titlebar) |tb| tb.appears_transparent else true,
         };
         errdefer self.renderer.deinit();
+        boot_trace.mark("renderer");
         if (self.renderer.layer()) |layer| @as(id, @ptrCast(layer)).msg(void, "setContentsScale:", .{@as(ak.CGFloat, scale)});
 
         const native_view = view_class.?.msg(id, "alloc", .{}).msg(id, "initWithFrame:", .{content_bounds});
@@ -410,6 +413,7 @@ pub const MacWindow = struct {
         };
         self.moveTrafficLight();
         self.startDisplayLink();
+        boot_trace.mark("window_shown");
         return self;
     }
 
