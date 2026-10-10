@@ -114,19 +114,48 @@ const ViewCacheState = struct {
 };
 
 fn hashTextStyle(t: style_mod.TextStyle) u64 {
+    // Field by field, never `asBytes` of a union or optional: their padding (and a
+    // smaller variant's unused payload) is undefined, so the hash of an unchanged
+    // style could differ between frames and miss the cache at random.
     var h = std.hash.Wyhash.init(0);
     h.update(std.mem.asBytes(&t.color));
     h.update(t.font_family);
-    h.update(std.mem.asBytes(&t.font_size));
-    h.update(std.mem.asBytes(&t.line_height));
+    hashAbsolute(&h, t.font_size);
+    switch (t.line_height) {
+        .absolute => |a| {
+            h.update(&.{0});
+            hashAbsolute(&h, a);
+        },
+        .fraction => |f| {
+            h.update(&.{1});
+            h.update(std.mem.asBytes(&f));
+        },
+    }
     h.update(std.mem.asBytes(&t.font_weight));
-    h.update(std.mem.asBytes(&t.font_style));
-    h.update(std.mem.asBytes(&t.white_space));
-    h.update(std.mem.asBytes(&t.text_align));
-    h.update(std.mem.asBytes(&t.line_clamp));
-    if (t.background_color) |c| h.update(std.mem.asBytes(&c));
-    if (t.text_overflow) |o| h.update(std.mem.asBytes(&std.meta.activeTag(o)));
+    h.update(&.{ @intFromEnum(t.font_style), @intFromEnum(t.white_space), @intFromEnum(t.text_align) });
+    if (t.line_clamp) |n| {
+        h.update(&.{1});
+        h.update(std.mem.asBytes(&n));
+    } else h.update(&.{0});
+    if (t.background_color) |c| {
+        h.update(&.{1});
+        h.update(std.mem.asBytes(&c));
+    } else h.update(&.{0});
+    if (t.text_overflow) |o| h.update(&.{ 1, @intFromEnum(std.meta.activeTag(o)) }) else h.update(&.{0});
     return h.final();
+}
+
+fn hashAbsolute(h: *std.hash.Wyhash, l: geometry.AbsoluteLength) void {
+    switch (l) {
+        .pixels => |p| {
+            h.update(&.{0});
+            h.update(std.mem.asBytes(&p));
+        },
+        .rems => |r| {
+            h.update(&.{1});
+            h.update(std.mem.asBytes(&r));
+        },
+    }
 }
 
 /// The element for a view (gpui `ViewElement` / `AnyView` element impl).
@@ -245,4 +274,26 @@ pub fn Component(comptime C: type) type {
             rl.paint(window, cx);
         }
     };
+}
+
+test "a cached view's text-style hash ignores unused union payload bytes" {
+    // Regression: hashing `asBytes` of the length unions and optionals mixed in
+    // undefined bytes (padding, a smaller variant's unused payload), so in release
+    // builds an unchanged inherited style could hash differently between frames
+    // and re-render a cached view at random (the sidebar during a scroll).
+    var a: style_mod.TextStyle = .{ .line_height = .{ .fraction = 1.5 } };
+    var b = a;
+    // `.fraction` uses 4 of the payload's 8 bytes; poison the other 4 differently.
+    const DL = geometry.DefiniteLength;
+    comptime std.debug.assert(@sizeOf(DL) == 12);
+    const p1: DL = .{ .fraction = 1.5 };
+    const p2: DL = .{ .fraction = -2.75 };
+    const f_off: usize = if (std.mem.eql(u8, std.mem.asBytes(&p1)[0..4], std.mem.asBytes(&p2)[0..4])) 4 else 0;
+    const unused = if (f_off == 0) @as(usize, 4) else 0;
+    std.mem.asBytes(&a.line_height)[unused..][0..4].* = @splat(0x11);
+    std.mem.asBytes(&b.line_height)[unused..][0..4].* = @splat(0xee);
+    try std.testing.expectEqual(@as(f32, 1.5), a.line_height.fraction);
+    try std.testing.expectEqual(hashTextStyle(a), hashTextStyle(b));
+    b.line_height = .{ .fraction = 1.25 };
+    try std.testing.expect(hashTextStyle(a) != hashTextStyle(b));
 }
