@@ -228,6 +228,11 @@ pub const Selection = struct {
 /// Liquid Glass tint strength (main.zig reads ZERON_GLASS_TINT).
 pub var glass_tint_strength: f32 = 0.22;
 
+const TintKey = struct { text: Hsla, text_muted: Hsla, tint: Hsla, base: f32, backdrop: Hsla };
+threadlocal var tint_memo: [4]?struct { key: TintKey, alpha: f32 } = @splat(null);
+threadlocal var tint_memo_next: usize = 0;
+threadlocal var popup_memo: ?struct { in: Theme, out: Theme } = null;
+
 pub const Theme = struct {
     /// Which appearance these tokens were built for.
     appearance: Appearance,
@@ -580,6 +585,16 @@ pub const Theme = struct {
     /// Raise `tint`'s coverage in 1/20 steps until primary text reaches 4.5:1
     /// and muted text 3:1 over `backdrop`.
     fn contrastCheckedTintAlpha(self: Theme, tint: Hsla, base: f32, backdrop: Hsla) f32 {
+        // Pure, and asked for every frame (pow/log contrast steps): remember recent answers.
+        const key: TintKey = .{ .text = self.text, .text_muted = self.text_muted, .tint = tint, .base = base, .backdrop = backdrop };
+        for (&tint_memo) |*e| if (e.*) |m| if (std.meta.eql(m.key, key)) return m.alpha;
+        const alpha = self.contrastCheckedTintAlphaUncached(tint, base, backdrop);
+        tint_memo[tint_memo_next] = .{ .key = key, .alpha = alpha };
+        tint_memo_next = (tint_memo_next + 1) % tint_memo.len;
+        return alpha;
+    }
+
+    fn contrastCheckedTintAlphaUncached(self: Theme, tint: Hsla, base: f32, backdrop: Hsla) f32 {
         var step: u32 = 0;
         while (step <= 20) : (step += 1) {
             const alpha = base + (1.0 - base) * @as(f32, @floatFromInt(step)) / 20.0;
@@ -642,6 +657,15 @@ pub const Theme = struct {
 
     /// Text hierarchy adjusted for floating (frosted) surfaces.
     pub fn forPopup(self: Theme) Theme {
+        // Pure, and asked for every frame by the composer and popovers (each light frost
+        // call runs up to 400 pow/log contrast steps): remember the last answer.
+        if (popup_memo) |*m| if (std.meta.eql(m.in, self)) return m.out;
+        const out = self.forPopupUncached();
+        popup_memo = .{ .in = self, .out = out };
+        return out;
+    }
+
+    fn forPopupUncached(self: Theme) Theme {
         var popup = self;
         if (!self.isFrost()) return popup;
         if (self.appearance.isDark()) {
@@ -985,4 +1009,22 @@ test "paint helpers" {
     try testing.expectEqual(@as(f32, 0.08), userBubbleBg(.dark).a);
     const thumbs = Theme.light().scrollbarThumbColors();
     try testing.expectEqual(@as(f32, 0.42), thumbs[1].a);
+}
+
+test "memoized popup and tint math answer exactly as computed fresh, theme after theme" {
+    // forPopup and contrastCheckedTintAlpha remember recent answers (the composer asks
+    // every frame); alternating themes must never return another theme's answer.
+    var themes: [6]Theme = undefined;
+    var n: usize = 0;
+    var it = registry.builtin.iterator();
+    while (it.next()) |v| {
+        if (n == themes.len) break;
+        themes[n] = Theme.fromVariant(v, .theme_default, if (n % 2 == 0) .frosted else .opaque_);
+        n += 1;
+    }
+    for (0..3) |_| for (themes[0..n]) |t| {
+        try testing.expect(std.meta.eql(t.forPopup(), t.forPopupUncached()));
+        try testing.expectEqual(t.contrastCheckedTintAlphaUncached(t.input_bg, 0.4, grey(0)), t.contrastCheckedTintAlpha(t.input_bg, 0.4, grey(0)));
+        try testing.expectEqual(t.contrastCheckedTintAlphaUncached(t.surface, 0.4, grey(0xff)), t.contrastCheckedTintAlpha(t.surface, 0.4, grey(0xff)));
+    };
 }
