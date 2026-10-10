@@ -295,6 +295,7 @@ pub const Shell = struct {
     /// canvas) and focus its composer (`focus_composer`).
     pub fn bootSelectChat(self: *Shell, ws: Entity(model.WorkspaceStore), cx: *Context(Shell)) void {
         const target = (ws.read(cx).bootSelectTarget(self.gpa) catch return) orelse return;
+        zpui.boot_trace.mark("boot_select");
         const id = self.gpa.dupe(u8, target) catch return;
         defer self.gpa.free(id);
         // `focus_composer` (focus once the destination composer renders): deferred,
