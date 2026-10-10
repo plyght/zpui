@@ -1195,8 +1195,8 @@ pub const Window = struct {
             at = @max(at, end);
         }
         if (n > at) try self.base_scene.replay(gpa, at, n, scene);
-        self.base_scene.finish();
-        self.overlay_scene.finish();
+        self.base_scene.finishWith(gpa);
+        self.overlay_scene.finishWith(gpa);
         try self.drawScene(&self.base_scene);
         if (self.renderer) |*r| if (self.visible) try r.drawOverlay(&self.overlay_scene, self.deviceSizeTyped());
         self.natives.endFrame(self);

@@ -1333,7 +1333,7 @@ pub const Window = struct {
 
         self.layout_engine.clear();
         self.text_system.finishFrame();
-        self.next_frame.scene.finish();
+        self.next_frame.scene.finishWith(gpa);
 
         self.phase = .focus;
         var prev_path = self.rendered_frame.focusPath(gpa);

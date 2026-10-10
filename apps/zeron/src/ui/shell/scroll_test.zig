@@ -27,6 +27,25 @@ pub const ScrollRun = struct {
     rows: usize,
 };
 
+/// The scroll phase alone (a profiler can collect just this: `--toggle-collect=*scrollFrames`).
+fn scrollFrames(app: *App, tw: *TestWindow, frames: usize) u64 {
+    const io = testing.io;
+    const vsync_ns: u64 = 16_666_667;
+    var total: u64 = 0;
+    for (0..frames) |i| {
+        const dy: f32 = if (i < frames / 2) 40 else -40;
+        const t0 = std.Io.Timestamp.now(io, .awake).nanoseconds;
+        _ = tw.simulateInput(.{ .scroll_wheel = .{
+            .position = .{ .x = 800, .y = 420 },
+            .delta = .{ .pixels = .{ .x = 0, .y = dy } },
+        } });
+        app.advanceClock(vsync_ns);
+        tw.frame(false);
+        total += @intCast(std.Io.Timestamp.now(io, .awake).nanoseconds - t0);
+    }
+    return total;
+}
+
 pub fn scrollShell(gpa: std.mem.Allocator, frames: usize) !ScrollRun {
     const io = testing.io;
     var tmp = testing.tmpDir(.{});
@@ -81,18 +100,7 @@ pub fn scrollShell(gpa: std.mem.Allocator, frames: usize) !ScrollRun {
 
     const renders_before = sidebar_mod.Sidebar.render_count;
     const presents_before = tw.present_count;
-    var total: u64 = 0;
-    for (0..frames) |i| {
-        const dy: f32 = if (i < frames / 2) 40 else -40;
-        const t0 = std.Io.Timestamp.now(io, .awake).nanoseconds;
-        _ = tw.simulateInput(.{ .scroll_wheel = .{
-            .position = .{ .x = 800, .y = 420 },
-            .delta = .{ .pixels = .{ .x = 0, .y = dy } },
-        } });
-        app.advanceClock(vsync_ns);
-        tw.frame(false);
-        total += @intCast(std.Io.Timestamp.now(io, .awake).nanoseconds - t0);
-    }
+    const total = @call(.never_inline, scrollFrames, .{ app, tw, frames });
     return .{
         .frames = frames,
         .total_ns = total,
@@ -107,7 +115,9 @@ test "scrolling the transcript redraws every frame without rebuilding the sideba
     // transcript scroll frame rebuilt all 150 rows. It is a cached view now (Rust
     // `sidebar_pane.cached(..)`); a scroll notifies the transcript only. (The first
     // wheel event moves the mouse onto the transcript: one hover refresh.)
-    const run = try scrollShell(testing.allocator, 60);
+    const frames: usize = if (testing.environ.getPosix("ZERON_SCROLL_FRAMES")) |v| std.fmt.parseInt(usize, v, 10) catch 60 else 60;
+    const run = try scrollShell(testing.allocator, frames);
+    if (testing.environ.getPosix("ZERON_SCROLL_FRAMES") != null) std.debug.print("\nshell scroll: {d} frames, avg {d:.3} ms, sidebar renders {d}, presents {d}\n", .{ run.frames, @as(f64, @floatFromInt(run.total_ns)) / @as(f64, @floatFromInt(run.frames)) / 1e6, run.sidebar_renders, run.presents });
     try testing.expectEqual(@as(usize, 2040), run.rows);
     try testing.expect(run.presents >= run.frames);
     try testing.expect(run.sidebar_renders <= 1);

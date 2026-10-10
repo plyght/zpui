@@ -446,20 +446,26 @@ pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges:
         .overlay => overlay_blur = true,
         .top => top_blur = true,
     };
-    for (overlay_ranges) |r| {
-        const start = @min(r.start, n);
-        const end = @min(r.end, n);
-        if (start > at) try host.base.replay(gpa, at, start, scene);
-        if (end > start) {
-            const dst = if (r.plane == .top) &host.top else &host.overlay;
-            try dst.replay(gpa, start, end, scene);
+    // Nothing on the upper planes: the base plane is the whole scene, already
+    // ordered and sorted (a replay would rebuild the same orders primitive by primitive).
+    var base: *const scene_mod.Scene = scene;
+    if (overlay_ranges.len > 0) {
+        for (overlay_ranges) |r| {
+            const start = @min(r.start, n);
+            const end = @min(r.end, n);
+            if (start > at) try host.base.replay(gpa, at, start, scene);
+            if (end > start) {
+                const dst = if (r.plane == .top) &host.top else &host.overlay;
+                try dst.replay(gpa, start, end, scene);
+            }
+            at = @max(at, end);
         }
-        at = @max(at, end);
+        if (n > at) try host.base.replay(gpa, at, n, scene);
+        host.base.finishWith(gpa);
+        host.overlay.finishWith(gpa);
+        host.top.finishWith(gpa);
+        base = &host.base;
     }
-    if (n > at) try host.base.replay(gpa, at, n, scene);
-    host.base.finish();
-    host.overlay.finish();
-    host.top.finish();
     if (!host.top.isEmpty()) try enableTop(w);
 
     const visible = !host.overlay.isEmpty();
@@ -471,7 +477,7 @@ pub fn drawLayered(w: *MacWindow, scene: *const scene_mod.Scene, overlay_ranges:
     host.overlay_capture = capture_input and visible;
 
     w.renderer.setPlaneBackdrops(overlay_blur and visible, top_blur and top_visible);
-    try w.renderer.drawScene(&host.base, size, scale, .{});
+    try w.renderer.drawScene(base, size, scale, .{});
     if (visible) try w.renderer.drawOverlay(&host.overlay, size, scale);
     overlay_view.msg(void, "setHidden:", .{objc.toBOOL(!visible)});
     if (host.top_view) |tv| {

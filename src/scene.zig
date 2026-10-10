@@ -776,34 +776,61 @@ pub const Scene = struct {
     }
 
     /// Sort every primitive list by draw order (sprites by (order, tile_id)).
-    /// Stable, like Rust's `sort_by_key`.
+    /// Stable, like Rust's `sort_by_key`. Temporary sort buffers come from the
+    /// process allocator; `finishWith` takes one.
     pub fn finish(self: *Scene) void {
-        sortByOrder(Shadow, self.shadows.items);
-        sortByOrder(Quad, self.quads.items);
-        sortByOrder(Path, self.paths.items);
-        sortByOrder(Underline, self.underlines.items);
-        sortSprites(MonochromeSprite, self.monochrome_sprites.items);
-        sortSprites(SubpixelSprite, self.subpixel_sprites.items);
-        sortSprites(PolychromeSprite, self.polychrome_sprites.items);
-        sortByOrder(PaintSurface, self.surfaces.items);
-        sortByOrder(BackdropBlur, self.backdrop_blurs.items);
+        self.finishWith(std.heap.smp_allocator);
     }
 
-    fn sortByOrder(comptime T: type, items: []T) void {
-        std.mem.sort(T, items, {}, struct {
-            fn lt(_: void, a: T, b: T) bool {
-                return a.order < b.order;
-            }
-        }.lt);
+    /// `finish` with `gpa` for the temporary sort buffers (freed before return).
+    pub fn finishWith(self: *Scene, gpa: Allocator) void {
+        sortByOrder(Shadow, self.shadows.items, gpa);
+        sortByOrder(Quad, self.quads.items, gpa);
+        sortByOrder(Path, self.paths.items, gpa);
+        sortByOrder(Underline, self.underlines.items, gpa);
+        sortByOrder(MonochromeSprite, self.monochrome_sprites.items, gpa);
+        sortByOrder(SubpixelSprite, self.subpixel_sprites.items, gpa);
+        sortByOrder(PolychromeSprite, self.polychrome_sprites.items, gpa);
+        sortByOrder(PaintSurface, self.surfaces.items, gpa);
+        sortByOrder(BackdropBlur, self.backdrop_blurs.items, gpa);
     }
 
-    fn sortSprites(comptime T: type, items: []T) void {
-        std.mem.sort(T, items, {}, struct {
+    /// The sort key: the draw order, then (sprites) the atlas tile.
+    fn sortKey(comptime T: type, item: *const T) u64 {
+        const order: u64 = item.order;
+        if (comptime @hasField(T, "tile")) return order << 32 | item.tile.tile_id;
+        return order << 32;
+    }
+
+    /// Stable sort by `sortKey`. Primitives arrive in paint order with long runs
+    /// already in draw order, and they are large: instead of a block sort moving
+    /// whole primitives O(n log n) times (std.mem.sort, several times Rust's
+    /// adaptive `sort_by_key` here), sort (key, index) words and move each
+    /// primitive once. The index makes every word unique, so the result is the
+    /// stable order exactly.
+    fn sortByOrder(comptime T: type, items: []T, gpa: Allocator) void {
+        if (items.len < 2) return;
+        var prev = sortKey(T, &items[0]);
+        const sorted = for (items[1..]) |*it| {
+            const k = sortKey(T, it);
+            if (k < prev) break false;
+            prev = k;
+        } else true;
+        if (sorted) return;
+        const Ctx = struct {
             fn lt(_: void, a: T, b: T) bool {
-                if (a.order != b.order) return a.order < b.order;
-                return a.tile.tile_id < b.tile.tile_id;
+                return sortKey(T, &a) < sortKey(T, &b);
             }
-        }.lt);
+        };
+        if (items.len > std.math.maxInt(u32)) return std.mem.sort(T, items, {}, Ctx.lt);
+        const keys = gpa.alloc(u128, items.len) catch return std.mem.sort(T, items, {}, Ctx.lt);
+        defer gpa.free(keys);
+        const tmp = gpa.alloc(T, items.len) catch return std.mem.sort(T, items, {}, Ctx.lt);
+        defer gpa.free(tmp);
+        for (items, keys, 0..) |*it, *k, i| k.* = @as(u128, sortKey(T, it)) << 32 | i;
+        std.sort.pdq(u128, keys, {}, std.sort.asc(u128));
+        for (keys, tmp) |k, *dst| dst.* = items[@as(u32, @truncate(k))];
+        @memcpy(items, tmp);
     }
 
     /// Iterate batches in draw order. Call after `finish`.
@@ -1188,4 +1215,46 @@ test "transformation matrix and image helpers" {
     try testing.expectEqual(@as(i32, 20), cropped.bounds.origin.y);
     try testing.expectEqual(@as(i32, 200), cropped.bounds.size.width);
     try testing.expectEqual(@as(i32, 200), cropped.bounds.size.height);
+}
+
+test "finish sorts like a stable sort by (order, tile)" {
+    const gpa = testing.allocator;
+    var prng = std.Random.DefaultPrng.init(0x5ce4e);
+    const r = prng.random();
+    for ([_]usize{ 0, 1, 2, 17, 600 }) |n| {
+        var scene: Scene = .{};
+        defer scene.deinit(gpa);
+        for (0..n) |i| {
+            // Runs in order with jumps back, like a frame's paint order; `texture_id`
+            // records the insertion index to check stability.
+            const order: u32 = @intCast((i / 7) % 13 + r.uintLessThan(u32, 3));
+            try scene.monochrome_sprites.append(gpa, .{ .order = order, .tile = testTile(@intCast(i), r.uintLessThan(u32, 4)) });
+            try scene.quads.append(gpa, .{ .order = order, .border_widths = .{ .top = @floatFromInt(i), .right = 0, .bottom = 0, .left = 0 } });
+        }
+        const want_sprites = try gpa.dupe(MonochromeSprite, scene.monochrome_sprites.items);
+        defer gpa.free(want_sprites);
+        std.sort.insertion(MonochromeSprite, want_sprites, {}, struct {
+            fn lt(_: void, a: MonochromeSprite, b: MonochromeSprite) bool {
+                if (a.order != b.order) return a.order < b.order;
+                return a.tile.tile_id < b.tile.tile_id;
+            }
+        }.lt);
+        const want_quads = try gpa.dupe(Quad, scene.quads.items);
+        defer gpa.free(want_quads);
+        std.sort.insertion(Quad, want_quads, {}, struct {
+            fn lt(_: void, a: Quad, b: Quad) bool {
+                return a.order < b.order;
+            }
+        }.lt);
+        scene.finishWith(gpa);
+        for (want_sprites, scene.monochrome_sprites.items) |w, g| {
+            try testing.expectEqual(w.order, g.order);
+            try testing.expectEqual(w.tile.tile_id, g.tile.tile_id);
+            try testing.expectEqual(w.tile.texture_id.index, g.tile.texture_id.index);
+        }
+        for (want_quads, scene.quads.items) |w, g| {
+            try testing.expectEqual(w.order, g.order);
+            try testing.expectEqual(w.border_widths.top, g.border_widths.top);
+        }
+    }
 }

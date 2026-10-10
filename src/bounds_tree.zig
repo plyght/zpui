@@ -85,18 +85,27 @@ pub fn BoundsTree(comptime T: type) type {
                 if (query.intersects(nodes[m].bounds)) return nodes[m].max_order;
             }
 
+            // The stack never holds more than every node once: reserve up front so the
+            // pushes below are plain stores (this loop runs for every primitive).
             self.search_stack.clearRetainingCapacity();
-            try self.search_stack.append(gpa, root);
+            try self.search_stack.ensureTotalCapacity(gpa, nodes.len);
+            const stack = self.search_stack.allocatedSlice();
+            stack[0] = root;
+            var len: usize = 1;
             var max_found: u32 = 0;
-            while (self.search_stack.pop()) |idx| {
-                const node = &nodes[idx];
+            while (len > 0) {
+                len -= 1;
+                const node = &nodes[stack[len]];
                 if (node.max_order <= max_found) continue;
                 if (!query.intersects(node.bounds)) continue;
                 switch (node.kind) {
                     .leaf => |order| max_found = @max(max_found, order),
                     // Highest max_order child is last, so it is popped first.
                     .internal => |*children| for (children.slice()) |child| {
-                        if (nodes[child].max_order > max_found) try self.search_stack.append(gpa, child);
+                        if (nodes[child].max_order > max_found) {
+                            stack[len] = child;
+                            len += 1;
+                        }
                     },
                 }
             }
