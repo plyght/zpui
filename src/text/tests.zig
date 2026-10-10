@@ -357,6 +357,28 @@ test "rasterizeToAtlas inserts glyph tiles once" {
     try testing.expectEqual(@as(?TextSystem.GlyphSprite, null), try f.ts.rasterizeToAtlas(&atlas, space.params, space.origin));
 }
 
+test "a window's glyph sprite cache answers like rasterizeToAtlas and follows the atlas" {
+    var f: Fixture = undefined;
+    f.init();
+    defer f.deinit();
+    var wts: WindowTextSystem = .init(&f.ts);
+    defer wts.deinit();
+    var atlas: atlas_mod.Atlas = .init(testing.allocator, .{});
+    defer atlas.deinit();
+    for ([_]f32{ 0, 3.25, 40 }) |x| for ([_]u21{ 'a', 'b', ' ' }) |ch| {
+        const g = line_mod.glyphRenderParams(@enumFromInt(0), ch, 16, .{ .x = x, .y = 10 }, 1, false);
+        const want = try f.ts.rasterizeToAtlas(&atlas, g.params, g.origin);
+        for (0..2) |_| try testing.expectEqualDeep(want, try wts.glyphSprite(&atlas, g.params, g.origin));
+    };
+    // A cleared atlas re-rasterizes into new tiles; the cache must not hand out the old.
+    const g = line_mod.glyphRenderParams(@enumFromInt(0), 'a', 16, .{ .x = 0, .y = 10 }, 1, false);
+    _ = try wts.glyphSprite(&atlas, g.params, g.origin);
+    atlas.clear();
+    const fresh = (try wts.glyphSprite(&atlas, g.params, g.origin)).?;
+    try testing.expectEqual(fresh.tile.tile_id, atlas.get(text_system.atlasKey(g.params)).?.tile_id);
+    try testing.expectEqual(@as(usize, 1), atlas.pendingUploads().len);
+}
+
 // ---------------------------------------------------------------------------
 // FreeType backend (Linux)
 // ---------------------------------------------------------------------------

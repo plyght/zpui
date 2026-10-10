@@ -282,7 +282,7 @@ pub fn atlasKey(p: RenderGlyphParams) atlas_mod.AtlasKey {
     return .{ .glyph = k };
 }
 
-const ParamsContext = struct {
+pub const ParamsContext = struct {
     pub fn hash(_: ParamsContext, p: RenderGlyphParams) u64 {
         return std.hash.Wyhash.hash(0, std.mem.asBytes(&p));
     }
@@ -359,6 +359,16 @@ pub const ShapeTextOptions = struct {
 pub const WindowTextSystem = struct {
     text_system: *TextSystem,
     cache: line_layout.LineLayoutCache,
+    /// Glyph sprites of this window's atlas by params (`glyphSprite`): one lookup per
+    /// painted glyph instead of the raster-bounds and atlas maps. Valid while the atlas
+    /// and its `generation` are the ones recorded.
+    glyph_sprites: std.HashMapUnmanaged(RenderGlyphParams, ?CachedSprite, ParamsContext, std.hash_map.default_max_load_percentage) = .empty,
+    glyph_atlas: ?*const atlas_mod.Atlas = null,
+    glyph_atlas_generation: u64 = 0,
+
+    const CachedSprite = struct { tile: atlas_mod.AtlasTile, raster_origin: geometry.Point(DevicePixels) };
+    /// Entries kept before the map starts over (distinct glyph, size and subpixel variants).
+    const max_glyph_sprites = 16 * 1024;
 
     pub fn init(text_system: *TextSystem) WindowTextSystem {
         return .{ .text_system = text_system, .cache = .init(text_system.gpa, text_system.platform) };
@@ -366,6 +376,41 @@ pub const WindowTextSystem = struct {
 
     pub fn deinit(self: *WindowTextSystem) void {
         self.cache.deinit();
+        self.glyph_sprites.deinit(self.gpa());
+    }
+
+    /// `TextSystem.rasterizeToAtlas` for this window's `atlas`, remembering the result.
+    pub fn glyphSprite(self: *WindowTextSystem, atlas: *atlas_mod.Atlas, params: RenderGlyphParams, origin: geometry.Point(geometry.ScaledPixels)) !?TextSystem.GlyphSprite {
+        if (self.glyph_atlas != atlas or self.glyph_atlas_generation != atlas.generation or self.glyph_sprites.count() >= max_glyph_sprites) {
+            self.glyph_sprites.clearRetainingCapacity();
+            self.glyph_atlas = atlas;
+            self.glyph_atlas_generation = atlas.generation;
+        }
+        const gop = try self.glyph_sprites.getOrPut(self.gpa(), params);
+        if (!gop.found_existing) {
+            const sprite = self.text_system.rasterizeToAtlas(atlas, params, .{ .x = 0, .y = 0 }) catch |err| {
+                self.glyph_sprites.removeByPtr(gop.key_ptr);
+                return err;
+            };
+            gop.value_ptr.* = if (sprite) |sp| .{
+                .tile = sp.tile,
+                .raster_origin = .{ .x = @intFromFloat(sp.bounds.origin.x), .y = @intFromFloat(sp.bounds.origin.y) },
+            } else null;
+            // Inserting a tile may have rebuilt the atlas.
+            if (atlas.generation != self.glyph_atlas_generation) {
+                self.glyph_sprites.clearRetainingCapacity();
+                self.glyph_atlas_generation = atlas.generation;
+                return self.text_system.rasterizeToAtlas(atlas, params, origin);
+            }
+        }
+        const c = gop.value_ptr.* orelse return null;
+        return .{
+            .tile = c.tile,
+            .bounds = .{
+                .origin = .{ .x = origin.x + @as(f32, @floatFromInt(c.raster_origin.x)), .y = origin.y + @as(f32, @floatFromInt(c.raster_origin.y)) },
+                .size = .{ .width = @floatFromInt(c.tile.bounds.size.width), .height = @floatFromInt(c.tile.bounds.size.height) },
+            },
+        };
     }
 
     fn gpa(self: *WindowTextSystem) Allocator {

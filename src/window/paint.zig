@@ -321,8 +321,7 @@ pub fn paintGlyph(w: *Window, origin: Point, font_id: text_mod.FontId, glyph_id:
 
 fn insertGlyph(w: *Window, params: text_mod.RenderGlyphParams, origin: geometry.Point(ScaledPixels), c: Hsla) void {
     assertPaint(w);
-    const ts = w.text_system.text_system;
-    const sprite = (ts.rasterizeToAtlas(w.sprite_atlas, params, origin) catch |err| {
+    const sprite = (w.text_system.glyphSprite(w.sprite_atlas, params, origin) catch |err| {
         std.log.warn("glyph raster failed: {t}", .{err});
         return;
     }) orelse return;
@@ -464,8 +463,7 @@ pub fn paintEmoji(w: *Window, origin: Point, font_id: text_mod.FontId, glyph_id:
 
 fn insertEmoji(w: *Window, params: text_mod.RenderGlyphParams, origin: geometry.Point(ScaledPixels)) void {
     assertPaint(w);
-    const ts = w.text_system.text_system;
-    const sprite = (ts.rasterizeToAtlas(w.sprite_atlas, params, origin) catch return) orelse return;
+    const sprite = (w.text_system.glyphSprite(w.sprite_atlas, params, origin) catch return) orelse return;
     sceneOf(w).insertPolychromeSprite(w.gpa, .{
         .bounds = sprite.bounds,
         .content_mask = snappedContentMask(w),

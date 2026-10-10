@@ -308,6 +308,9 @@ pub const Atlas = struct {
     tiles: std.AutoHashMapUnmanaged(AtlasKey, AtlasTile) = .empty,
     uploads: std.ArrayList(Upload) = .empty,
     next_generation: u32 = 1,
+    /// Bumped whenever a tile goes away (`remove`, `clear`), so caches of tiles by key
+    /// (`WindowTextSystem.glyphSprite`) know to start over.
+    generation: u64 = 0,
 
     const kind_count = @typeInfo(AtlasTextureKind).@"enum".field_names.len;
     /// Empty texel kept right and below every tile so linear sampling never bleeds.
@@ -351,6 +354,7 @@ pub const Atlas = struct {
 
     /// Drop every texture, tile and pending upload (zui `WgpuAtlas::clear`).
     pub fn clear(self: *Atlas) void {
+        self.generation +%= 1;
         for (&self.lists) |*list| {
             for (list.textures.items) |*slot| if (slot.*) |*t| t.packer.deinit(self.gpa);
             list.textures.clearRetainingCapacity();
@@ -395,6 +399,7 @@ pub const Atlas = struct {
     /// remaining tiles is released (its slot becomes reusable).
     pub fn remove(self: *Atlas, key: AtlasKey) void {
         const kv = self.tiles.fetchRemove(key) orelse return;
+        self.generation +%= 1;
         const id = kv.value.texture_id;
         const list = &self.lists[@backingInt(id.kind)];
         if (id.index >= list.textures.items.len) return;
