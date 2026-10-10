@@ -26,6 +26,7 @@ zeron maintainers?
 | CPU while streaming | **Rust 12 %, Zig 60 %** | Rust 152 %, Zig 250 % (software GPU) |
 | Draws per streamed reply (about 4 s) | **Rust about 50, Zig about 250 (every vsync)** | Rust 55, Zig 118 (GPU-bound) |
 | Scroll frame interval p50 / p95 / p99 | Rust 17.7 / 36.8 / 58.7 ms, Zig 16.7 / 25.3 / 37.7 ms | Rust 48 / 64 / 64 ms, Zig 33.5 / 34.9 / 36.5 ms |
+| CPU while scrolling | **Rust 54 %, Zig 69–75 %; after the scroll fixes (`9229e41`): Rust 50 %, Zig 24–26 %** (see "Scrolling CPU" below) | Rust 170 %, Zig 257–273 % (not re-measured) |
 | Clean release build (both clients) | Rust 18 min (thin LTO), Zig 9.4 min (ReleaseSafe) | Rust 10 min, Zig 8 min |
 | Lines of code (UI side) | Rust: zeron UI crates 211 k + zui 137 k. Zig: app 144 k + zpui 89 k | |
 
@@ -356,10 +357,12 @@ attributes and Zig `test` blocks):
    - This is a port gap to fix on the Zig side: find what keeps the window dirty while a
      row streams. There is nothing to propose upstream here.
 
-7. **Scrolling: similar median, Zig has the better tail on Apple Silicon.** Both hold
-   60 fps at the median. The Zig port has a better tail on macOS (p95 25 ms against
-   37 ms, p99 38 ms against 59 ms, about 22 dropped frames against about 101), at similar
-   CPU (52–63 %). On lavapipe, Zig draws a frame in 33 ms against 38 ms for Rust.
+7. **Scrolling: Zig now uses about half Rust's CPU, with an equal or better tail.**
+   The runs above had Zig at 63 % CPU against Rust's 53 % while scrolling. Frame pacing
+   was similar or better. The re-measurement and fixes are in "Scrolling CPU" below.
+   After `9229e41`, Zig scrolls at 24–26 % against 50 % for Rust on macos-26, with
+   p95/p99 frame intervals of 19.5/20.5–22.1 ms against 19.8/27.0 ms. On lavapipe
+   (not re-measured), Zig draws a frame in 33 ms against 38 ms for Rust.
 
 8. **Liquid Glass and native controls cost little here.** With Reduce Transparency on,
    the effect of turning glass and AppKit controls off is within noise: slightly fewer
@@ -368,6 +371,76 @@ attributes and Zig `test` blocks):
 
 9. **Build times are close.** A clean build takes 8–12 min for Zig and 10–18 min for Rust.
    Neither has a fast incremental release build: about 5–7 min for both.
+
+## Scrolling CPU (macos-26, before and after the fixes)
+
+Three macos-26 runs with 3 rounds each (6 launches per configuration), all at zeron
+037f4c1. Same harness and timeline as above; scroll = 300 frames with one 40 px wheel
+event each over the 80-message transcript.
+
+- **Before**: [37865225918](https://github.com/plyght/zpui/actions/runs/37865225918) at
+  `d405d65`.
+- **Sidebar cached**: [38002834235](https://github.com/plyght/zpui/actions/runs/38002834235)
+  at `56c8fa8`.
+- **Scene building**: [38007438600](https://github.com/plyght/zpui/actions/runs/38007438600)
+  at `9229e41`.
+
+| Metric | Run | rust | zig-fast | zig-safe | zig-safe-plain |
+|---|---|---:|---:|---:|---:|
+| CPU while scrolling (%) | before | 54.1 (48.5–62.6) | 68.6 (57.0–75.6) | 74.9 (72.6–79.1) | 68.6 (63.3–71.7) |
+| | sidebar cached | 48.7 (38.9–56.6) | 41.4 (32.4–44.1) | 36.9 (29.2–50.6) | 37.1 (34.4–39.9) |
+| | scene building | 50.0 (48.1–54.9) | 23.9 (19.6–30.3) | 26.1 (22.7–33.5) | 26.3 (21.4–32.1) |
+| Scroll: frame interval p50 / p95 / p99 (ms) | before | 16.9 / 26.5 / 31.6 | 16.7 / 20.6 / 37.4 | 17.8 / 32.6 / 53.0 | 16.7 / 20.5 / 35.2 |
+| | sidebar cached | 25.2 / 49.3 / 65.8 | 16.6 / 22.0 / 38.4 | 16.7 / 19.6 / 30.3 | 16.8 / 24.7 / 37.2 |
+| | scene building | 16.7 / 19.8 / 27.0 | 16.7 / 19.5 / 20.5 | 16.6 / 19.5 / 22.1 | 16.7 / 19.7 / 20.9 |
+| Scroll: draw p50 / p95 / p99 (ms) | before | 16.50 / 26.34 / 31.08 | 14.68 / 20.29 / 37.04 | 17.06 / 32.22 / 52.84 | 15.95 / 20.30 / 35.05 |
+| | sidebar cached | 24.53 / 48.03 / 62.79 | 16.10 / 21.89 / 38.28 | 13.02 / 18.98 / 29.86 | 16.59 / 24.17 / 37.17 |
+| | scene building | 16.39 / 19.55 / 26.83 | 10.58 / 18.44 / 20.15 | 10.75 / 18.27 / 21.07 | 16.59 / 19.57 / 20.26 |
+| Scroll: dropped frames | before | 22 (6–138) | 18 (4–33) | 50 (4–86) | 9 (5–22) |
+| | sidebar cached | 192 (6–364) | 16 (7–38) | 8 (4–272) | 18 (1–45) |
+| | scene building | 7 (2–30) | 3 (3–5) | 4 (3–7) | 3 (0–6) |
+| CPU while streaming (%) | before | 10.6 (9.5–13.8) | 10.6 (6.7–12.8) | 12.8 (10.3–16.5) | 10.1 (9.6–13.7) |
+| | sidebar cached | 12.8 (9.7–17.4) | 9.8 (8.4–11.2) | 10.4 (9.2–11.8) | 8.7 (6.5–9.6) |
+| | scene building | 12.5 (9.7–14.3) | 9.1 (8.0–10.6) | 10.1 (6.0–12.9) | 6.5 (5.7–10.0) |
+
+Rust's numbers move between runs only with runner noise. In the middle run the Rust
+client's scroll tail was unusually poor, so its median frame interval is not
+representative.
+
+**Root causes.** They were found with a headless scroll test of the full shell on the
+bench fixture (`apps/zeron/src/ui/shell/scroll_test.zig`: 150 chats, the 40-turn mock
+transcript, a 1024×674 window), profiled with callgrind:
+
+1. **The sidebar was rebuilt every scroll frame (`56c8fa8`).** A scroll notifies the
+   transcript view, which re-renders its ancestors, including the whole shell. The
+   sidebar was an uncached child, so every frame re-sorted, rebuilt and laid out all 150
+   chat rows. Rust wraps the sidebar in a cached view (`sidebar_pane.cached(..)`) that
+   follows only the shell's own notifications. The Zig sidebar is now a cached view too,
+   notified whenever the shell is, as Rust's `SidebarPane` observes the shell. In Debug
+   this took a headless scroll frame from 138 ms to 31 ms.
+2. **Scene building was about half of what remained (`9229e41`).**
+   - `Scene.finish` sorted the primitive lists with `std.mem.sort`, a block sort that
+     moves the large primitive structs O(n log n) times. Rust's adaptive `sort_by_key` is
+     near-linear on this mostly ordered data. The lists are now checked for order first,
+     else sorted as (key, index) words with each primitive moved once. The result is the
+     same stable order.
+   - The bounds tree's search pushed every visited node through a non-inlined
+     `ArrayList.append`. Its stack is now reserved once per search.
+   - On macOS, `drawLayered` replayed the whole scene into the base plane, a second
+     bounds-tree build and sort, every frame once any native view existed, even with
+     nothing on the upper planes. It now draws the scene as is in that case.
+
+   ReleaseFast headless scroll frame: 3.27 ms → 2.1 ms.
+
+What was ruled out:
+
+- The transcript list virtualizes, laying out only the visible rows plus overdraw, as
+  Rust does.
+- Line layouts hit the cache; only rows scrolling in are shaped.
+- Markdown is parsed once per message, and highlights are cached by content.
+
+The streaming numbers above also include the earlier pulse-clock fixes (`2993f91`,
+`bdfe093`). They already put Zig's streaming CPU at Rust's level before these changes.
 
 ## Fixes found during the port: do any also exist in Rust?
 
