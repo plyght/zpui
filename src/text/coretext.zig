@@ -141,7 +141,10 @@ pub const CoreTextSystem = struct {
         const self = cast(ptr);
         self.lock.lock();
         defer self.lock.unlock();
-        const data = cf.CFDataCreate(null, bytes.ptr, @intCast(bytes.len)) orelse return error.OutOfMemory;
+        // `App.addFont`'s bytes outlive the text system (embedded fonts: clean, file-backed
+        // pages), so CoreText reads them in place instead of a 2.3 MB heap copy of
+        // zeron's 16 Geist faces (FreeType's `FT_New_Memory_Face` does the same).
+        const data = cf.CFDataCreateWithBytesNoCopy(null, bytes.ptr, @intCast(bytes.len), cf.kCFAllocatorNull) orelse return error.OutOfMemory;
         defer cf.CFRelease(data);
         const descriptors = cf.CTFontManagerCreateFontDescriptorsFromData(data) orelse return error.InvalidFontData;
         defer cf.CFRelease(descriptors);

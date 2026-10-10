@@ -81,6 +81,9 @@ pub extern "c" fn CFNumberGetTypeID() CFTypeID;
 pub extern "c" fn CFBooleanGetValue(boolean: CFBooleanRef) Boolean;
 
 pub extern "c" fn CFDataCreate(alloc: CFAllocatorRef, bytes: [*]const u8, length: CFIndex) ?CFDataRef;
+pub extern "c" fn CFDataCreateWithBytesNoCopy(alloc: CFAllocatorRef, bytes: [*]const u8, length: CFIndex, bytes_deallocator: CFAllocatorRef) ?CFDataRef;
+/// Deallocator that never frees (`CFDataCreateWithBytesNoCopy` over memory the caller owns).
+pub extern "c" const kCFAllocatorNull: CFAllocatorRef;
 pub extern "c" fn CFDataGetBytePtr(data: CFDataRef) ?[*]const u8;
 pub extern "c" fn CFDataGetLength(data: CFDataRef) CFIndex;
 
