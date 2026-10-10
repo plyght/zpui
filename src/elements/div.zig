@@ -3332,19 +3332,34 @@ pub const Interactivity = struct {
 
     /// gpui `compute_style_internal`.
     pub fn computeStyle(self: *Interactivity, hitbox: ?Hitbox, st: ?*InteractiveElementState, window: *Window, cx: *App) Style {
-        // Without state-dependent styles (focus, hover, active, drag-over) the result is
-        // the same in every phase: compute it once per frame, not at layout, prepaint
-        // and paint each.
-        const static = self.focus_style == null and self.in_focus_style == null and self.focus_visible_style == null and
+        if (arena_mod.currentOrNull() == null) return self.computeStyleValue(hitbox, st, window, cx);
+        return self.styleRef(hitbox, st, window, cx).*;
+    }
+
+    /// `computeStyle` in the frame arena (no copy of the large `Style` per phase): an
+    /// element without state-dependent styles gets the same pointer in every phase.
+    pub fn styleRef(self: *Interactivity, hitbox: ?Hitbox, st: ?*InteractiveElementState, window: *Window, cx: *App) *const Style {
+        if (self.isStaticStyle(cx)) {
+            if (self.static_style) |memo| return memo;
+        }
+        const a = arena_mod.current();
+        const out = a.create(Style, self.computeStyleValue(hitbox, st, window, cx));
+        if (self.isStaticStyle(cx)) self.static_style = out;
+        return out;
+    }
+
+    /// No focus, hover, active or drag-over styles (and no drag in flight): the style
+    /// is the same in every phase of the frame.
+    fn isStaticStyle(self: *const Interactivity, cx: *const App) bool {
+        return self.focus_style == null and self.in_focus_style == null and self.focus_visible_style == null and
             self.hover_style == null and self.group_hover_style == null and self.active_style == null and
             self.group_active_style == null and cx.active_drag == null;
-        if (static) if (self.static_style) |memo| return memo.*;
+    }
+
+    fn computeStyleValue(self: *Interactivity, hitbox: ?Hitbox, st: ?*InteractiveElementState, window: *Window, cx: *App) Style {
         var s: Style = .{};
         refine.refine(&s, self.base_style);
-        if (static) {
-            if (arena_mod.currentOrNull()) |a| self.static_style = a.create(Style, s);
-            return s;
-        }
+        if (self.isStaticStyle(cx)) return s;
         if (self.tracked_focus_handle) |fh| {
             if (self.in_focus_style) |r| if (fh.withinFocused(window)) refine.refine(&s, r.*);
             if (self.focus_style) |r| if (fh.isFocused(window)) refine.refine(&s, r.*);
@@ -3395,7 +3410,7 @@ pub const Interactivity = struct {
 
     /// Result of `prepaintBegin`; pass to `prepaintEnd` after prepainting children.
     pub const PrepaintScope = struct {
-        style: Style,
+        style: *const Style,
         hitbox: ?Hitbox,
         scroll_offset: Point,
         text: ?style_mod.TextStyleRefinement,
@@ -3407,7 +3422,7 @@ pub const Interactivity = struct {
         self.content_size = content_size;
         if (self.tracked_focus_handle) |fh| window.setFocusHandle(fh);
         const st = window.optionalElementState(InteractiveElementState, gid);
-        const s = self.computeStyle(null, st, window, cx);
+        const s = self.styleRef(null, st, window, cx);
         if (st) |e| {
             self.active = e.clicked_state.element;
             if (e.active_tooltip) |*at| {
@@ -3420,8 +3435,8 @@ pub const Interactivity = struct {
         window.pushTextStyle(text);
         const mask: ?window_mod.ContentMask = if (s.overflowMask(bounds, window.remSize())) |m| .{ .bounds = m } else null;
         window.pushContentMask(mask);
-        const hitbox: ?Hitbox = if (self.shouldInsertHitbox(&s)) window.insertHitbox(bounds, self.hitbox_behavior) else null;
-        const offset = self.clampScrollPosition(bounds, &s, window);
+        const hitbox: ?Hitbox = if (self.shouldInsertHitbox(s)) window.insertHitbox(bounds, self.hitbox_behavior) else null;
+        const offset = self.clampScrollPosition(bounds, s, window);
         return .{ .style = s, .hitbox = hitbox, .scroll_offset = offset, .text = text, .mask = mask };
     }
 
@@ -3462,7 +3477,7 @@ pub const Interactivity = struct {
 
     /// Result of `paintBegin`; pass to `paintEnd` after painting children.
     pub const PaintScope = struct {
-        style: Style,
+        style: *const Style,
         /// Visibility hidden: nothing was pushed, skip children and `paintEnd` work.
         hidden: bool,
         opacity: f32 = 1,
@@ -3477,13 +3492,13 @@ pub const Interactivity = struct {
     pub fn paintBegin(self: *Interactivity, gid: ?GlobalElementId, bounds: Bounds, hitbox: ?Hitbox, window: *Window, cx: *App) PaintScope {
         self.hovered = if (hitbox) |h| h.isHovered(window) else null;
         const st = window.optionalElementState(InteractiveElementState, gid);
-        const s = self.computeStyle(hitbox, st, window, cx);
+        const s = self.styleRef(hitbox, st, window, cx);
         self.paintHoverGroupHandler(window);
         if (s.visibility == .hidden) return .{ .style = s, .hidden = true, .bounds = bounds };
 
         var scope: PaintScope = .{ .style = s, .hidden = false, .bounds = bounds };
         scope.opacity = window.pushOpacity(s.opacity);
-        window.paintStyle(&scope.style, bounds);
+        window.paintStyle(scope.style, bounds);
         scope.text = if (s.textStyle()) |t| t.* else null;
         window.pushTextStyle(scope.text);
         scope.mask = if (s.overflowMask(bounds, window.remSize())) |m| .{ .bounds = m } else null;
@@ -3500,7 +3515,7 @@ pub const Interactivity = struct {
                 scope.group_pushed = true;
             }
             self.paintMouseListeners(h, st, window, cx);
-            self.paintScrollListener(h, &scope.style, st, window);
+            self.paintScrollListener(h, scope.style, st, window);
         }
         self.paintKeyboardListeners(window);
         return scope;
@@ -3512,7 +3527,7 @@ pub const Interactivity = struct {
         window.endTabGroup(scope.tab_group);
         window.popContentMask(scope.mask);
         window.popTextStyle(scope.text);
-        window.paintStyleBorder(&scope.style, scope.bounds);
+        window.paintStyleBorder(scope.style, scope.bounds);
         window.popOpacity(scope.opacity);
     }
 
