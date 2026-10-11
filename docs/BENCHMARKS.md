@@ -22,11 +22,11 @@ zeron maintainers?
 | Warm start to first frame | Rust 925 ms, Zig 533 ms | Rust 247 ms, Zig 101 ms |
 | Warm start to interactive shell | **Rust 1.39 s, Zig 5.58 s** (a Zig bug, since fixed; re-run: Rust 1.07 s, Zig ReleaseSafe 0.91 s; see below) | Rust 422 ms, Zig 347 ms |
 | RSS / footprint when idle | Rust 157 / 82 MB, Zig 137 / 82 MB (after the startup and memory changes: Rust 158 / 83, Zig 133 / 79) | Rust 232 / 210 MB, Zig 160 / 136 MB (PSS) |
-| CPU when idle | Rust 2.8 %, Zig 0.9 % (powermetrics: 4.8 % vs 1.6 %) | Rust 15.6 %, Zig 0.0 % |
-| CPU while streaming | **Rust 12 %, Zig 60 %; after the pulse-clock fix (`2993f91`): Rust 12.5 %, Zig 6.5–10 %** | Rust 152 %, Zig 250 % (software GPU) |
+| CPU when idle | Rust 2.8 %, Zig 0.9 % (powermetrics: 4.8 % vs 1.6 %); after the runtime CPU pass: Rust 2.0 %, Zig 0.5–0.6 % | Rust 15.6 %, Zig 0.0 % |
+| CPU while streaming | **Rust 12 %, Zig 60 %; after the pulse-clock fix (`2993f91`): Rust 12.5 %, Zig 6.5–10 %; after the runtime CPU pass: Rust 12.8 %, Zig 6.9–7.8 %** | Rust 152 %, Zig 250 % (software GPU) |
 | Draws per streamed reply (about 4 s) | **Rust about 50, Zig about 250 (every vsync); fixed in `2993f91` (30/15 Hz pulse clock)** | Rust 55, Zig 118 (GPU-bound) |
 | Scroll frame interval p50 / p95 / p99 | Rust 17.7 / 36.8 / 58.7 ms, Zig 16.7 / 25.3 / 37.7 ms | Rust 48 / 64 / 64 ms, Zig 33.5 / 34.9 / 36.5 ms |
-| CPU while scrolling | **Rust 54 %, Zig 69–75 %; after the scroll fixes (`9229e41`): Rust 50 %, Zig 24–26 %** (see "Scrolling CPU" below) | Rust 170 %, Zig 257–273 % (not re-measured) |
+| CPU while scrolling | **Rust 54 %, Zig 69–75 %; after the scroll fixes (`9229e41`): Rust 50 %, Zig 24–26 %; after the runtime CPU pass: Rust 55 %, Zig 21–24 %** (see "Scrolling CPU" and "Runtime CPU, second pass" below) | Rust 170 %, Zig 257–273 % (not re-measured) |
 | Clean release build (both clients) | Rust 18 min (thin LTO), Zig 9.4 min (ReleaseSafe) | Rust 10 min, Zig 8 min |
 | Lines of code (UI side) | Rust: zeron UI crates 211 k + zui 137 k. Zig: app 144 k + zpui 89 k | |
 
@@ -443,6 +443,100 @@ What was ruled out:
 
 The streaming numbers above also include the earlier pulse-clock fixes (`2993f91`,
 `bdfe093`). They already put Zig's streaming CPU at Rust's level before these changes.
+
+## Runtime CPU, second pass (macos-26, before and after)
+
+Two macos-26 runs with 3 rounds each (6 launches per configuration), at zeron 037f4c1,
+same harness and timeline as above:
+
+- **Before**: [38079608613](https://github.com/plyght/zpui/actions/runs/38079608613) at
+  `22a5772` (everything up to the scroll and pulse-clock fixes).
+- **After**: [38096667034](https://github.com/plyght/zpui/actions/runs/38096667034) at
+  `58ac028` (the commits listed below, on top of the startup and memory work).
+
+Rust is measured in the same runs, so its column shows the runner noise between them.
+
+| Metric | Run | rust | zig-fast | zig-safe | zig-safe-plain |
+|---|---|---:|---:|---:|---:|
+| CPU while scrolling (%) | before | 51.4 (42.8–57.4) | 30.9 (22.5–34.5) | 35.1 (26.2–39.0) | 32.5 (29.7–35.8) |
+| | after | 54.8 (42.9–60.8) | 20.9 (13.1–26.4) | 22.4 (13.9–27.4) | 23.6 (16.7–28.7) |
+| CPU while streaming (%) | before | 14.1 (13.0–15.3) | 9.1 (8.0–11.9) | 8.9 (5.5–12.7) | 8.4 (7.2–11.5) |
+| | after | 12.8 (9.9–17.0) | 7.4 (6.3–8.5) | 7.8 (5.4–8.9) | 6.9 (5.3–8.8) |
+| CPU idle, short chat (%) | before | 3.1 (2.9–4.0) | 1.0 (0.6–1.1) | 1.0 (0.4–1.1) | 1.1 (0.9–1.4) |
+| | after | 2.0 (1.2–3.7) | 0.6 (0.2–1.1) | 0.5 (0.2–1.3) | 0.6 (0.2–1.6) |
+| CPU idle, long transcript (%) | before | 2.4 (1.4–2.8) | 0.7 (0.0–1.1) | 0.7 (0.0–1.1) | 0.7 (0.3–1.1) |
+| | after | 2.6 (0.0–3.7) | 0.8 (0.0–1.1) | 0.7 (0.3–0.8) | 0.7 (0.0–0.8) |
+| powermetrics CPU, scroll / stream (%) | before | 50.2 / 15.6 | 28.0 / 9.3 | 30.7 / 9.3 | 30.2 / 8.9 |
+| | after | 54.0 / 14.5 | 19.9 / 7.6 | 21.0 / 7.6 | 21.0 / 7.0 |
+| Energy impact, scroll / stream | before | 30.6 / 9.0 | 17.1 / 5.7 | 19.7 / 6.2 | 18.1 / 5.4 |
+| | after | 32.3 / 9.0 | 12.6 / 5.0 | 12.7 / 4.9 | 12.4 / 4.4 |
+| Scroll: draw p50 / p95 (ms) | before | 17.28 / 33.09 | 10.58 / 18.08 | 12.14 / 20.87 | 16.38 / 20.35 |
+| | after | 17.27 / 34.57 | 11.16 / 19.99 | 10.37 / 18.77 | 16.49 / 20.00 |
+| Stream: draw p50 / p95 (ms) | before | 6.51 / 22.35 | 6.70 / 16.29 | 6.50 / 16.74 | 5.78 / 16.43 |
+| | after | 5.46 / 23.49 | 4.20 / 14.10 | 4.57 / 16.54 | 3.76 / 13.70 |
+
+Scrolling CPU is down by about a third (energy impact by 26–36 %), streaming by 10–20 %,
+and the short-chat idle by about 40 %. Zig now scrolls at well under half of Rust's CPU.
+On this VM most of a scroll frame's wall time is the main thread waiting in `nextDrawable`
+for the paravirtual GPU, so draw times hardly move; the CPU and energy figures are the
+ones that changed.
+
+**How it was found.** The headless shell scroll test (`apps/zeron/src/ui/shell/scroll_test.zig`,
+300 frames, x86_64_v3 ReleaseFast) under callgrind, and new macOS call-stack profiles:
+`benchmark.yml` input `profile=1` runs `sample` on each warm launch's idle, scroll and
+stream phases and uploads the reports with the logs (profile runs perturb the CPU
+figures, so they are separate from measurement runs). The first macOS profile
+(run 38084755198) showed what the headless test cannot: with Liquid Glass on (the
+default on macOS 26) every frame is presented in planes, and that path replayed the
+whole scene a second time.
+
+**What changed** (all in zpui unless marked; no visual or behaviour change):
+
+1. `1d188c1` cached views hashed the inherited text style with `asBytes` of unions and
+   optionals, whose padding is undefined. In some release builds an unchanged style
+   hashed differently between frames, so the cached sidebar re-rendered at random (26
+   times in a 300-frame headless scroll of a native ReleaseFast build).
+2. `d4793a6`, `31a76d1` the bounds tree, still the top function on macOS: new bounds
+   collect in a short run that enters the tree as one leaf, inserts near the last one
+   scan a cached neighbourhood instead of searching the tree, and both scans are
+   vectorised. Orders are exactly gpui's (brute-force tests). Headless: 1.04 G -> 0.23 G
+   instructions.
+3. `9944412` layered frames (native views placed) are painted with plane-local draw
+   orders, each operation ordered on the plane it paints on, so `drawLayered` copies each
+   plane instead of replaying it through a fresh bounds tree, and the whole-scene sort is
+   skipped. On macOS this was about 16 % of the main thread's busy time. A replay is the
+   fallback, and the test platform checks every plane-ordered frame against one.
+4. `c92e49e` (macOS) an overlay or top plane whose operations are unchanged (the sidebar
+   and titlebar while the transcript scrolls) keeps its presented drawable: no encode or
+   present.
+5. `839f489` one glyph-sprite lookup per painted glyph instead of the raster-bounds map
+   plus the atlas map (the atlas gained a generation for invalidation).
+6. `a95f5fd`, `e880282` an element without hover, focus, active or drag-over styles
+   computes its style once per frame, and prepaint/paint hold a pointer to it instead of
+   copying the 792-byte `Style`.
+7. `c27fc3e` the scene sort packs (order, tile, index) into one u64 when it fits;
+   `7a0f4be` `shapeText` reuses its working lists.
+8. `bddc495` (zeron) `Theme.forPopup` and the glass tint alpha, pure but asked for every
+   frame (up to 400 pow/log contrast steps in light frost), remember recent answers.
+9. `58ac028` the per-frame element arena frees its peak-sized blocks after 2 s without a
+   present (it kept 6.6 MB for the long transcript while idle).
+
+Headless shell scroll, 300 frames (callgrind, test allocator and one-time syntax-query
+compilation included): 3.41 G -> 2.32 G instructions.
+
+What was looked at and left alone:
+
+- Idle: the macOS idle profile has no zpui work on the main thread at all; the display
+  link parks after 30 idle vsyncs and nothing polls. The remaining idle CPU is the frames
+  right after load.
+- Scroll still re-renders the shell, because the transcript's notify marks its ancestors
+  dirty (as in gpui). Skipping that, or translating a cached row's output, would change
+  gpui's semantics (parents may read child state; listeners capture absolute bounds) and
+  was not done. The sidebar stays a cached view.
+- Glyph culling: only about 3 % of painted glyphs fall outside the viewport.
+- Startup: the first frame after the window opens shapes and rasterizes the transcript,
+  composer and symbol glyphs (about 100 ms to the loaded shell in the profile run);
+  prewarming that was not attempted.
 
 ## Startup, memory and size (macos-26, before and after)
 
