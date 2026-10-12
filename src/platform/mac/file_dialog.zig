@@ -84,6 +84,11 @@ pub fn prompt(gpa: std.mem.Allocator, options: pf.PathPromptOptions, done: pf.Pa
     panel.msg(void, "setResolvesAliases:", .{objc.toBOOL(false)});
     if (options.prompt) |p| panel.msg(void, "setPrompt:", .{ak.nsString(p)});
     if (options.title) |t| panel.msg(void, "setMessage:", .{ak.nsString(t)});
+    if (options.directory) |dir| {
+        const url = ak.class("NSURL").msg(?id, "fileURLWithPath:isDirectory:", .{ ak.nsString(dir), objc.toBOOL(true) });
+        if (url) |u| panel.msg(void, "setDirectoryURL:", .{u});
+    }
+    if (options.extensions.len > 0) setAllowedTypes(panel, options.extensions);
     const state = gpa.create(State) catch {
         panel.release();
         return done.func(done.ctx, null);
@@ -97,6 +102,25 @@ pub fn prompt(gpa: std.mem.Allocator, options: pf.PathPromptOptions, done: pf.Pa
         .state = state,
     };
     panel.msg(void, "beginWithCompletionHandler:", .{@as(*const anyopaque, @ptrCast(&block))});
+}
+
+/// Restrict the panel to `extensions`: `allowedContentTypes` with `UTType`s (macOS 11+,
+/// looked up at run time), else the older `allowedFileTypes`. Bundles whose type
+/// conforms to a package (`.app`) stay single, choosable files.
+fn setAllowedTypes(panel: id, extensions: []const []const u8) void {
+    const list = ak.class("NSMutableArray").msg(id, "array", .{});
+    if (objc.getClass("UTType")) |ut| {
+        for (extensions) |ext| {
+            if (ut.msg(?id, "typeWithFilenameExtension:", .{ak.nsString(ext)})) |t| list.msg(void, "addObject:", .{t});
+        }
+        if (ak.arrayCount(list) > 0 and panel.msg(BOOL, "respondsToSelector:", .{objc.sel("setAllowedContentTypes:")}) != objc.NO) {
+            panel.msg(void, "setAllowedContentTypes:", .{list});
+            return;
+        }
+        list.msg(void, "removeAllObjects", .{});
+    }
+    for (extensions) |ext| list.msg(void, "addObject:", .{ak.nsString(ext)});
+    panel.msg(void, "setAllowedFileTypes:", .{list});
 }
 
 /// The general pasteboard's image as PNG (or the raw TIFF if conversion fails).

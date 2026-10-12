@@ -52,10 +52,9 @@ const Result = struct {
 const Job = struct {
     gpa: Allocator,
     dispatcher: platform.Dispatcher,
+    /// Options whose strings live in `arena` (the caller's are gone once `prompt` returns).
     options: platform.PathPromptOptions,
-    /// Owned copies of the option strings.
-    prompt: ?[]u8,
-    title: ?[]u8,
+    arena: std.heap.ArenaAllocator,
     result: *Result,
     env: Env,
 
@@ -64,11 +63,23 @@ const Job = struct {
         const paths = run(gpa, self.env, self.options) catch null;
         self.result.paths = paths;
         self.dispatcher.dispatchOnMainThread(.{ .ctx = self.result, .run = Result.runMain, .drop = Result.drop }, .high);
-        if (self.prompt) |p| gpa.free(p);
-        if (self.title) |t| gpa.free(t);
+        self.arena.deinit();
         gpa.destroy(self);
     }
 };
+
+/// `options` with every string copied into `a`.
+fn copyOptions(a: Allocator, options: platform.PathPromptOptions) !platform.PathPromptOptions {
+    var o = options;
+    if (options.prompt) |s| o.prompt = try a.dupe(u8, s);
+    if (options.title) |s| o.title = try a.dupe(u8, s);
+    if (options.directory) |s| o.directory = try a.dupe(u8, s);
+    if (options.filter_label) |s| o.filter_label = try a.dupe(u8, s);
+    const exts = try a.alloc([]const u8, options.extensions.len);
+    for (exts, options.extensions) |*d, e| d.* = try a.dupe(u8, e);
+    o.extensions = exts;
+    return o;
+}
 
 pub const Env = struct {
     bus_address: ?[]const u8 = null,
@@ -97,15 +108,15 @@ pub fn prompt(gpa: Allocator, dispatcher: platform.Dispatcher, options: platform
         gpa.destroy(result);
         return done.func(done.ctx, null);
     };
-    var opts = options;
-    const p = if (options.prompt) |s| gpa.dupe(u8, s) catch null else null;
-    const t = if (options.title) |s| gpa.dupe(u8, s) catch null else null;
-    opts.prompt = p;
-    opts.title = t;
-    job.* = .{ .gpa = gpa, .dispatcher = dispatcher, .options = opts, .prompt = p, .title = t, .result = result, .env = Env.fromProcess() };
+    job.* = .{ .gpa = gpa, .dispatcher = dispatcher, .options = options, .arena = .init(gpa), .result = result, .env = Env.fromProcess() };
+    job.options = copyOptions(job.arena.allocator(), options) catch {
+        job.arena.deinit();
+        gpa.destroy(job);
+        gpa.destroy(result);
+        return done.func(done.ctx, null);
+    };
     const thread = std.Thread.spawn(.{}, Job.main, .{job}) catch {
-        if (p) |s| gpa.free(s);
-        if (t) |s| gpa.free(s);
+        job.arena.deinit();
         gpa.destroy(job);
         gpa.destroy(result);
         return done.func(done.ctx, null);
@@ -165,8 +176,35 @@ pub fn openFileBody(gpa: Allocator, title: []const u8, token: []const u8, option
         try dbus.Body.dictEntry(&b, "accept_label", "s");
         try b.str(label);
     }
+    if (options.directory) |dir| {
+        try dbus.Body.dictEntry(&b, "current_folder", "ay");
+        try dbus.Body.byteString(&b, dir);
+    }
+    if (options.extensions.len > 0) {
+        // filters a(sa(us)): one filter of `*.ext` globs (type 0); also the current one.
+        var glob_buf: [64]u8 = undefined;
+        try dbus.Body.dictEntry(&b, "filters", "a(sa(us))");
+        const filters = try dbus.Body.beginArray(&b, 8);
+        try filterStruct(&b, options, &glob_buf);
+        dbus.Body.endArray(&b, filters);
+        try dbus.Body.dictEntry(&b, "current_filter", "(sa(us))");
+        try filterStruct(&b, options, &glob_buf);
+    }
     dbus.Body.endArray(&b, arr);
     return b.buf.toOwnedSlice(gpa);
+}
+
+/// One `(sa(us))` filter: the label and a `*.ext` glob per extension.
+fn filterStruct(b: *dbus.Builder, options: platform.PathPromptOptions, glob_buf: []u8) !void {
+    try b.pad(8);
+    try b.str(options.filter_label orelse "Files");
+    const globs = try dbus.Body.beginArray(b, 8);
+    for (options.extensions) |ext| {
+        try b.pad(8);
+        try b.u32_(0);
+        try b.str(std.fmt.bufPrint(glob_buf, "*.{s}", .{ext}) catch continue);
+    }
+    dbus.Body.endArray(b, globs);
 }
 
 /// Parses a `Response(u response, a{sv} results)` body into owned paths
@@ -363,10 +401,24 @@ fn runFallback(gpa: Allocator, options: platform.PathPromptOptions, tool: Tool) 
             try argv.append(arena, (try std.fmt.allocPrintSentinel(arena, "--title={s}", .{title}, 0)).ptr);
             if (options.multiple) try argv.append(arena, "--multiple");
             if (options.directories and !options.files) try argv.append(arena, "--directory");
+            if (options.directory) |dir| try argv.append(arena, (try std.fmt.allocPrintSentinel(arena, "--filename={s}/", .{std.mem.trimEnd(u8, dir, "/")}, 0)).ptr);
+            if (options.extensions.len > 0) {
+                var f: std.Io.Writer.Allocating = .init(arena);
+                try f.writer.print("--file-filter={s} |", .{options.filter_label orelse "Files"});
+                for (options.extensions) |ext| try f.writer.print(" *.{s}", .{ext});
+                try argv.append(arena, (try arena.dupeSentinel(u8, f.written(), 0)).ptr);
+            }
         },
         .kdialog => {
             const mode: [*:0]const u8 = if (options.directories and !options.files) "--getexistingdirectory" else "--getopenfilename";
-            try argv.appendSlice(arena, &.{ "kdialog", "--title", title.ptr, mode, "." });
+            const start = try arena.dupeSentinel(u8, options.directory orelse ".", 0);
+            try argv.appendSlice(arena, &.{ "kdialog", "--title", title.ptr, mode, start.ptr });
+            if (options.extensions.len > 0 and !(options.directories and !options.files)) {
+                var f: std.Io.Writer.Allocating = .init(arena);
+                for (options.extensions, 0..) |ext, i| try f.writer.print("{s}*.{s}", .{ if (i > 0) " " else "", ext });
+                try f.writer.print("|{s}", .{options.filter_label orelse "Files"});
+                try argv.append(arena, (try arena.dupeSentinel(u8, f.written(), 0)).ptr);
+            }
             if (options.multiple) try argv.appendSlice(arena, &.{ "--multiple", "--separate-output" });
         },
     }
@@ -461,6 +513,51 @@ test "OpenFile body marshals ssa{sv}" {
     }
     try testing.expectEqual(@as(usize, 4), keys);
     try testing.expect(multiple);
+    try testing.expectEqual(body.len, r.pos);
+}
+
+test "OpenFile body carries current_folder and an extension filter" {
+    const gpa = testing.allocator;
+    const body = try openFileBody(gpa, "Choose", "tok", .{ .directory = "/usr/share/applications", .extensions = &.{"desktop"}, .filter_label = "Applications" });
+    defer gpa.free(body);
+    var r: dbus.Reader = .{ .bytes = body, .pos = 0, .big = false };
+    _ = try r.str();
+    _ = try r.str();
+    const n = try r.u32_();
+    try r.alignTo(8);
+    const end = r.pos + n;
+    var folder: []const u8 = "";
+    var glob: []const u8 = "";
+    var label: []const u8 = "";
+    var saw_current = false;
+    while (r.pos < end) {
+        try r.alignTo(8);
+        const key = try r.str();
+        const t = try r.sig();
+        if (std.mem.eql(u8, key, "current_folder")) {
+            try testing.expectEqualStrings("ay", t);
+            const len = try r.u32_();
+            folder = r.bytes[r.pos .. r.pos + len - 1];
+            r.pos += len;
+        } else if (std.mem.eql(u8, key, "current_filter")) {
+            try testing.expectEqualStrings("(sa(us))", t);
+            saw_current = true;
+            try r.skip(t);
+        } else if (std.mem.eql(u8, key, "filters")) {
+            try testing.expectEqualStrings("a(sa(us))", t);
+            _ = try r.u32_();
+            try r.alignTo(8);
+            label = try r.str();
+            _ = try r.u32_();
+            try r.alignTo(8);
+            try testing.expectEqual(@as(u32, 0), try r.u32_());
+            glob = try r.str();
+        } else try r.skip(t);
+    }
+    try testing.expectEqualStrings("/usr/share/applications", folder);
+    try testing.expectEqualStrings("Applications", label);
+    try testing.expectEqualStrings("*.desktop", glob);
+    try testing.expect(saw_current);
     try testing.expectEqual(body.len, r.pos);
 }
 

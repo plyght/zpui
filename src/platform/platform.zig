@@ -1396,6 +1396,15 @@ pub const PathPromptOptions = struct {
     prompt: ?[]const u8 = null,
     /// Dialog title; null = the platform default.
     title: ?[]const u8 = null,
+    /// Folder the dialog starts in; null = the platform default (usually the last one).
+    directory: ?[]const u8 = null,
+    /// Only files with one of these extensions (no dot: "app", "exe", "desktop") can be
+    /// chosen; empty = any file. macOS treats bundles with such an extension (`.app`) as
+    /// single files, so `.files = true, .extensions = &.{"app"}` picks applications.
+    extensions: []const []const u8 = &.{},
+    /// Name of the extension filter where the dialog shows one ("Applications");
+    /// null = the extensions themselves.
+    filter_label: ?[]const u8 = null,
 };
 
 /// Completion of `promptForPaths`. `paths` (and its strings) are borrowed for the

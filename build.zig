@@ -500,7 +500,7 @@ fn addWindowsPlatform(
     for ([_][]const u8{
         "user32", "gdi32",   "kernel32", "advapi32", "shell32",        "ole32",
         "dwmapi", "uxtheme", "comctl32", "imm32",    "d3d11",          "dxgi",
-        "dcomp",  "dwrite",  "shcore",   "version",  "d3dcompiler_47",
+        "dcomp",  "dwrite",  "shcore",   "version",  "d3dcompiler_47", "comdlg32",
     }) |lib| zpui.linkSystemLibrary(lib, .{});
 
     const demo = b.addExecutable(.{

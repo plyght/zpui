@@ -37,6 +37,7 @@ pub const dispatcher = @import("dispatcher.zig");
 pub const keyboard = @import("keyboard.zig");
 pub const window = @import("window.zig");
 pub const native_controls = @import("native_controls.zig");
+pub const file_dialog = @import("file_dialog.zig");
 pub const Renderer = @import("../../renderer/d3d11/Renderer.zig");
 
 const w = win32;
@@ -111,6 +112,7 @@ pub const WindowsPlatform = struct {
         .prefersReducedMotion = prefersReducedMotion,
         .deinit = deinitFn,
         .readClipboardImage = readClipboardImage,
+        .promptForPaths = promptForPaths,
         .startGlobalInputMonitor = startGlobalInputMonitor,
         .stopGlobalInputMonitor = stopGlobalInputMonitor,
         .setPreciseInput = setPreciseInput,
@@ -125,6 +127,11 @@ pub const WindowsPlatform = struct {
 
     fn cast(ptr: *anyopaque) *WindowsPlatform {
         return @ptrCast(@alignCast(ptr));
+    }
+
+    fn promptForPaths(ptr: *anyopaque, options: platform.PathPromptOptions, done: platform.PathsCallback) void {
+        const self = cast(ptr);
+        file_dialog.prompt(self.gpa, self.disp.dispatcher(), options, done);
     }
 
     fn getDispatcher(ptr: *anyopaque) platform.Dispatcher {
