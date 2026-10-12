@@ -1110,6 +1110,7 @@ pub const TestWindow = struct {
                 break :blk .{ .width = 36 + 7 * @as(f32, @floatFromInt(longest)), .height = 24 };
             },
             .stepper => .{ .width = 19, .height = 27 },
+            .button => .{ .width = 24 + 7 * @as(f32, @floatFromInt(state.title.len)), .height = 24 },
         };
     }
     fn vAttachControl(ptr: *anyopaque, state: pf.NativeControlState, z: pf.NativeViewZ) anyerror!pf.NativeViewId {
@@ -1155,6 +1156,7 @@ pub const TestWindow = struct {
             .switch_, .checkbox => st.on = event.on,
             .slider, .stepper => st.value = event.value,
             .segmented, .popup => st.selected = event.index,
+            .button => {},
         };
         if (self.callbacks.native_control) |f| f(self.callbacks.ctx, id, event);
     }

@@ -103,6 +103,7 @@ fn shapeHash(s: platform.NativeControlState) u64 {
         h.update(&.{0});
     }
     if (s.kind == .slider) h.update(std.mem.asBytes(&s.step));
+    if (s.kind == .button) h.update(&.{@intFromEnum(s.bezel)});
     return h.final();
 }
 
@@ -123,7 +124,7 @@ pub fn measure(w: *Window, state: platform.NativeControlState) ?Size {
 pub fn stateEql(a: platform.NativeControlState, b: platform.NativeControlState) bool {
     if (a.kind != b.kind or a.enabled != b.enabled or a.size != b.size or !std.meta.eql(a.dark, b.dark) or
         a.on != b.on or a.value != b.value or a.min != b.min or a.max != b.max or a.step != b.step or
-        !std.meta.eql(a.selected, b.selected)) return false;
+        !std.meta.eql(a.selected, b.selected) or a.bezel != b.bezel) return false;
     if (!std.mem.eql(u8, a.label, b.label) or !std.mem.eql(u8, a.title, b.title) or !std.mem.eql(u8, a.help, b.help)) return false;
     if (a.items.len != b.items.len) return false;
     for (a.items, b.items) |x, y| if (!std.mem.eql(u8, x, y)) return false;
@@ -227,6 +228,7 @@ pub fn handleEvent(w: *Window, view: platform.NativeViewId, event: platform.Nati
         .switch_, .checkbox => e.state.on = event.on,
         .slider, .stepper => e.state.value = event.value,
         .segmented, .popup => e.state.selected = event.index,
+        .button => {},
     }
     const l = e.listener orelse return;
     const app = w.app;

@@ -1,7 +1,8 @@
 //! Native form controls (macOS: real AppKit controls hosted as native child views):
 //! `nativeSwitch` (NSSwitch), `nativeCheckbox` (NSButton checkbox), `nativeSlider`
-//! (NSSlider), `nativeSegmented` (NSSegmentedControl), `nativePopup` (NSPopUpButton)
-//! and `nativeStepper` (NSStepper).
+//! (NSSlider), `nativeSegmented` (NSSegmentedControl), `nativePopup` (NSPopUpButton),
+//! `nativeStepper` (NSStepper) and `nativeButton` (NSButton push button; `.bezel =
+//! .glass` is Liquid Glass on macOS 26+).
 //!
 //! ```zig
 //! zpui.nativeSwitch("compact", .{ .on = s.compact, .label = "Compact mode" },
@@ -115,6 +116,24 @@ pub const StepperOptions = struct {
     size: ControlSize = .regular,
     width: ?Pixels = null,
 };
+
+pub const ButtonBezel = platform.NativeButtonBezel;
+
+pub const ButtonOptions = struct {
+    title: []const u8,
+    enabled: bool = true,
+    /// Accessible name ("" = the title).
+    label: []const u8 = "",
+    help: []const u8 = "",
+    size: ControlSize = .regular,
+    bezel: ButtonBezel = .push,
+    width: ?Pixels = null,
+};
+
+/// A push button; each press is an event with just `.kind = .button`.
+pub fn nativeButton(id: anytype, opts: ButtonOptions, on_press: anytype, fallback: anytype) NativeControl {
+    return nativeControl(id, .{ .kind = .button, .title = opts.title, .enabled = opts.enabled, .label = if (opts.label.len > 0) opts.label else opts.title, .help = opts.help, .size = opts.size, .bezel = opts.bezel }, opts.width, on_press, fallback);
+}
 
 /// An NSSwitch-style toggle; events carry `.on`.
 pub fn nativeSwitch(id: anytype, opts: SwitchOptions, on_change: anytype, fallback: anytype) NativeControl {

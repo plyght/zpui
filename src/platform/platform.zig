@@ -711,8 +711,17 @@ pub const LiquidGlassConfig = struct {
 // ---- native form controls (macOS: AppKit controls as native child views) ----------------
 
 /// The platform control behind `zpui.nativeSwitch` & co. (macOS: NSSwitch, NSButton
-/// checkbox, NSSlider, NSSegmentedControl, NSPopUpButton, NSStepper).
-pub const NativeControlKind = enum(u8) { switch_, checkbox, slider, segmented, popup, stepper };
+/// checkbox, NSSlider, NSSegmentedControl, NSPopUpButton, NSStepper, NSButton push
+/// button).
+pub const NativeControlKind = enum(u8) { switch_, checkbox, slider, segmented, popup, stepper, button };
+
+/// A push button's bezel (`zpui.nativeButton`).
+pub const NativeButtonBezel = enum(u8) {
+    /// The standard push button (macOS: `NSBezelStylePush`).
+    push,
+    /// macOS 26+: Liquid Glass (`NSBezelStyleGlass`); a standard push button before.
+    glass,
+};
 
 /// AppKit `NSControlSize` (raw values match: regular 0, small 1, mini 2, large 3).
 pub const NativeControlSize = enum(u8) { regular = 0, small = 1, mini = 2, large = 3 };
@@ -742,6 +751,8 @@ pub const NativeControlState = struct {
     /// segmented / popup: the option labels and the selected index.
     items: []const []const u8 = &.{},
     selected: ?u32 = null,
+    /// button: its bezel (the title is `title`).
+    bezel: NativeButtonBezel = .push,
 };
 
 /// The toolkit look zpui-drawn native controls imitate where the platform has no
@@ -766,7 +777,8 @@ pub const DesktopTheme = struct {
     dark: ?bool = null,
 };
 
-/// A user change reported by a native control (`WindowCallbacks.native_control`).
+/// A user change reported by a native control (`WindowCallbacks.native_control`); a
+/// button reports each press with just `kind`.
 pub const NativeControlEvent = struct {
     kind: NativeControlKind,
     /// switch / checkbox: the new state.

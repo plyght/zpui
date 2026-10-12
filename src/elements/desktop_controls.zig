@@ -191,7 +191,7 @@ pub fn keyAction(kind: platform.NativeControlKind, key: []const u8) ?KeyAction {
             else if (eq(u8, key, "home")) .home //
             else if (eq(u8, key, "end")) .end //
             else null,
-        .switch_, .checkbox => null,
+        .switch_, .checkbox, .button => null,
     };
 }
 
@@ -396,6 +396,10 @@ fn onToggle(st: *ControlState, _: u32, _: *const ClickEvent, w: *Window, a: *App
     st.emit(.{ .kind = st.kind, .on = !st.on }, w, a);
 }
 
+fn onPress(st: *ControlState, _: u32, _: *const ClickEvent, w: *Window, a: *App) void {
+    st.emit(.{ .kind = .button }, w, a);
+}
+
 fn onSegment(st: *ControlState, i: u32, _: *const ClickEvent, w: *Window, a: *App) void {
     if (st.selected == i) return;
     st.emit(.{ .kind = st.kind, .index = i }, w, a);
@@ -539,6 +543,7 @@ const Builder = struct {
             .segmented => b.segmented(),
             .popup => b.popup(),
             .stepper => b.stepper(),
+            .button => b.pushButton(),
         };
         var root = div().flex().flexNone().itemsCenter()
             .fontFamily(b.font).textSize(px(b.look.font_size)).lineHeight(px(b.look.line_height))
@@ -689,6 +694,29 @@ const Builder = struct {
         }
         if (b.s.help.len > 0) group = group.ariaDescription(b.s.help);
         return element.intoAnyElement(group);
+    }
+
+    fn pushButton(b: *Builder) AnyElement {
+        const lk = b.look;
+        const breeze = lk.family == .breeze;
+        var el = div().id("button").flex().flexNone().itemsCenter().justifyCenter()
+            .h(px(lk.control_height)).px(px(if (breeze) 10 else 14)).rounded(px(lk.button_radius))
+            .bg(lk.button_bg).fontWeight(if (breeze) 400 else 700)
+            .role(.button).ariaLabel(b.label()).ariaDisabled(!b.s.enabled)
+            .focusable().tabStop(b.s.enabled)
+            .focusVisible(sb.shadow(focusRing(lk)))
+            .child(div().whitespaceNowrap().child(b.s.title));
+        if (b.width) |w| el = el.w(px(w));
+        if (breeze) el = el.border1().borderColor(lk.outline);
+        if (b.s.enabled) {
+            el = el.cursorPointer().onClick(bind(ClickEvent, b.st, 0, onPress));
+            el = if (breeze)
+                el.hover(sb.borderColor(lk.accent)).active(sb.bg(lk.button_active))
+            else
+                el.hover(sb.bg(lk.button_hover)).active(sb.bg(lk.button_active));
+        }
+        if (b.s.help.len > 0) el = el.ariaDescription(b.s.help);
+        return element.intoAnyElement(el);
     }
 
     fn popup(b: *Builder) AnyElement {

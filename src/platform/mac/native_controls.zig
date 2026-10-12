@@ -1,6 +1,6 @@
 //! macOS native form controls (`zpui.nativeSwitch` & co., platform.NativeControlState):
-//! NSSwitch, NSButton (checkbox), NSSlider, NSSegmentedControl, NSPopUpButton and
-//! NSStepper, hosted as native child views (native_views.zig: clipped to the visible
+//! NSSwitch, NSButton (checkbox), NSSlider, NSSegmentedControl, NSPopUpButton,
+//! NSStepper and NSButton (push button; the glass bezel on macOS 26+), hosted as native child views (native_views.zig: clipped to the visible
 //! region, hidden when not painted, under the overlay plane or floating above it).
 //!
 //! * One `ZPUINativeControlTarget` per window is every control's target; its action
@@ -63,6 +63,7 @@ fn controlAction(this: id, _: SEL, sender: id) callconv(.c) void {
     const event: platform.NativeControlEvent = switch (kind) {
         .switch_, .checkbox => .{ .kind = kind, .on = sender.msg(NSInteger, "state", .{}) == 1 },
         .slider, .stepper => .{ .kind = kind, .value = sender.msg(f64, "doubleValue", .{}) },
+        .button => .{ .kind = .button },
         .segmented, .popup => blk: {
             const ix = if (kind == .segmented) sender.msg(NSInteger, "selectedSegment", .{}) else sender.msg(NSInteger, "indexOfSelectedItem", .{});
             if (ix < 0) return;
@@ -106,7 +107,23 @@ fn create(kind: platform.NativeControlKind) ?id {
             s.msg(void, "setAutorepeat:", .{YES});
             return s;
         },
+        .button => {
+            const b = (alloc("NSButton") orelse return null).msg(id, "initWithFrame:", .{zero});
+            b.msg(void, "setButtonType:", .{@as(NSUInteger, 7)}); // NSButtonTypeMomentaryPushIn
+            return b;
+        },
     }
+}
+
+/// NSBezelStyle raw values.
+const bezel_push: NSUInteger = 1; // NSBezelStylePush
+const bezel_glass: NSUInteger = 16; // NSBezelStyleGlass (macOS 26+)
+
+fn bezelStyle(bezel: platform.NativeButtonBezel) NSUInteger {
+    return switch (bezel) {
+        .push => bezel_push,
+        .glass => if (native_views.glassSupported()) bezel_glass else bezel_push,
+    };
 }
 
 fn str(s: []const u8) id {
@@ -122,7 +139,7 @@ fn apply(v: id, state: platform.NativeControlState) void {
         v.msg(void, "setAppearance:", .{ak.class("NSAppearance").msg(?id, "appearanceNamed:", .{name})});
     } else v.msg(void, "setAppearance:", .{@as(?id, null)});
     switch (state.kind) {
-        .checkbox, .segmented, .popup => {
+        .checkbox, .segmented, .popup, .button => {
             const NSFont = ak.class("NSFont");
             const pt = NSFont.msg(CGFloat, "systemFontSizeForControlSize:", .{size});
             v.msg(void, "setFont:", .{NSFont.msg(id, "systemFontOfSize:", .{pt})});
@@ -166,6 +183,10 @@ fn apply(v: id, state: platform.NativeControlState) void {
             for (state.items) |item| _ = menu.msg(?id, "addItemWithTitle:action:keyEquivalent:", .{ str(item), @as(?SEL, null), str("") });
             const sel: NSInteger = if (state.selected) |s| @intCast(s) else -1;
             v.msg(void, "selectItemAtIndex:", .{sel});
+        },
+        .button => {
+            v.msg(void, "setBezelStyle:", .{bezelStyle(state.bezel)});
+            v.msg(void, "setTitle:", .{str(state.title)});
         },
     }
     v.msg(void, "setEnabled:", .{objc.toBOOL(state.enabled)});

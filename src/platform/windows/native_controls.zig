@@ -9,6 +9,7 @@
 //! | segmented | a row of `BS_AUTORADIOBUTTON | BS_PUSHLIKE` buttons in a host  |
 //! | popup     | `COMBOBOX` `CBS_DROPDOWNLIST`                                   |
 //! | stepper   | `msctls_updown32` (no buddy; the value lives here)             |
+//! | button    | `BUTTON` `BS_PUSHBUTTON` (every bezel)                         |
 //!
 //! Controls are comctl32 v6 (themed): the executable's manifest or, without one, the
 //! platform's activation context borrowed from shell32 is active while they are
@@ -207,6 +208,7 @@ pub const Host = struct {
                 break :blk .{ .width = widest + 40, .height = 24 - shrink };
             },
             .stepper => .{ .width = 18, .height = 24 - shrink },
+            .button => .{ .width = @max(self.textWidth(state.title) + 24, 75), .height = 24 - shrink },
         };
     }
 
@@ -238,6 +240,7 @@ pub const Host = struct {
             },
             .popup => createChild(win, L("COMBOBOX"), null, w.CBS_DROPDOWNLIST | w.CBS_HASSTRINGS | w.WS_TABSTOP | 0x00200000, win.hwnd, ctrl_id), // WS_VSCROLL
             .stepper => createChild(win, L("msctls_updown32"), null, w.UDS_ARROWKEYS, win.hwnd, ctrl_id),
+            .button => createChild(win, L("BUTTON"), null, w.BS_PUSHBUTTON | w.WS_TABSTOP, win.hwnd, ctrl_id),
         } orelse return error.NativeControlCreationFailed;
         e.* = .{ .host = self, .id = id, .hwnd = hwnd, .kind = state.kind };
         // Our entry rides in GWLP_USERDATA; the subclass makes children click-through
@@ -315,6 +318,7 @@ pub const Host = struct {
             },
             .segmented => self.applySegments(win, e, state),
             .stepper => {},
+            .button => _ = w.SetWindowTextW(hwnd, w.wideBuf(&buf, state.title).ptr),
         }
     }
 
@@ -445,6 +449,10 @@ pub const Host = struct {
                     .switch_, .checkbox => if (code == w.BN_CLICKED) {
                         const on = w.SendMessageW(e.hwnd, w.BM_GETCHECK, 0, 0) == w.BST_CHECKED;
                         report(win, e, .{ .kind = e.kind.?, .on = on });
+                        return 0;
+                    },
+                    .button => if (code == w.BN_CLICKED) {
+                        report(win, e, .{ .kind = .button });
                         return 0;
                     },
                     .popup => if (code == w.CBN_SELCHANGE) {

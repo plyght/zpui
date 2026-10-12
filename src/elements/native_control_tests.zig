@@ -341,3 +341,50 @@ test "a control re-attached while painting keeps cached views' native placements
     w.drawAndPresent();
     try testing.expectEqualDeep(placed, tw.native_placement[@intFromEnum(cached)].?);
 }
+
+const ButtonView = struct {
+    presses: u32 = 0,
+    glass: bool = false,
+
+    pub fn render(self: *ButtonView, _: *Window, cx: *Context(ButtonView)) elements.Div {
+        return div().size(px(400)).bg(color.white).flex().flexCol().itemsStart()
+            .child(nc.nativeButton("preview", .{ .title = "Preview", .bezel = if (self.glass) .glass else .push }, cx.listener(ButtonView.onPress), null));
+    }
+
+    fn onPress(self: *ButtonView, ev: *const pf.NativeControlEvent, _: *Window, cx: *Context(ButtonView)) void {
+        if (ev.kind != .button) return;
+        self.presses += 1;
+        cx.notify();
+    }
+};
+
+test "a native push button reports presses and updates its bezel" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const handle = try app.openWindow(options, ButtonView, struct {
+        fn f(_: *Window, _: *Context(ButtonView)) ButtonView {
+            return .{};
+        }
+    }.f, .{});
+    const w = handle.window(app).?;
+    const tw = TestWindow.of(w.platform_window);
+    tw.native_controls = true;
+    w.refresh();
+    w.drawAndPresent();
+    const b = tw.findNativeControl(.button, "Preview").?; // the title doubles as the label
+    try testing.expectEqualStrings("Preview", tw.control_state[@intFromEnum(b)].?.title);
+    try testing.expectEqual(pf.NativeButtonBezel.push, tw.control_state[@intFromEnum(b)].?.bezel);
+    tw.simulateNativeControl(b, .{ .kind = .button });
+    tw.simulateNativeControl(b, .{ .kind = .button });
+    app.runUntilParked();
+    {
+        var l = handle.rootView(app).?.lease(app);
+        defer l.end();
+        try testing.expectEqual(@as(u32, 2), l.value.presses);
+        l.value.glass = true;
+        l.cx.notify();
+    }
+    w.drawAndPresent();
+    try testing.expectEqual(pf.NativeButtonBezel.glass, tw.control_state[@intFromEnum(b)].?.bezel);
+    try testing.expectEqual(@as(usize, 1), tw.nativeControlCount());
+}
