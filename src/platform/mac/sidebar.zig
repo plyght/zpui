@@ -106,6 +106,7 @@ pub fn install(w: *MacWindow, opts: platform.SidebarOptions, host: id, content_s
     defer table.release(); // the scroll view keeps it
     const column = ak.class("NSTableColumn").msg(id, "alloc", .{}).msg(id, "initWithIdentifier:", .{ak.nsString("zpui.sidebar")});
     column.msg(void, "setResizingMask:", .{@as(NSUInteger, 1)}); // NSTableColumnAutoresizingMask
+    column.msg(void, "setWidth:", .{@as(CGFloat, opts.width)});
     table.msg(void, "addTableColumn:", .{column});
     column.release();
     table.msg(void, "setHeaderView:", .{@as(?id, null)});
@@ -115,7 +116,8 @@ pub fn install(w: *MacWindow, opts: platform.SidebarOptions, host: id, content_s
         table.msg(void, "setSelectionHighlightStyle:", .{@as(NSInteger, 1)}); // ...SourceList
     }
     table.msg(void, "setRowSizeStyle:", .{@as(NSInteger, -1)}); // NSTableViewRowSizeStyleDefault: the user's sidebar size
-    table.msg(void, "setColumnAutoresizingStyle:", .{@as(NSUInteger, 1)}); // Uniform
+    // The one column follows the table's width (the sidebar's), so titles are not cut.
+    table.msg(void, "setColumnAutoresizingStyle:", .{@as(NSUInteger, 4)}); // LastColumnOnly
     table.msg(void, "setAllowsEmptySelection:", .{NO});
     table.msg(void, "setAllowsMultipleSelection:", .{NO});
     table.msg(void, "setFocusRingType:", .{@as(NSUInteger, 1)}); // NSFocusRingTypeNone
@@ -221,6 +223,7 @@ pub fn set(w: *MacWindow, state: platform.SidebarState) void {
         };
         st.table.msg(void, "setAccessibilityLabel:", .{ak.nsString(if (st.label.len > 0) st.label else "Sidebar")});
         st.suppress = true;
+        st.table.msg(void, "sizeLastColumnToFit", .{});
         st.table.msg(void, "reloadData", .{});
         st.suppress = false;
     }
