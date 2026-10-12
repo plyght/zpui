@@ -43,9 +43,7 @@ const window_ivar = "zpuiWindow";
 
 // NSView autoresizing masks.
 const width_sizable: NSUInteger = 2;
-const min_y_margin: NSUInteger = 8;
 const height_sizable: NSUInteger = 16;
-const max_y_margin: NSUInteger = 32;
 
 pub const State = struct {
     split_vc: id,
@@ -151,6 +149,8 @@ pub fn install(w: *MacWindow, opts: platform.SidebarOptions, host: id, content_s
     sidebar_item.msg(void, "setCanCollapse:", .{objc.toBOOL(opts.collapsible)});
     if (responds(sidebar_item, "setCanCollapseFromWindowResize:")) sidebar_item.msg(void, "setCanCollapseFromWindowResize:", .{objc.toBOOL(opts.collapsible)});
     if (responds(sidebar_item, "setAllowsFullHeightLayout:")) sidebar_item.msg(void, "setAllowsFullHeightLayout:", .{YES});
+    // No line under the traffic lights across the sidebar (System Settings).
+    if (responds(sidebar_item, "setTitlebarSeparatorStyle:")) sidebar_item.msg(void, "setTitlebarSeparatorStyle:", .{@as(NSInteger, 1)}); // NSTitlebarSeparatorStyleNone
     const detail_item = item_cls.msg(id, "splitViewItemWithViewController:", .{detail_vc});
     split_vc.msg(void, "addSplitViewItem:", .{sidebar_item});
     split_vc.msg(void, "addSplitViewItem:", .{detail_item});
@@ -292,6 +292,22 @@ fn imageView(frame: NSRect, image: ?id) id {
     return v.autorelease();
 }
 
+// NSLayoutAttribute raw values.
+const attr_none: NSInteger = 0;
+const attr_leading: NSInteger = 5;
+const attr_trailing: NSInteger = 6;
+const attr_width: NSInteger = 7;
+const attr_height: NSInteger = 8;
+const attr_center_y: NSInteger = 10;
+
+/// `a.attr_a == b.attr_b + constant`, activated.
+fn constrain(a: id, attr_a: NSInteger, b: ?id, attr_b: NSInteger, constant: CGFloat) void {
+    const c = ak.class("NSLayoutConstraint").msg(id, "constraintWithItem:attribute:relatedBy:toItem:attribute:multiplier:constant:", .{
+        a, attr_a, @as(NSInteger, 0), b, attr_b, @as(CGFloat, if (b == null) 0 else 1), constant,
+    });
+    c.msg(void, "setActive:", .{YES});
+}
+
 fn viewForRow(this: id, _: SEL, table: id, _: ?id, row: NSInteger) callconv(.c) ?id {
     const w = windowOf(this) orelse return null;
     const st = w.sidebar orelse return null;
@@ -305,43 +321,55 @@ fn viewForRow(this: id, _: SEL, table: id, _: ?id, row: NSInteger) callconv(.c) 
     _ = cell.autorelease();
 
     // The icon: System Settings' white glyph on a colored rounded square, or the plain
-    // (template) symbol the table tints.
-    const icon: CGFloat = if (item.badge != null) @min(@max(h - 6, 18), 24) else @min(@max(h - 8, 16), 20);
-    const icon_x: CGFloat = 2;
-    const icon_frame: NSRect = .{ .origin = .{ .x = icon_x, .y = @round((h - icon) / 2) }, .size = .{ .width = icon, .height = icon } };
-    var text_x: CGFloat = icon_x;
+    // (template) symbol the table tints. Laid out with constraints (NSTableCellView
+    // repositions frame-based outlets in source lists).
+    const icon: CGFloat = if (item.badge != null) @min(@max(h - 10, 18), 22) else @min(@max(h - 12, 16), 20);
+    const icon_frame: NSRect = .{ .origin = .{ .x = 0, .y = 0 }, .size = .{ .width = icon, .height = icon } };
+    var icon_view: ?id = null;
+    var gap: CGFloat = 8;
     if (item.badge) |rgb| {
         const badge = ak.class("NSView").msg(id, "alloc", .{}).msg(id, "initWithFrame:", .{icon_frame});
         _ = badge.autorelease();
         badge.msg(void, "setWantsLayer:", .{YES});
-        badge.msg(void, "setAutoresizingMask:", .{min_y_margin | max_y_margin});
         if (badge.msg(?id, "layer", .{})) |l| {
             l.msg(void, "setBackgroundColor:", .{color(rgb, 1).msg(*anyopaque, "CGColor", .{})});
             l.msg(void, "setCornerRadius:", .{@as(CGFloat, @round(icon * 0.25))});
             if (responds(l, "setCornerCurve:")) l.msg(void, "setCornerCurve:", .{ak.nsString("continuous")});
         }
         const glyph_inset: CGFloat = @round(icon * 0.16);
-        const glyph = imageView(.{ .origin = .{ .x = glyph_inset, .y = glyph_inset }, .size = .{ .width = icon - 2 * glyph_inset, .height = icon - 2 * glyph_inset } }, symbolImage(item.symbol, @round(icon * 0.52), 0.23)); // NSFontWeightMedium
+        const glyph = imageView(.{ .origin = .{ .x = glyph_inset, .y = glyph_inset }, .size = .{ .width = icon - 2 * glyph_inset, .height = icon - 2 * glyph_inset } }, symbolImage(item.symbol, @round(icon * 0.5), 0.23)); // NSFontWeightMedium
         glyph.msg(void, "setContentTintColor:", .{ak.class("NSColor").msg(id, "whiteColor", .{})});
+        glyph.msg(void, "setAutoresizingMask:", .{width_sizable | height_sizable});
         badge.msg(void, "addSubview:", .{glyph});
-        cell.msg(void, "addSubview:", .{badge});
-        text_x = icon_x + icon + 8;
+        icon_view = badge;
     } else if (symbolImage(item.symbol, @round(icon * 0.8), 0)) |img| {
         img.msg(void, "setTemplate:", .{YES});
         const iv = imageView(icon_frame, img);
-        iv.msg(void, "setAutoresizingMask:", .{min_y_margin | max_y_margin});
-        cell.msg(void, "addSubview:", .{iv});
         cell.msg(void, "setImageView:", .{iv});
-        text_x = icon_x + icon + 6;
+        icon_view = iv;
+        gap = 6;
     }
 
     const tf = ak.class("NSTextField").msg(id, "labelWithString:", .{ak.nsString(item.title)});
     tf.msg(void, "setLineBreakMode:", .{@as(NSUInteger, 4)}); // NSLineBreakByTruncatingTail
-    tf.msg(void, "sizeToFit", .{});
-    const th = ak.frame(tf).size.height;
-    tf.msg(void, "setFrame:", .{NSRect{ .origin = .{ .x = text_x, .y = @round((h - th) / 2) }, .size = .{ .width = @max(col_w - text_x - 4, 10), .height = th } }});
-    tf.msg(void, "setAutoresizingMask:", .{width_sizable | min_y_margin | max_y_margin});
+    tf.msg(void, "setContentCompressionResistancePriority:forOrientation:", .{ @as(f32, 250), @as(NSInteger, 0) });
+    tf.msg(void, "setTranslatesAutoresizingMaskIntoConstraints:", .{NO});
     cell.msg(void, "addSubview:", .{tf});
     cell.msg(void, "setTextField:", .{tf});
+
+    if (icon_view) |iv| {
+        iv.msg(void, "setTranslatesAutoresizingMaskIntoConstraints:", .{NO});
+        cell.msg(void, "addSubview:", .{iv});
+        constrain(iv, attr_leading, cell, attr_leading, 2);
+        constrain(iv, attr_center_y, cell, attr_center_y, 0);
+        constrain(iv, attr_width, null, attr_none, icon);
+        constrain(iv, attr_height, null, attr_none, icon);
+        constrain(tf, attr_leading, iv, attr_trailing, gap);
+    } else constrain(tf, attr_leading, cell, attr_leading, 2);
+    constrain(tf, attr_center_y, cell, attr_center_y, 0);
+    const trailing = ak.class("NSLayoutConstraint").msg(id, "constraintWithItem:attribute:relatedBy:toItem:attribute:multiplier:constant:", .{
+        tf, attr_trailing, @as(NSInteger, -1), cell, attr_trailing, @as(CGFloat, 1), @as(CGFloat, -4), // <=
+    });
+    trailing.msg(void, "setActive:", .{YES});
     return cell;
 }
