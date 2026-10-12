@@ -223,8 +223,9 @@ fn overlayEvent(this: id, s: SEL, event: id) callconv(.c) void {
     window_mod.handleViewEvent(w.native_view, s, event);
 }
 
+/// zpui's host view: the content view, or a native sidebar's detail pane.
 fn contentView(w: *MacWindow) id {
-    return w.native_window.msg(id, "contentView", .{});
+    return w.hostView();
 }
 
 /// zui `enable_scene_overlay`: the transparent plane above every native child.

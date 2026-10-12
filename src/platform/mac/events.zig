@@ -95,8 +95,13 @@ pub fn modifiersFromFlags(flags: NSUInteger) input.Modifiers {
     };
 }
 
-fn locationInWindow(event: id, window_height: f32) Point {
+fn locationInWindow(event: id, window_height: f32, host: ?id) Point {
     const p = event.msg(ak.NSPoint, "locationInWindow", .{});
+    // A native sidebar's detail pane (`MacWindow.host_view`): relative to that view.
+    if (host) |v| {
+        const local = v.msg(ak.NSPoint, "convertPoint:fromView:", .{ p, @as(?id, null) });
+        return .{ .x = @floatCast(local.x), .y = window_height - @as(f32, @floatCast(local.y)) };
+    }
     // macOS window coordinates are relative to the bottom left.
     return .{ .x = @floatCast(p.x), .y = window_height - @as(f32, @floatCast(p.y)) };
 }
@@ -120,8 +125,9 @@ fn touchPhase(event: id) input.TouchPhase {
     return .moved;
 }
 
-/// zui `platform_input_from_native`. `window_height` is the content height in points.
-pub fn translate(event: id, window_height: f32) ?Translated {
+/// zui `platform_input_from_native`. `window_height` is the content height in points;
+/// `host` the view positions are relative to (null = the window's content view).
+pub fn translate(event: id, window_height: f32, host: ?id) ?Translated {
     const T = ak.NSEventType;
     const event_type = event.msg(NSUInteger, "type", .{});
     const flags = modifierFlags(event);
@@ -140,7 +146,7 @@ pub fn translate(event: id, window_height: f32) ?Translated {
             const button = mouseButton(event) orelse return null;
             return .{ .input = .{ .mouse_down = .{
                 .button = button,
-                .position = locationInWindow(event, window_height),
+                .position = locationInWindow(event, window_height, host),
                 .modifiers = mods,
                 .click_count = @intCast(@max(event.msg(NSInteger, "clickCount", .{}), 0)),
                 .first_mouse = false,
@@ -150,7 +156,7 @@ pub fn translate(event: id, window_height: f32) ?Translated {
             const button = mouseButton(event) orelse return null;
             return .{ .input = .{ .mouse_up = .{
                 .button = button,
-                .position = locationInWindow(event, window_height),
+                .position = locationInWindow(event, window_height, host),
                 .modifiers = mods,
                 .click_count = @intCast(@max(event.msg(NSInteger, "clickCount", .{}), 0)),
             } } };
@@ -162,7 +168,7 @@ pub fn translate(event: id, window_height: f32) ?Translated {
             const button: input.MouseButton = if (dx > 0) .back else if (dx < 0) .forward else return null;
             return .{ .input = .{ .mouse_down = .{
                 .button = button,
-                .position = locationInWindow(event, window_height),
+                .position = locationInWindow(event, window_height, host),
                 .modifiers = mods,
                 .click_count = 1,
             } } };
@@ -174,7 +180,7 @@ pub fn translate(event: id, window_height: f32) ?Translated {
             };
             const precise = event.msg(objc.BOOL, "hasPreciseScrollingDeltas", .{}) == objc.YES;
             return .{ .input = .{ .scroll_wheel = .{
-                .position = locationInWindow(event, window_height),
+                .position = locationInWindow(event, window_height, host),
                 .delta = if (precise) .{ .pixels = raw } else .{ .lines = raw },
                 .modifiers = mods,
                 .touch_phase = touchPhase(event),
@@ -183,17 +189,17 @@ pub fn translate(event: id, window_height: f32) ?Translated {
         T.left_mouse_dragged, T.right_mouse_dragged, T.other_mouse_dragged => {
             const button = mouseButton(event) orelse return null;
             return .{ .input = .{ .mouse_move = .{
-                .position = locationInWindow(event, window_height),
+                .position = locationInWindow(event, window_height, host),
                 .pressed_button = button,
                 .modifiers = mods,
             } } };
         },
         T.mouse_moved => return .{ .input = .{ .mouse_move = .{
-            .position = locationInWindow(event, window_height),
+            .position = locationInWindow(event, window_height, host),
             .modifiers = mods,
         } } },
         T.mouse_exited => return .{ .input = .{ .mouse_exited = .{
-            .position = locationInWindow(event, window_height),
+            .position = locationInWindow(event, window_height, host),
             .modifiers = mods,
         } } },
         else => return null,

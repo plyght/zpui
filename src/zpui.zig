@@ -168,6 +168,12 @@ pub const desktop_controls = elements.desktop_controls;
 pub const desktop_theme = elements.desktop_theme;
 pub const prefs = elements.prefs;
 pub const NativeControlEvent = elements.native_control.Event;
+/// The native sidebar (`WindowOptions.sidebar`, `Window.nativeSidebar`; macOS
+/// NSSplitViewController source list; src/window/native_sidebar.zig).
+pub const SidebarOptions = platform.SidebarOptions;
+pub const SidebarItem = platform.SidebarItem;
+pub const SidebarState = platform.SidebarState;
+pub const SidebarEvent = platform.SidebarEvent;
 pub const NativeViewId = platform.NativeViewId;
 /// Native context menus (macOS NSMenu; false elsewhere so callers draw their own;
 /// src/window/context_menu.zig).

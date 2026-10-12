@@ -124,7 +124,7 @@ pub fn measure(w: *Window, state: platform.NativeControlState) ?Size {
 pub fn stateEql(a: platform.NativeControlState, b: platform.NativeControlState) bool {
     if (a.kind != b.kind or a.enabled != b.enabled or a.size != b.size or !std.meta.eql(a.dark, b.dark) or
         a.on != b.on or a.value != b.value or a.min != b.min or a.max != b.max or a.step != b.step or
-        !std.meta.eql(a.selected, b.selected) or a.bezel != b.bezel) return false;
+        !std.meta.eql(a.selected, b.selected) or a.bezel != b.bezel or a.prominent != b.prominent) return false;
     if (!std.mem.eql(u8, a.label, b.label) or !std.mem.eql(u8, a.title, b.title) or !std.mem.eql(u8, a.help, b.help)) return false;
     if (a.items.len != b.items.len) return false;
     for (a.items, b.items) |x, y| if (!std.mem.eql(u8, x, y)) return false;

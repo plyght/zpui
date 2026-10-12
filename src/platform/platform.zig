@@ -179,6 +179,8 @@ pub const WindowParams = struct {
     /// under this name and restored the next time a window with it opens (`bounds` is
     /// then only the first-launch frame). Null = not remembered.
     frame_autosave_name: ?[]const u8 = null,
+    /// A native sidebar (`SidebarOptions`; macOS only, needs `titlebar`). Null = none.
+    sidebar: ?SidebarOptions = null,
 };
 
 // ---- native popover containers (macOS: a borderless glass NSPanel) ---------------------
@@ -295,6 +297,8 @@ pub const WindowCallbacks = struct {
     native_control: ?*const fn (ctx: ?*anyopaque, view: NativeViewId, event: NativeControlEvent) void = null,
     /// A native popover window (`WindowParams.popover`) should close.
     popover_dismiss: ?*const fn (ctx: ?*anyopaque, reason: PopoverDismissReason) void = null,
+    /// The user selected a native sidebar row (`WindowParams.sidebar`).
+    sidebar_select: ?*const fn (ctx: ?*anyopaque, event: SidebarEvent) void = null,
 };
 
 /// gpui `NativeComposition` (zui dce5c1f): raw composition handles for embedding native surfaces
@@ -404,6 +408,13 @@ pub const Window = struct {
         /// Apply a new state (value, items, enabled, appearance, ...). Never reports
         /// back through `native_control` (programmatic changes are not user changes).
         updateNativeControl: ?*const fn (ptr: *anyopaque, view: NativeViewId, state: NativeControlState) void = null,
+
+        // -- native sidebar (optional; see `SidebarOptions`) --------------------------------
+        /// Whether this window has the native sidebar it was opened with.
+        hasSidebar: ?*const fn (ptr: *anyopaque) bool = null,
+        /// Show `state` in the sidebar (rows, selection, appearance). Never reports back
+        /// through `sidebar_select`.
+        setSidebar: ?*const fn (ptr: *anyopaque, state: SidebarState) void = null,
 
         // -- accessibility (optional; see `a11y.zig`) ----------------------------------------
         /// A frame's finalized accessibility tree and what changed since the last one. The
@@ -540,6 +551,13 @@ pub const Window = struct {
     }
     pub fn updateNativeControl(w: Window, view: NativeViewId, state: NativeControlState) void {
         if (w.vtable.updateNativeControl) |f| f(w.ptr, view, state);
+    }
+    pub fn hasSidebar(w: Window) bool {
+        const f = w.vtable.hasSidebar orelse return false;
+        return w.vtable.setSidebar != null and f(w.ptr);
+    }
+    pub fn setSidebar(w: Window, state: SidebarState) void {
+        if (w.vtable.setSidebar) |f| f(w.ptr, state);
     }
     pub fn supportsContextMenus(w: Window) bool {
         return w.vtable.showContextMenu != null;
@@ -753,7 +771,53 @@ pub const NativeControlState = struct {
     selected: ?u32 = null,
     /// button: its bezel (the title is `title`).
     bezel: NativeButtonBezel = .push,
+    /// button: the window's primary action (macOS 26+: `tintProminence = .primary`, an
+    /// accent-tinted glass / push bezel; before: the accent `bezelColor`).
+    prominent: bool = false,
 };
+
+// ---- native sidebar (macOS: NSSplitViewController source list) --------------------------
+
+/// `WindowParams.sidebar`: give the window the platform's own sidebar. macOS: the
+/// window's content becomes an `NSSplitViewController` with a sidebar item
+/// (`sidebarWithViewController:`) holding a source-list `NSTableView`, and zpui's
+/// surface becomes the detail pane (its coordinates, size and native children are the
+/// detail's). AppKit draws whatever sidebar the running OS has (the floating Liquid
+/// Glass pane on 26+, the vibrant column before), full height under the titlebar when
+/// the titlebar `appears_transparent`. Ignored by backends without one
+/// (`Window.hasNativeSidebar` stays false: draw your own sidebar there).
+pub const SidebarOptions = struct {
+    /// Initial / minimum / maximum sidebar width (logical px).
+    width: f32 = 215,
+    min_width: f32 = 180,
+    max_width: f32 = 320,
+    /// The user may collapse it (drag the divider past the minimum).
+    collapsible: bool = false,
+};
+
+/// One row of a native sidebar.
+pub const SidebarItem = struct {
+    title: []const u8,
+    /// SF Symbol name ("" = none).
+    symbol: []const u8 = "",
+    /// 0xRRGGBB: draw the symbol white on a rounded badge of this color (System
+    /// Settings' icons); null = the plain symbol, tinted by the sidebar.
+    badge: ?u32 = null,
+};
+
+/// What a native sidebar shows (`Window.VTable.setSidebar`). Slices are borrowed for
+/// the call (backends copy what they keep).
+pub const SidebarState = struct {
+    items: []const SidebarItem = &.{},
+    selected: ?u32 = null,
+    /// Pin the window's appearance to dark / light (the app theme); null = system.
+    dark: ?bool = null,
+    /// Accessible name of the list.
+    label: []const u8 = "",
+};
+
+/// The user selected sidebar row `index` (`WindowCallbacks.sidebar_select`).
+pub const SidebarEvent = struct { index: u32 };
 
 /// The toolkit look zpui-drawn native controls imitate where the platform has no
 /// embeddable controls (src/elements/desktop_controls.zig).

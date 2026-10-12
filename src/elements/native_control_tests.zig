@@ -388,3 +388,81 @@ test "a native push button reports presses and updates its bezel" {
     try testing.expectEqual(pf.NativeButtonBezel.glass, tw.control_state[@intFromEnum(b)].?.bezel);
     try testing.expectEqual(@as(usize, 1), tw.nativeControlCount());
 }
+
+const SidebarView = struct {
+    section: u32 = 0,
+    selections: u32 = 0,
+    native: bool = false,
+
+    const rows = [_]pf.SidebarItem{
+        .{ .title = "General", .symbol = "gearshape.fill", .badge = 0x8e8e93 },
+        .{ .title = "Sound", .symbol = "speaker.wave.2.fill" },
+        .{ .title = "About", .symbol = "info.circle" },
+    };
+
+    pub fn render(self: *SidebarView, window: *Window, cx: *Context(SidebarView)) elements.Div {
+        self.native = window.nativeSidebar(.{ .items = &rows, .selected = self.section, .label = "Sections" }, cx.listener(SidebarView.onSelect));
+        return div().size(px(400)).bg(color.white);
+    }
+
+    fn onSelect(self: *SidebarView, ev: *const pf.SidebarEvent, _: *Window, cx: *Context(SidebarView)) void {
+        self.section = ev.index;
+        self.selections += 1;
+        cx.notify();
+    }
+};
+
+fn openSidebarView(app: *App, opts: window_mod.WindowOptions) !@import("../app/app.zig").WindowHandle(SidebarView) {
+    return app.openWindow(opts, SidebarView, struct {
+        fn f(_: *Window, _: *Context(SidebarView)) SidebarView {
+            return .{};
+        }
+    }.f, .{});
+}
+
+test "native sidebar: rows and selection go to the backend, user selections come back" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    var opts = options;
+    opts.sidebar = .{ .width = 200 };
+    const handle = try openSidebarView(app, opts);
+    const w = handle.window(app).?;
+    const tw = TestWindow.of(w.platform_window);
+    try testing.expect(w.hasNativeSidebar());
+    w.drawAndPresent();
+    const st = tw.sidebar_state.?;
+    try testing.expectEqual(@as(usize, 3), st.items.len);
+    try testing.expectEqualStrings("Sound", st.items[1].title);
+    try testing.expectEqual(@as(?u32, 0x8e8e93), st.items[0].badge);
+    try testing.expectEqual(@as(?u32, 0), st.selected);
+    // An unchanged render pushes nothing.
+    const sets = tw.sidebar_sets;
+    w.refresh();
+    w.drawAndPresent();
+    try testing.expectEqual(sets, tw.sidebar_sets);
+
+    tw.simulateSidebarSelect(2);
+    app.runUntilParked();
+    w.drawAndPresent();
+    {
+        var l = handle.rootView(app).?.lease(app);
+        defer l.end();
+        try testing.expectEqual(@as(u32, 1), l.value.selections);
+        try testing.expectEqual(@as(u32, 2), l.value.section);
+        try testing.expect(l.value.native);
+    }
+    // The listener ran (and the app's new selection matches what the sidebar shows:
+    // nothing more is pushed).
+    try testing.expectEqual(sets, tw.sidebar_sets);
+    try testing.expectEqual(@as(?u32, 2), w.native_sidebar.shown.?.selected);
+}
+
+test "native sidebar: unsupported without WindowOptions.sidebar" {
+    const app = try App.initTest(testing.allocator);
+    defer app.deinit();
+    const w = (try openSidebarView(app, options)).window(app).?;
+    const tw = TestWindow.of(w.platform_window);
+    w.drawAndPresent();
+    try testing.expect(!w.hasNativeSidebar());
+    try testing.expectEqual(@as(u32, 0), tw.sidebar_sets);
+}

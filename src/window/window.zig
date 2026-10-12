@@ -51,6 +51,7 @@ pub const input_handler = @import("input_handler.zig");
 pub const image = @import("image.zig");
 pub const liquid_glass_mod = @import("liquid_glass.zig"); // [liquid-glass]
 pub const native_controls_mod = @import("native_controls.zig");
+pub const native_sidebar_mod = @import("native_sidebar.zig");
 pub const native_popover_mod = @import("native_popover.zig");
 /// Accessibility tree (src/a11y.zig).
 pub const a11y = @import("../a11y.zig");
@@ -515,6 +516,8 @@ pub const Window = struct {
     liquid_glass: liquid_glass_mod.Pool = .{},
     /// Native form controls of this window (native_controls.zig).
     native_controls: native_controls_mod.Pool = .{},
+    /// The native sidebar's shown state and listener (native_sidebar.zig).
+    native_sidebar: native_sidebar_mod.State = .{},
     /// Overrides the platform's `desktopTheme` (drawn controls, preference pages):
     /// `setDesktopTheme` (tests, a "look" setting, demos).
     desktop_theme_override: ?platform.DesktopTheme = null,
@@ -629,6 +632,7 @@ pub const Window = struct {
             .a11y_activation = cbA11yActivation,
             .native_control = cbNativeControl,
             .popover_dismiss = cbPopoverDismiss,
+            .sidebar_select = cbSidebarSelect,
         });
         return self;
     }
@@ -667,6 +671,7 @@ pub const Window = struct {
         self.arena_trim_task.cancel();
         self.liquid_glass.deinit(gpa); // [liquid-glass] (views went with the platform window)
         self.native_controls.deinit(gpa);
+        self.native_sidebar.deinit();
         native_popover_mod.deinitWindow(self);
         self.dirty_views.deinit(gpa);
         self.pending_dirty_views.deinit(gpa);
@@ -914,6 +919,12 @@ pub const Window = struct {
         const self = fromCtx(ctx);
         if (self.removed) return;
         native_controls_mod.handleEvent(self, control, event);
+    }
+
+    fn cbSidebarSelect(ctx: ?*anyopaque, event: platform.SidebarEvent) void {
+        const self = fromCtx(ctx);
+        if (self.removed) return;
+        native_sidebar_mod.handleSelect(self, event);
     }
 
     fn cbA11yActivation(ctx: ?*anyopaque, active: bool) void {
@@ -2339,6 +2350,21 @@ pub const Window = struct {
     /// Place native control `gid` this frame (paint phase); see native_controls.zig.
     pub fn paintNativeControl(self: *Window, gid: GlobalElementId, state: platform.NativeControlState, view_bounds: Bounds, listener: ?native_controls_mod.Listener) bool {
         return native_controls_mod.paint(self, gid.toKey(), state, view_bounds, listener);
+    }
+
+    /// Whether this window has a native sidebar (`WindowOptions.sidebar` on a backend
+    /// that has one: macOS). Without one, draw your own sidebar.
+    pub fn hasNativeSidebar(self: *const Window) bool {
+        return self.platform_window.hasSidebar();
+    }
+
+    /// Show `state` (rows, selected row) in the window's native sidebar; call it from
+    /// `render`. `on_select` (`cx.listener(f)` with `f(self, *const SidebarEvent, *Window,
+    /// cx)`, or null) receives the user's selections. Returns false when the window has
+    /// no native sidebar (then draw your own). See native_sidebar.zig.
+    pub fn nativeSidebar(self: *Window, state: platform.SidebarState, on_select: anytype) bool {
+        const listener: ?native_sidebar_mod.Listener = if (@TypeOf(on_select) == @TypeOf(null)) null else native_sidebar_mod.Listener.init(on_select);
+        return native_sidebar_mod.set(self, state, listener);
     }
 
     /// Show the zpui-drawn fallbacks instead of native controls in this window.

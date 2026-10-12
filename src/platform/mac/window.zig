@@ -33,6 +33,7 @@ const scene_mod = @import("../../scene.zig");
 const atlas_mod = @import("../../atlas.zig");
 const Renderer = @import("../../renderer/renderer.zig").Renderer;
 const native_views = @import("native_views.zig");
+const sidebar_mod = @import("sidebar.zig");
 const native_controls = @import("native_controls.zig");
 const context_menu = @import("context_menu.zig");
 const mac_a11y = @import("a11y.zig");
@@ -235,6 +236,11 @@ pub const MacWindow = struct {
     closed: bool = false,
     /// Native child views + the overlay plane (native_views.zig).
     natives: native_views.Host = .{},
+    /// The native sidebar (`WindowParams.sidebar`; sidebar.zig), when installed.
+    sidebar: ?*sidebar_mod.State = null,
+    /// With a native sidebar: the detail pane view holding the ZPUIView and its native
+    /// children (else the window's content view; see `hostView`).
+    host_view: ?id = null,
     /// NSAccessibility bridge (a11y.zig), created on first use.
     a11y: ?*mac_a11y.Bridge = null,
     /// [native-popover] Set on popover panels (popover.zig).
@@ -349,8 +355,34 @@ pub const MacWindow = struct {
         native_view.msg(void, "addTrackingArea:", .{tracking_area});
         tracking_area.release();
 
-        content_view.msg(void, "addSubview:", .{native_view});
-        native_view.release(); // retained by the content view
+        // A native sidebar: zpui's view goes into the split view's detail pane.
+        const sidebar_host: ?id = if (params.sidebar != null and params.titlebar != null and params.kind == .normal and params.popover == null)
+            ak.class("NSView").msg(id, "alloc", .{}).msg(id, "initWithFrame:", .{content_bounds})
+        else
+            null;
+        if (sidebar_host) |host| {
+            host.msg(void, "setAutoresizingMask:", .{ak.NSViewWidthSizable | ak.NSViewHeightSizable});
+            host.msg(void, "addSubview:", .{native_view});
+            native_view.release(); // retained by the host
+            // Set first: resizes during the install already measure the detail pane.
+            self.host_view = host; // keep our +1 from alloc/init
+            if (sidebar_mod.install(self, params.sidebar.?, host, content_bounds.size)) |st| {
+                self.sidebar = st;
+                self.renderer.resize(self.drawableSize()) catch |err| log.err("renderer resize: {s}", .{@errorName(err)});
+            } else {
+                self.host_view = null;
+                // No split view controller: back to the plain content view.
+                _ = native_view.retain();
+                native_view.msg(void, "removeFromSuperview", .{});
+                native_view.msg(void, "setFrame:", .{content_bounds});
+                content_view.msg(void, "addSubview:", .{native_view});
+                native_view.release();
+                host.release();
+            }
+        } else {
+            content_view.msg(void, "addSubview:", .{native_view});
+            native_view.release(); // retained by the content view
+        }
         _ = native_window.msg(BOOL, "makeFirstResponder:", .{native_view});
 
         switch (params.kind) {
@@ -452,7 +484,24 @@ pub const MacWindow = struct {
     // -- geometry -------------------------------------------------------------
 
     pub fn contentSize(self: *const MacWindow) Size {
-        return sizeFromNS(ak.frame(self.native_window.msg(id, "contentView", .{})).size);
+        return sizeFromNS(ak.frame(self.hostView()).size);
+    }
+
+    /// The view zpui's coordinates are relative to and native children live in: the
+    /// window's content view, or the detail pane with a native sidebar.
+    pub fn hostView(self: *const MacWindow) id {
+        return self.host_view orelse self.native_window.msg(id, "contentView", .{});
+    }
+
+    /// A point in window coordinates (AppKit, bottom-left origin) in zpui's coordinates
+    /// (top-left origin of `hostView`).
+    pub fn fromWindowPoint(self: *const MacWindow, p: NSPoint) Point {
+        if (self.host_view) |host| {
+            const local = host.msg(NSPoint, "convertPoint:fromView:", .{ p, @as(?id, null) });
+            const h = ak.bounds(host).size.height;
+            return .{ .x = @floatCast(local.x), .y = @floatCast(h - local.y) };
+        }
+        return .{ .x = @floatCast(p.x), .y = self.contentSize().height - @as(f32, @floatCast(p.y)) };
     }
 
     pub fn scaleFactor(self: *const MacWindow) f32 {
@@ -559,7 +608,12 @@ pub const MacWindow = struct {
         self.native_window.msg(void, "setOpaque:", .{objc.toBOOL(is_opaque)});
         // Not +clearColor: a fully clear background breaks the window shadow.
         const alpha: ak.CGFloat = if (is_opaque) 1 else 0.0001;
-        const color = ak.class("NSColor").msg(id, "colorWithSRGBRed:green:blue:alpha:", .{ @as(ak.CGFloat, 0), @as(ak.CGFloat, 0), @as(ak.CGFloat, 0), alpha });
+        // A native sidebar shows the window background around it (the floating glass
+        // pane of macOS 26+): the system's, not black.
+        const color = if (is_opaque and self.sidebar != null)
+            ak.class("NSColor").msg(id, "windowBackgroundColor", .{})
+        else
+            ak.class("NSColor").msg(id, "colorWithSRGBRed:green:blue:alpha:", .{ @as(ak.CGFloat, 0), @as(ak.CGFloat, 0), @as(ak.CGFloat, 0), alpha });
         self.native_window.msg(void, "setBackgroundColor:", .{color});
 
         if (bg != .blurred) {
@@ -570,7 +624,7 @@ pub const MacWindow = struct {
                 self.blurred_view = null;
             }
         } else if (self.blurred_view == null) {
-            const content_view = self.native_window.msg(id, "contentView", .{});
+            const content_view = self.hostView();
             const blur = blurred_view_class.?.msg(id, "alloc", .{}).msg(id, "initWithFrame:", .{ak.bounds(content_view)});
             blur.msg(void, "setAutoresizingMask:", .{ak.NSViewWidthSizable | ak.NSViewHeightSizable});
             content_view.msg(void, "addSubview:positioned:relativeTo:", .{ blur, ak.NSWindowBelow, @as(?id, null) });
@@ -683,6 +737,9 @@ pub const MacWindow = struct {
             v.release();
         }
         self.natives.deinit(self);
+        sidebar_mod.deinit(self);
+        if (self.host_view) |v| v.release();
+        self.host_view = null;
         mac_a11y.deinit(self);
         self.renderer.deinit();
         self.native_window.release();
@@ -742,6 +799,8 @@ pub const MacWindow = struct {
         .setVisible = vSetVisible,
         .setInputRegion = vSetInputRegion,
         .screenMousePosition = vScreenMousePosition,
+        .hasSidebar = vHasSidebar,
+        .setSidebar = vSetSidebar,
     };
 
     // -- overlay windows (docs/DESKTOP_OVERLAY.md) -------------------------------------
@@ -836,6 +895,12 @@ pub const MacWindow = struct {
         native_controls.update(self, view, cs);
     }
 
+    fn vHasSidebar(ptr: *anyopaque) bool {
+        return cast(ptr).sidebar != null;
+    }
+    fn vSetSidebar(ptr: *anyopaque, sidebar_state: platform.SidebarState) void {
+        sidebar_mod.set(cast(ptr), sidebar_state);
+    }
     fn vA11yUpdate(ptr: *anyopaque, update: platform.a11y.Update) void {
         mac_a11y.update(cast(ptr), update);
     }
@@ -984,7 +1049,7 @@ pub const MacWindow = struct {
     fn vMousePosition(ptr: *anyopaque) Point {
         const self = cast(ptr);
         const p = self.native_window.msg(NSPoint, "mouseLocationOutsideOfEventStream", .{});
-        return .{ .x = @floatCast(p.x), .y = self.contentSize().height - @as(f32, @floatCast(p.y)) };
+        return self.fromWindowPoint(p);
     }
     fn vModifiers(_: *anyopaque) input.Modifiers {
         return events.modifiersFromFlags(ak.class("NSEvent").msg(NSUInteger, "modifierFlags", .{}));
@@ -1410,7 +1475,7 @@ fn closeWindow(this: id, _: SEL) callconv(.c) void {
 
 fn dragPosition(w: *MacWindow, info: id) Point {
     const p = info.msg(NSPoint, "draggingLocation", .{});
-    return .{ .x = @floatCast(p.x), .y = w.contentSize().height - @as(f32, @floatCast(p.y)) };
+    return w.fromWindowPoint(p);
 }
 
 fn sendFileDrop(w: *MacWindow, event: input.FileDropEvent) bool {
@@ -1597,7 +1662,7 @@ fn isPrintable(s: []const u8) bool {
 //  Japanese (Romaji): `a i left down up enter enter` → 愛; with a "j j" binding, `j i` → じ.
 fn handleKeyEvent(this: id, native_event: id, key_equivalent: bool) BOOL {
     const w = state(this) orelse return NO;
-    const translated = events.translate(native_event, w.contentSize().height) orelse return NO;
+    const translated = events.translate(native_event, w.contentSize().height, w.host_view) orelse return NO;
     switch (translated) {
         .key_down => |kd_value| {
             var kd = kd_value;
@@ -1672,7 +1737,7 @@ fn mouseExited(this: id, s: SEL, event: id) callconv(.c) void {
 
 pub fn handleViewEvent(this: id, _: SEL, native_event: id) callconv(.c) void {
     const w = state(this) orelse return;
-    const translated = events.translate(native_event, w.contentSize().height) orelse return;
+    const translated = events.translate(native_event, w.contentSize().height, w.host_view) orelse return;
     var event = switch (translated) {
         .input => |e| e,
         else => return,
@@ -1808,6 +1873,13 @@ fn firstRectForCharacterRange(this: id, _: SEL, range: NSRange, _: ?*NSRange) ca
     const h = w.input_handler orelse return zero;
     const r = toRange(range) orelse return zero;
     const b = h.vtable.boundsForRange(h.ptr, r) orelse return zero;
+    if (w.host_view) |host| {
+        // A native sidebar's detail pane: through the view hierarchy.
+        const hh = ak.bounds(host).size.height;
+        const local: NSRect = .{ .origin = .{ .x = b.origin.x, .y = hh - @as(f64, b.origin.y) - b.size.height }, .size = .{ .width = b.size.width, .height = b.size.height } };
+        const in_window = ak.msgStruct(NSRect, host, "convertRect:toView:", .{ local, @as(?id, null) });
+        return ak.msgStruct(NSRect, w.native_window, "convertRectToScreen:", .{in_window});
+    }
     const f = imeFrame(w);
     return .{
         .origin = .{

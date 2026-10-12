@@ -127,12 +127,15 @@ pub const ButtonOptions = struct {
     help: []const u8 = "",
     size: ControlSize = .regular,
     bezel: ButtonBezel = .push,
+    /// The primary action: macOS 26+ tints the (glass) bezel with the accent color
+    /// (`tintProminence = .primary`); older macOS gets the accent `bezelColor`.
+    prominent: bool = false,
     width: ?Pixels = null,
 };
 
 /// A push button; each press is an event with just `.kind = .button`.
 pub fn nativeButton(id: anytype, opts: ButtonOptions, on_press: anytype, fallback: anytype) NativeControl {
-    return nativeControl(id, .{ .kind = .button, .title = opts.title, .enabled = opts.enabled, .label = if (opts.label.len > 0) opts.label else opts.title, .help = opts.help, .size = opts.size, .bezel = opts.bezel }, opts.width, on_press, fallback);
+    return nativeControl(id, .{ .kind = .button, .title = opts.title, .enabled = opts.enabled, .label = if (opts.label.len > 0) opts.label else opts.title, .help = opts.help, .size = opts.size, .bezel = opts.bezel, .prominent = opts.prominent }, opts.width, on_press, fallback);
 }
 
 /// An NSSwitch-style toggle; events carry `.on`.

@@ -639,7 +639,7 @@ pub const TestPlatform = struct {
     fn vOpenWindow(ptr: *anyopaque, params: pf.WindowParams) anyerror!pf.Window {
         const self = cast(ptr);
         const w = try self.gpa.create(TestWindow);
-        w.* = .{ .platform = self, .bounds = params.bounds, .size = params.bounds.size, .atlas = .init(self.gpa, .{}), .title = "", .popover = params.popover, .kind = params.kind, .mouse_passthrough = params.mouse_passthrough };
+        w.* = .{ .platform = self, .bounds = params.bounds, .size = params.bounds.size, .atlas = .init(self.gpa, .{}), .title = "", .popover = params.popover, .kind = params.kind, .mouse_passthrough = params.mouse_passthrough, .sidebar = params.sidebar != null };
         if (params.anchor) |a| w.applyAnchor(a, params.display_id);
         try self.windows.append(self.gpa, w);
         return w.window();
@@ -791,6 +791,11 @@ pub const TestWindow = struct {
     native_controls: bool = false,
     control_state: [32]?pf.NativeControlState = @splat(null),
     control_updates: [32]u32 = @splat(0),
+    /// Native sidebar (`WindowParams.sidebar`): set from the open params; the last
+    /// `setSidebar` state (shallow; borrowed from the core's copy) and the push count.
+    sidebar: bool = false,
+    sidebar_state: ?pf.SidebarState = null,
+    sidebar_sets: u32 = 0,
     /// Overlay ranges / capture flag of the last `drawLayered`.
     last_overlay: [8]pf.OverlayRange = undefined,
     last_overlay_len: usize = 0,
@@ -1012,6 +1017,8 @@ pub const TestWindow = struct {
         .measureNativeControl = vMeasureControl,
         .attachNativeControl = vAttachControl,
         .updateNativeControl = vUpdateControl,
+        .hasSidebar = vHasSidebar,
+        .setSidebar = vSetSidebar,
         .showContextMenu = vShowContextMenu,
         .setMousePassthrough = vSetMousePassthrough,
         .setAnchor = vSetAnchor,
@@ -1159,6 +1166,21 @@ pub const TestWindow = struct {
             .button => {},
         };
         if (self.callbacks.native_control) |f| f(self.callbacks.ctx, id, event);
+    }
+
+    /// Act like the user selecting native sidebar row `index`.
+    pub fn simulateSidebarSelect(self: *TestWindow, index: u32) void {
+        if (self.sidebar_state) |*st| st.selected = index;
+        if (self.callbacks.sidebar_select) |f| f(self.callbacks.ctx, .{ .index = index });
+    }
+
+    fn vHasSidebar(ptr: *anyopaque) bool {
+        return c(ptr).sidebar;
+    }
+    fn vSetSidebar(ptr: *anyopaque, state: pf.SidebarState) void {
+        const self = c(ptr);
+        self.sidebar_state = state;
+        self.sidebar_sets += 1;
     }
 
     fn vA11yUpdate(ptr: *anyopaque, update: pf.a11y.Update) void {

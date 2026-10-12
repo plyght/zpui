@@ -25,6 +25,7 @@ const id = objc.id;
 const SEL = objc.SEL;
 const YES = objc.YES;
 const NO = objc.NO;
+const BOOL = objc.BOOL;
 const NSInteger = objc.NSInteger;
 const NSUInteger = objc.NSUInteger;
 const CGFloat = ak.CGFloat;
@@ -187,6 +188,15 @@ fn apply(v: id, state: platform.NativeControlState) void {
         .button => {
             v.msg(void, "setBezelStyle:", .{bezelStyle(state.bezel)});
             v.msg(void, "setTitle:", .{str(state.title)});
+            // The primary action: macOS 26+ `tintProminence` (NSTintProminencePrimary 2,
+            // Automatic 0) gives the accent-filled (glass) bezel; an untinted glass bezel
+            // is a light, nearly white capsule. Before 26: the accent `bezelColor`.
+            if (v.msg(BOOL, "respondsToSelector:", .{objc.cachedSel("setTintProminence:")}) == YES) {
+                v.msg(void, "setTintProminence:", .{@as(NSInteger, if (state.prominent) 2 else 0)});
+            } else {
+                const accent: ?id = if (state.prominent) ak.class("NSColor").msg(id, "controlAccentColor", .{}) else null;
+                v.msg(void, "setBezelColor:", .{accent});
+            }
         },
     }
     v.msg(void, "setEnabled:", .{objc.toBOOL(state.enabled)});

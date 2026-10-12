@@ -63,7 +63,7 @@ fn responds(obj: id, comptime selector: [:0]const u8) bool {
 
 /// A rect in `w`'s content coordinates (top-left origin, logical px) on screen.
 pub fn contentToScreen(w: *const MacWindow, b: Bounds) NSRect {
-    const content_view = w.native_window.msg(id, "contentView", .{});
+    const content_view = w.hostView();
     const ch: CGFloat = w.contentSize().height;
     const local: NSRect = .{
         .origin = .{ .x = b.origin.x, .y = ch - @as(CGFloat, b.origin.y) - b.size.height },
@@ -79,7 +79,7 @@ pub fn screenBoundsInContent(w: *const MacWindow) ?Bounds {
     const screen = w.native_window.msg(?id, "screen", .{}) orelse return null;
     const visible = ak.msgStruct(NSRect, screen, "visibleFrame", .{});
     const in_window = ak.msgStruct(NSRect, w.native_window, "convertRectFromScreen:", .{visible});
-    const content_view = w.native_window.msg(id, "contentView", .{});
+    const content_view = w.hostView();
     const local = ak.msgStruct(NSRect, content_view, "convertRect:fromView:", .{ in_window, @as(?id, null) });
     const ch: CGFloat = w.contentSize().height;
     return .{
